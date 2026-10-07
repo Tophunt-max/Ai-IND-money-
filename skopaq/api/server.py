@@ -42,6 +42,11 @@ from skopaq.chat.bridge import router as chat_router
 
 app.include_router(chat_router)
 
+# ── Web dashboard (frontend/): always needs SKOPAQ_API_TOKEN ─────────────────
+from skopaq.api.dashboard import router as dashboard_router
+
+app.include_router(dashboard_router)
+
 
 # ── Kite Connect OAuth ───────────────────────────────────────────────────────
 
