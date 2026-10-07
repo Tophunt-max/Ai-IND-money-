@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14: the Docker image's and the Mac host MCP's interpreter
+        python: ["3.11", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # Only findings that are always bugs gate CI: syntax errors and undefined
+      # names. The rest of ruff's findings pre-date CI.
+      - name: Lint (syntax errors, undefined names)
+        run: ruff check --select E9,F63,F7,F82 skopaq tests cli tradingagents
+
+      - name: Unit tests
+        run: python -m pytest tests/unit/ -q
+
+  upstream:
+    name: Upstream TradingAgents suite (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    env:
+      # The vendored base (UPSTREAM_CHANGES.md). Bump it with each upstream sync.
+      UPSTREAM_REF: 5eb50854dad299381861632aa34014448b4260fc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # Upstream's own tests, run against our modified tradingagents/ and cli/,
+      # catch Skopaq changes that break upstream behaviour.
+      - name: Fetch upstream tests
+        run: |
+          git clone --quiet https://github.com/TauricResearch/TradingAgents "$RUNNER_TEMP/ta"
+          git -C "$RUNNER_TEMP/ta" checkout --quiet "$UPSTREAM_REF"
+          mkdir "$RUNNER_TEMP/harness"
+          cp -r "$RUNNER_TEMP/ta/tests" "$RUNNER_TEMP/ta/pyproject.toml" "$RUNNER_TEMP/harness/"
+          ln -s "$GITHUB_WORKSPACE/tradingagents" "$RUNNER_TEMP/harness/tradingagents"
+          ln -s "$GITHUB_WORKSPACE/cli" "$RUNNER_TEMP/harness/cli"
+
+      - name: Upstream tests
+        working-directory: ${{ runner.temp }}/harness
+        run: python -m pytest tests -m "not integration" -q -p no:cacheprovider
+
+  # The image and the compose stack as the Mac mini runs them (docs/deployment/mac-mini.md).
+  docker:
+    name: Docker image and compose stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose file renders
+        run: |
+          echo SKOPAQ_SCHEDULER_ENABLED=false > .env
+          docker compose config -q
+          services="$(docker compose config --services | sort | tr '\n' ' ')"
+          echo "default services: $services"
+          test "$services" = "api scheduler telegram "
+
+      - name: Build
+        run: docker compose build api
+
+      - name: CLI and extras
+        run: |
+          docker run --rm skopaqtrader:local status
+          docker run --rm skopaqtrader:local version
+          docker run --rm skopaqtrader:local python -c 'import kiteconnect, psycopg2, quantstats, langchain_ollama, langchain_community, telegram.ext'
+          # no files created by shell redirections (e.g. an unquoted ">=" in a RUN line)
+          test -z "$(docker run --rm skopaqtrader:local sh -c 'ls /app | grep "^="' || true)"
+
+      - name: MCP stdio is clean
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            | timeout 120 docker run --rm -i skopaqtrader:local mcp > mcp.out || true
+          head -n1 mcp.out | python3 -c 'import json,sys; assert json.loads(sys.stdin.readline())["id"] == 1'
+
+      # telegram is not started: CI has no bot token.
+      - name: Stack health and shared state
+        run: |
+          docker compose up -d api scheduler
+          for svc in api scheduler; do
+            status=""
+            for _ in $(seq 40); do
+              status="$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q "$svc")")"
+              [ "$status" = healthy ] && break
+              sleep 5
+            done
+            echo "$svc: $status"
+            test "$status" = healthy
+          done
+          curl -fsS http://127.0.0.1:8000/health
+          docker compose exec -T api python -c '
+          import os, pathlib
+          assert os.getuid() != 0, "runs as root"
+          for d in (".", "~/.skopaq", "~/.tradingagents", "/data"):
+              p = pathlib.Path(d).expanduser()
+              assert os.access(p, os.W_OK), f"{p} is not writable"
+          print("uid", os.getuid(), "cwd", os.getcwd(), "writable: ok")
+          '
+          docker compose exec -T api python -m skopaq.cli.main halt 'ci probe'
+          docker compose exec -T scheduler python -c '
+          from skopaq.execution import kill_switch
+          s = kill_switch.status(use_cache=False)
+          print(s.describe())
+          assert s.halted, "the scheduler does not see the halt"
+          '
+          docker compose exec -T api python -m skopaq.cli.main resume --yes
+
+      - name: Logs
+        if: always()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

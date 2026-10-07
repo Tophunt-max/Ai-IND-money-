@@ -1,0 +1,90 @@
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from tradingagents.agents.analysts import (
+    defi_analyst,
+    fundamentals_analyst,
+    funding_analyst,
+    market_analyst,
+    news_analyst,
+    onchain_analyst,
+)
+
+
+@dataclass(frozen=True)
+class AnalystNodeSpec:
+    key: str
+    agent_node: str
+    report_key: str
+    tools: tuple = ()
+
+
+@dataclass(frozen=True)
+class AnalystExecutionPlan:
+    specs: list[AnalystNodeSpec]
+
+
+ANALYST_NODE_SPECS: dict[str, AnalystNodeSpec] = {
+    "market": AnalystNodeSpec(
+        key="market",
+        agent_node="Market Analyst",
+        report_key="market_report",
+        tools=market_analyst.TOOLS,
+    ),
+    "social": AnalystNodeSpec(
+        # Saved configs select this analyst as "social". It fetches its
+        # sources before calling the model, so it has no tools.
+        key="social",
+        agent_node="Sentiment Analyst",
+        report_key="sentiment_report",
+    ),
+    "news": AnalystNodeSpec(
+        key="news",
+        agent_node="News Analyst",
+        report_key="news_report",
+        tools=news_analyst.TOOLS,
+    ),
+    "fundamentals": AnalystNodeSpec(
+        key="fundamentals",
+        agent_node="Fundamentals Analyst",
+        report_key="fundamentals_report",
+        tools=fundamentals_analyst.TOOLS,
+    ),
+    # Skopaq: crypto-specific analysts, selected when asset_class == "crypto".
+    "onchain": AnalystNodeSpec(
+        key="onchain",
+        agent_node="Onchain Analyst",
+        report_key="onchain_report",
+        tools=onchain_analyst.TOOLS,
+    ),
+    "defi": AnalystNodeSpec(
+        key="defi",
+        agent_node="Defi Analyst",
+        report_key="defi_report",
+        tools=defi_analyst.TOOLS,
+    ),
+    "funding": AnalystNodeSpec(
+        key="funding",
+        agent_node="Funding Analyst",
+        report_key="funding_report",
+        tools=funding_analyst.TOOLS,
+    ),
+}
+
+
+def build_analyst_execution_plan(
+    selected_analysts: Iterable[str],
+) -> AnalystExecutionPlan:
+    specs: list[AnalystNodeSpec] = []
+    for analyst_key in selected_analysts:
+        spec = ANALYST_NODE_SPECS.get(analyst_key)
+        if spec is None:
+            raise ValueError(f"unknown analyst key: {analyst_key}")
+        specs.append(spec)
+
+    if not specs:
+        raise ValueError("at least one analyst must be selected")
+
+    return AnalystExecutionPlan(specs=specs)
+
+

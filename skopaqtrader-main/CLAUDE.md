@@ -1,0 +1,186 @@
+# CLAUDE.md — SkopaqTrader Project Context
+
+This file provides context for AI coding agents working on the SkopaqTrader codebase.
+
+## Project Overview
+
+AI algorithmic trading platform for Indian equities. Built on vendored [TradingAgents v0.5.1](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) with a custom `skopaq/` layer for INDstocks broker integration, multi-model LLM tiering, and an autonomous execution pipeline.
+
+## Architecture
+
+Two codebases in one repo:
+
+- **`tradingagents/`** — Vendored upstream. Multi-agent LangGraph pipeline: 4 analysts → bull/bear researchers → trader → risk debate → Portfolio Manager decision (5-tier rating: Buy/Overweight/Hold/Underweight/Sell). Modifications are surgical and tracked in `UPSTREAM_CHANGES.md`.
+- **`skopaq/`** — Custom extensions: broker client, execution pipeline, CLI, config, LLM tiering, scanner, risk management, memory, daemon.
+
+### Key Flow
+
+```
+CLI/API → SkopaqTradingGraph → [upstream LangGraph agents] → TradeSignal
+  → SafetyChecker → PositionSizer → OrderRouter → INDstocks/Paper
+  → PositionMonitor → SellAnalyst → exit
+```
+
+### Daemon Flow (autonomous)
+
+```
+PRE_OPEN → SCANNING → ANALYZING → TRADING → MONITORING → CLOSING → REPORTING
+```
+
+The daemon (`skopaq/execution/daemon.py`) is a finite state machine that composes all subsystems into a single unattended trading session. On an always-on host the scheduler (`skopaq/execution/scheduler.py`, `skopaq schedule`, the compose `scheduler` service) starts one session per NSE trading day at 09:15 IST, catches up until 11:30 if the host was down, stops a session still running at 15:45, and in live mode keeps a failed session's positions protected with `skopaq monitor` (which exits 4 when it ends with positions still open or orders unconfirmed — after the close, or earlier on a stop — alerted as "check the broker").
+
+## MCP Server (Claude Code Integration)
+
+SkopaqTrader exposes a **MCP server** (`skopaq/mcp_server.py`) that provides 40 trading tools directly inside Claude Code (the core ones are listed below). Configured in `.claude/.mcp.json`.
+
+**IMPORTANT**: When fetching market data, quotes, or portfolio info — always use the MCP tools (`mcp__skopaq__*`). Do NOT write Python/Bash code to call `INDstocksClient` or other broker modules directly. The MCP tools handle authentication, scrip resolution, and error handling internally.
+
+**Available MCP tools** (auto-allowed for read-only, require permission for trades):
+
+| Tool | What it does |
+|------|-------------|
+| `get_quote` | Real-time stock quote (LTP, OHLC, bid/ask) |
+| `get_historical` | OHLCV candles (1/5/15/60 min resolution) |
+| `get_positions` | Open positions with P&L |
+| `get_holdings` | Delivery holdings |
+| `get_funds` | Cash balance, margin, collateral |
+| `get_orders` | Today's orders with status |
+| `analyze_stock` | Full multi-agent AI analysis (2-5 min) |
+| `scan_market` | Multi-model market scan for candidates |
+| `quick_decision` | Jev's calibrated answer to a question about a text (~0.1 s) |
+| `check_safety` | Pre-trade safety validation |
+| `place_order` | Execute order, safety-checked (the paper engine: the MCP server has no live INDstocks client) |
+| `halt_trading` / `resume_trading` | Kill switch: stop / allow new BUYs everywhere |
+| `performance_report` | Track record: AI calls vs NIFTY, closed trades, calibration |
+| `system_status` | Health check (version, mode, LLMs) |
+
+**Custom slash commands**: `/quote RELIANCE`, `/analyze TCS`, `/scan`, `/portfolio`, `/trade INFY`
+
+## Common Commands
+
+```bash
+# Run unit tests (~1,640 tests, no API keys needed)
+python3 -m pytest tests/unit/ -x -q
+
+# Run a specific test file
+python3 -m pytest tests/unit/execution/test_daemon.py -v
+
+# CI (.github/workflows/ci.yml) runs on every PR: unit tests on Python 3.11/3.12/3.14,
+# lint for syntax errors and undefined names (ruff --select E9,F63,F7,F82),
+# upstream TradingAgents' own suite against our tradingagents/ (pinned UPSTREAM_REF),
+# and a build of the Docker image with the compose stack brought up and health-checked
+
+# Run integration tests (requires .env with real keys)
+python3 -m pytest tests/integration/ -v -m integration
+
+# CLI commands
+skopaq status              # Health check
+skopaq analyze RELIANCE    # Analysis only
+skopaq trade RELIANCE      # Analysis + execution (paper default)
+skopaq scan                # Scanner cycle
+skopaq chat                # Interactive AI chatbot (Claude Code-style)
+skopaq daemon --once --paper  # Full autonomous session
+skopaq schedule --check    # Show the scheduler's plan (the compose service runs `skopaq schedule`)
+skopaq monitor             # Monitor existing positions; live: exits 4 if it ends with positions open or orders unconfirmed
+skopaq settle              # Settle past decisions whose holding window has traded
+skopaq memory legacy       # Show pre-v0.5.1 agent memories (--export FILE, --delete)
+skopaq report              # Track record: AI calls vs NIFTY, closed trades, calibration
+skopaq halt "reason"       # Kill switch: reject every BUY everywhere
+skopaq resume              # Lift the kill switch
+skopaq serve               # FastAPI server
+```
+
+## Configuration
+
+- **`SkopaqConfig`** in `skopaq/config.py` — Pydantic Settings with `env_prefix="SKOPAQ_"`
+- **`.env`** file at repo root (gitignored) — all secrets live here
+- **`.env.example`** — template with all configurable keys and placeholders
+- **Env bridging** — `skopaq/llm/env_bridge.py` copies `SKOPAQ_*` → standard env vars (e.g., `SKOPAQ_GOOGLE_API_KEY` → `GOOGLE_API_KEY`) so upstream TradingAgents works without modification
+
+## LLM Setup
+
+| Role | Model | Provider |
+|------|-------|----------|
+| Most analyst/researcher roles | Gemini 3.8 Flash | Google |
+| Social Analyst | Grok 4.6 | OpenRouter (`x-ai/grok-4.6`) |
+| News Analyst | Gemini 3.8 Flash | Google |
+| Research Manager, Portfolio Manager | Claude Opus 5 | Anthropic |
+| Scanner screeners | Gemini + Grok + Perplexity Sonar | Concurrent |
+| Sell Analyst | Gemini 3.8 Flash | Google |
+
+**Memory:** upstream keeps an append-only decision log (`TradingMemoryLog`), settled once each decision's holding window has traded; `skopaq/memory/store.py` mirrors it to Supabase. `SKOPAQ_TYPESAFE_API_KEY` enables upstream's TypeSafe Jev screening of social posts.
+
+**Jev decisions** (`skopaq/llm/jev.py`, off unless `SKOPAQ_JEV_ENABLED=true`): Jev reads the Portfolio Manager's decision and sets the signal's confidence to its probability for that action (a confident contradiction → HOLD), and makes the sell analyst's SELL/HOLD call (SELL only at ≥ `SKOPAQ_JEV_MIN_CONFIDENCE`). In the scanner it scores what kind of reason each candidate has (0 generic … 3 major company event) and ranks by it before the full analysis; candidates below `SKOPAQ_JEV_MIN_CATALYST_SCORE` (default 0: none) are dropped. Model pinned to `jev-1.13.0`. `SKOPAQ_JEV_BASE_URL` sends Jev, and upstream's post screening, to a TypeSafe-compatible gateway instead (OpenRouter: `https://openrouter.ai/api`, an OpenRouter key in `SKOPAQ_TYPESAFE_API_KEY`, model `jev-1.13`, not confirmed to be the same build as `jev-1.13.0`). Jev is weak at numbers and dates — ask it semantic questions only; keep arithmetic in code. Any Jev failure falls back to the LLM's own answer.
+
+**Critical:** Perplexity Sonar does NOT support tool calling — it can only be used for scanner plain prompts, never as a LangGraph agent.
+
+**Critical:** Gemini 3 returns `response.content` as a list of dicts, not a string. Always use `skopaq.llm.extract_text()` to normalize.
+
+## INDstocks API
+
+- ALL market data endpoints use `scrip-codes=NSE_2885` format (NOT `symbols=NSE:RELIANCE`)
+- Auth header: `Authorization: TOKEN` (no "Bearer" prefix)
+- Historical endpoint: input timestamps in **milliseconds**, response `ts` in **seconds**
+- Candle objects: `{"ts":, "o":, "h":, "l":, "c":, "v":}`
+- Quote fields: `live_price`, `day_open`, `day_high`, `day_low`, `prev_close`
+- POST /order returns `data.order_id` and `data.order_status` (not `status`). Acceptance is not a fill: `skopaq/execution/live_orders.py` (`LiveOrderWorker`) confirms every live fill, cancels what an entry has not filled in time, and works protective exits until filled
+- Order rows (GET /order-book, GET /order): `id`, `txn_type`, `status`, `requested_qty`, `traded_qty`, `traded_price` (a string, `""` until filled), `security_id`, `product`, `extra_info`, `updated_at`. `name` is not the symbol and rows have no trading symbol (match on `security_id`). Parse rows and statuses with `skopaq.broker.order_status`; never compare raw status strings
+- GET /order and GET /order/trades take `{order_id, segment}` as a JSON body on a GET (the client also sends them as query params, and falls back to `/trades/{order_id}`)
+- Order and portfolio calls use the strict envelope (`_request_envelope`): a 2xx body with `status: error|failure` raises `BrokerError(kind="error_body")`, and `data: null` is empty only under `status: success`. `BrokerError.kind` says whether an order may exist; `OrderPlacementUncertain` means reconcile against the order book, never re-send
+- `/portfolio/positions` needs lowercase `segment` and `product` (the client queries cnc and intraday); holdings rows use `total_qty` / `avg_price`. Read the order book **before** positions and holdings (`read_broker_snapshot`)
+- MARKET orders become a LIMIT at the LTP and can rest; tick size comes from the instruments CSV (`resolve_tick_size`)
+- Always refer to `docs/indstocks_api.md` for endpoint reference — do not assume
+
+## File Organization
+
+```
+skopaq/
+├── agents/          # Sell analyst (AI exit decisions)
+├── api/             # FastAPI backend
+├── broker/          # INDstocks REST/WS + Binance + paper engine
+├── cli/             # Typer CLI (main.py = all commands, display.py = Rich output)
+├── db/              # Supabase client + repositories
+├── execution/       # Executor, safety checker, order router, live order worker, daemon, position monitor
+├── graph/           # SkopaqTradingGraph (wraps upstream)
+├── llm/             # Model tiering, env bridge, semantic cache (LangCache)
+├── memory/          # BM25-indexed agent memory (Supabase-backed)
+├── risk/            # ATR sizing, regime detection, drawdown tracker, calendar
+├── scanner/         # Multi-model scanner engine + watchlist + screen models
+├── config.py        # SkopaqConfig (pydantic-settings)
+└── constants.py     # SafetyRules (immutable) + daemon variants
+```
+
+## Testing Patterns
+
+- **Unit tests** (`tests/unit/`): Mock all external dependencies. No API keys needed.
+- **Integration tests** (`tests/integration/`): Real API calls. Require `.env` with valid keys.
+- **Fixtures**: Common config mocks in test files. `conftest.py` at `tests/` root.
+- **Async tests**: Use `@pytest.mark.asyncio` + `AsyncMock` for async methods.
+- **Patch targets**: When a function is locally imported inside a method body (common in `daemon.py`), patch at the **source module**, not the importing module. Example: `patch("skopaq.cli.main._run_scan")` not `patch("skopaq.execution.daemon._run_scan")`.
+
+## Key Conventions
+
+1. **Safety rules are immutable** — `SafetyRules` in `constants.py` cannot be overridden at runtime. The `SafetyChecker` enforces them before every order; the limits on new risk (size, value, lots, loss limits, cool-down) apply to BUYs only, since a SELL can only reduce what is held, and protective exits are MARKET orders, not LIMITs at the entry price (live, the worker re-places a resting exit as a tick-rounded LIMIT). The no-short-sale check subtracts open and just-filled SELL orders (and Skopaq's own unresolved SELLs the book does not list yet), reads the order book before positions and holdings, and refuses a live SELL when the order book cannot be read (override: `SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK`, default false, logged at CRITICAL on every use and alerted at most once per symbol every 10 minutes). The monitor's and CLOSING's exits are `TradingSignal(position_only=True)`: sized by the day's position less Skopaq's own pending/unshown/uncertain SELLs, never older holdings. Kite is data-only for this pipeline, but the MCP server's Kite order tools (`place_amo_order`, `place_gtt_order`, …) place real Zerodha orders whenever a Kite session exists, outside the SafetyChecker (`docs/trading/live-trading.md`, Residual limits). The checker's daily/weekly/monthly loss limits are seeded from P&L stored in Supabase (`skopaq/execution/pnl_history.py`), so they hold across processes; the kill switch (`skopaq/execution/kill_switch.py`: `skopaq halt`, `SKOPAQ_TRADING_HALTED`, or the `system_flags` row) rejects every BUY while on.
+2. **Paper mode is default** — All CLI commands default to paper trading. Live mode requires explicit `--live` or `SKOPAQ_TRADING_MODE=live` + confirmation prompt.
+3. **Upstream modifications are minimal** — Changes to `tradingagents/` must be documented in `UPSTREAM_CHANGES.md` with backward-compatibility notes.
+4. **No secrets in code** — All credentials come from environment variables. Never commit `.env`, token files, or API keys.
+5. **Pydantic v2 models** — Broker models in `skopaq/broker/models.py` use Pydantic v2. Use attribute access (`model.field`), not dict access (`model["field"]` or `model.get("field")`).
+6. **Rich output** — All CLI display uses Rich tables/panels via `skopaq/cli/display.py` and `skopaq/cli/theme.py`.
+
+## Common Gotchas
+
+- **Gemini content format**: `response.content` returns `[{"type": "text", "text": "..."}]` not a plain string. Use `extract_text()`.
+- **INDstocks timestamps**: Historical API wants milliseconds, returns seconds. Off by 1000x is a common bug.
+- **yfinance suffixes**: LLM agents generate `RELIANCE.NS` (Yahoo Finance convention). The routing layer adds/strips suffixes automatically, but new data flows must handle this.
+- **Local imports in daemon.py**: Many imports are inside method bodies to avoid circular imports. This affects mock patch targets in tests (see Testing Patterns above).
+- **Stop event propagation**: The daemon's `stop_event` must be checked before every major operation, not just inside delay waits.
+
+## Deployment
+
+- **Mac mini / any Docker host** — `docker-compose.yml` (api, telegram, scheduler on persistent volumes; one image, `Dockerfile`, linux/arm64 and amd64). Runbook: `docs/deployment/mac-mini.md`; checks: `scripts/macmini/verify.sh`
+- **Railway API** — `railway.toml` — FastAPI server (always running)
+- **Railway Daemon** — `railway-daemon.toml` — Cron job at 09:15 IST weekdays. Disable it before running the compose scheduler, or two daemons trade the same account
+- **Vercel** — `frontend/` — Next.js dashboard
+- **Supabase** — PostgreSQL + auth + agent memory
+- **Upstash** — Redis for semantic LLM cache (LangCache)
+- **Cloudflare Tunnel** — inbound HTTPS to the API (Kite login callback). It does not give a static outbound IP: INDstocks whitelists the host's egress IPv4 (`docs/deployment/mac-mini.md` §3)

@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skopaqtrader"
+version = "0.2.0"
+description = "AI algorithmic trading platform for Indian equities — built on TradingAgents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # --- Upstream TradingAgents deps (v0.5.2) ---
+    # Floors match upstream v0.5.2's own pyproject: the vendored code is
+    # written against these, and running a newer LangChain 0.x under it is a
+    # combination upstream never tests.
+    "langchain-core>=1.6.5",
+    # Skopaq: 1.7.4 knows claude-opus-5 (128K output; older versions cap unknown
+    # models at 4096 tokens, which adaptive thinking can use up).
+    "langchain-anthropic>=1.7.4",
+    "langchain-google-genai>=4.4.0",
+    "langchain-openai>=1.6.6",
+    "langgraph>=1.2.12",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    # Upstream v0.5.2 requires pandas 3 (#1418 and the numpy 2 move).
+    "pandas>=3.0.6",
+    "python-dotenv>=1.0.0",
+    "pytz>=2025.2",
+    "questionary>=2.1.0",
+    "requests>=2.32.4",
+    "rich>=14.0.0",
+    "typer>=0.21.0",
+    "stockstats>=0.6.5",
+    "typing-extensions>=4.14.0",
+    "yfinance>=1.7.0",
+    # --- Skopaq additions ---
+    "rank-bm25>=0.2.2",
+    "redis>=6.2.0",
+    "typesafe-sdk>=0.7.1",
+    "httpx>=0.28.0",
+    "websockets>=13.0",
+    "pydantic>=2.13",  # cp314 wheels, no Pydantic-V1 warning on 3.14
+    "pydantic-settings>=2.6.0",
+    "cryptography>=44.0.0",
+    "apscheduler>=3.10.0",
+    "supabase>=2.11.0",
+    "upstash-redis>=1.1.0",
+    "langcache>=0.11.1",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "mcp>=1.2,<2",  # skopaq/mcp_server.py; 2.x drops mcp.server.FastMCP
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "respx>=0.22.0",
+    "ruff>=0.8.0",
+    "python-telegram-bot>=22.4",  # tests/unit/chat/test_telegram_bot.py
+    "langchain-ollama>=1.0.0",  # Ollama fallback (SKOPAQ_OLLAMA_ENABLED), tests/unit/llm/test_ollama.py
+]
+# Runtime integrations installed in the Docker image (Dockerfile) and into the Mac host's
+# MCP Python (docs/deployment/mac-mini.md). redis is already a core dependency.
+deploy = [
+    "python-telegram-bot[job-queue]>=22.4,<23",  # 22.4+: run_polling works on Python 3.14; job-queue pins APScheduler<3.12
+    "langchain-ollama>=1.0.0",
+    "kiteconnect>=5.0.0",
+    "psycopg2-binary>=2.9.11",  # first release with cp314 wheels
+    "quantstats>=0.0.80",
+    "langchain-community>=0.3",
+]
+
+[project.scripts]
+tradingagents = "cli.main:app"
+skopaq = "skopaq.cli.main:app"
+
+[tool.setuptools.packages.find]
+include = ["tradingagents*", "cli*", "skopaq*"]
+
+[tool.setuptools.package-data]
+cli = ["static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: integration tests requiring external services",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
