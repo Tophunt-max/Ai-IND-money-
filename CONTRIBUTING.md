@@ -7,8 +7,8 @@ Thank you for your interest in contributing to SkopaqTrader! This document provi
 1. **Fork** the repository on GitHub
 2. **Clone** your fork locally:
    ```bash
-   git clone https://github.com/<your-username>/skopaqtrader.git
-   cd skopaqtrader
+   git clone https://github.com/<your-username>/Ai-IND-money-.git
+   cd Ai-IND-money-
    ```
 3. **Set up** the development environment:
    ```bash

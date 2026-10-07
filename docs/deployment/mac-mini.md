@@ -154,8 +154,8 @@ Register the IP with INDstocks (and with Kite, for orders), put it in
 ## 5. Install
 
 ```bash
-git clone https://github.com/samuelvinay91/skopaqtrader.git
-cd skopaqtrader
+git clone https://github.com/Tophunt-max/Ai-IND-money-.git
+cd Ai-IND-money-
 cp .env.example .env
 ```
 

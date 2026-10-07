@@ -7,8 +7,8 @@ SkopaqTrader is built on vendored TradingAgents (Apache 2.0) with a custom `skop
 ### Step 1: Fork and Clone
 
 ```bash
-git clone https://github.com/your-username/skopaqtrader.git
-cd skopaqtrader
+git clone https://github.com/your-username/Ai-IND-money-.git
+cd Ai-IND-money-
 ```
 
 ### Step 2: Set Up Environment
@@ -29,7 +29,7 @@ cp .env.example .env
 ### Step 3: Run Tests
 
 ```bash
-# Unit tests (no API keys needed, ~540 tests)
+# Unit tests (no API keys needed, 1,400+ tests)
 python3 -m pytest tests/unit/ -x -q
 
 # Specific test file

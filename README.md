@@ -34,7 +34,7 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 **Key capabilities:**
 
-- **Claude Code Integration** — Native MCP server with 18 tools + custom slash commands (`/analyze`, `/quote`, `/scan`, `/portfolio`, `/trade`). Run the full 15-agent analysis pipeline using Claude's own reasoning at zero extra LLM cost.
+- **Claude Code Integration** — Native MCP server with 40 tools + custom slash commands (`/analyze`, `/quote`, `/scan`, `/portfolio`, `/trade`). Run the full 15-agent analysis pipeline using Claude's own reasoning at zero extra LLM cost.
 - **Interactive AI Chat** — Claude Code-style REPL (`skopaq chat`) with streaming responses, tool panels, human-in-the-loop trade confirmation, and LangGraph checkpointing.
 - **Ollama Local Fallback** — Run analyst roles on local models via Ollama/MLX for offline operation and zero API cost.
 - **Post-Trade Reflection Loop** — Reflection node analyzes past trades and injects history into the analyst context, enabling the system to incorporate lessons from wins and losses over time.
@@ -299,8 +299,8 @@ alerts = await check_whale_alerts("ETH", min_value_usd=100000)
 ### Setup
 
 ```bash
-git clone https://github.com/bvkio/skopaqtrader.git
-cd skopaqtrader
+git clone https://github.com/Tophunt-max/Ai-IND-money-.git
+cd Ai-IND-money-
 
 # Create virtual environment
 python -m venv .venv
@@ -421,8 +421,8 @@ SkopaqTrader integrates natively with [Claude Code](https://claude.ai/code) as a
 **Step 1: Install SkopaqTrader**
 
 ```bash
-git clone https://github.com/samuelvinay91/skopaqtrader.git
-cd skopaqtrader
+git clone https://github.com/Tophunt-max/Ai-IND-money-.git
+cd Ai-IND-money-
 pip install -e .
 cp .env.example .env   # Add your API keys
 ```
@@ -444,7 +444,7 @@ Add to your `~/.claude.json` (or run `/mcp add` in Claude Code):
 
 **Step 3: Restart Claude Code**
 
-Open Claude Code in the `skopaqtrader` directory. The MCP server starts automatically. You'll see 18 trading tools available.
+Open Claude Code in the `Ai-IND-money-` directory. The MCP server starts automatically. You'll see 40 trading tools available.
 
 ### Custom Slash Commands (Skills)
 
@@ -458,7 +458,7 @@ These are pre-built in `.claude/skills/` and available immediately:
 | `/portfolio` | Shows positions, holdings, funds, P&L |
 | `/trade INFY` | Analysis + safety check + paper execution (with confirmation) |
 
-### MCP Tools (18 available)
+### MCP Tools (40 available — core ones listed below)
 
 All tools are callable by Claude Code natively. Read-only tools are auto-approved via `.claude/settings.json`:
 
@@ -550,7 +550,7 @@ print(decision)
 ## Project Structure
 
 ```
-skopaqtrader/
+Ai-IND-money-/
 ├── tradingagents/              # Vendored upstream (TradingAgents v0.5.2)
 │   ├── agents/                 # Analyst, researcher, trader, risk agents
 │   │   ├── analysts/           # Market, news, social, fundamentals + crypto analysts
@@ -576,7 +576,7 @@ skopaqtrader/
 │   ├── memory/                 # BM25-indexed agent memory + trade reflection loop
 │   ├── risk/                   # ATR sizing, regime detection, drawdown, calendar
 │   ├── scanner/                # Multi-model market scanner engine
-│   ├── mcp_server.py           # MCP server (18 tools for Claude Code integration)
+│   ├── mcp_server.py           # MCP server (40 tools for Claude Code integration)
 │   ├── config.py               # Pydantic Settings (env_prefix="SKOPAQ_")
 │   └── constants.py            # Immutable safety rules + daemon variants
 │
@@ -589,7 +589,7 @@ skopaqtrader/
 │   └── .mcp.json               # MCP server registration
 │
 ├── openclaw/                   # OpenClaw skill wrappers (WhatsApp/Telegram/Slack)
-├── tests/                      # 540 unit + integration tests
+├── tests/                      # 1,400+ unit + 40+ integration tests
 │   ├── unit/                   # Fast tests (no API keys needed)
 │   └── integration/            # Real API calls (requires .env)
 │
@@ -617,7 +617,7 @@ If you discover a security issue, please report it privately rather than opening
 
 ## Testing
 
-The test suite contains **674 unit tests** (no API keys needed) plus integration tests for real broker/LLM calls.
+The test suite contains **1,400+ unit tests** (no API keys needed) plus integration tests for real broker/LLM calls.
 
 ```bash
 # Unit tests — fast, no external dependencies
@@ -636,8 +636,8 @@ The fastest way to get started. One image, all services.
 
 ```bash
 # Build locally (native arm64 on Apple Silicon, amd64 elsewhere)
-git clone https://github.com/samuelvinay91/skopaqtrader.git
-cd skopaqtrader
+git clone https://github.com/Tophunt-max/Ai-IND-money-.git
+cd Ai-IND-money-
 docker build -t skopaqtrader/skopaqtrader .
 ```
 

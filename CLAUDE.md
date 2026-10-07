@@ -4,7 +4,7 @@ This file provides context for AI coding agents working on the SkopaqTrader code
 
 ## Project Overview
 
-AI algorithmic trading platform for Indian equities. Built on vendored [TradingAgents v0.5.1](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) with a custom `skopaq/` layer for INDstocks broker integration, multi-model LLM tiering, and an autonomous execution pipeline.
+AI algorithmic trading platform for Indian equities. Built on vendored [TradingAgents v0.5.2](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) with a custom `skopaq/` layer for INDstocks broker integration, multi-model LLM tiering, and an autonomous execution pipeline.
 
 ## Architecture
 
@@ -59,7 +59,7 @@ SkopaqTrader exposes a **MCP server** (`skopaq/mcp_server.py`) that provides 40 
 ## Common Commands
 
 ```bash
-# Run unit tests (~1,640 tests, no API keys needed)
+# Run unit tests (1,400+ tests, no API keys needed)
 python3 -m pytest tests/unit/ -x -q
 
 # Run a specific test file

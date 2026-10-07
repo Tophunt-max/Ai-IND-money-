@@ -1,8 +1,8 @@
 site_name: SkopaqTrader Docs
 site_description: AI Algorithmic Trading Platform for Indian Equities
-site_url: https://samuelvinay91.github.io/skopaqtrader/
-repo_url: https://github.com/samuelvinay91/skopaqtrader
-repo_name: samuelvinay91/skopaqtrader
+site_url: https://tophunt-max.github.io/Ai-IND-money-/
+repo_url: https://github.com/Tophunt-max/Ai-IND-money-
+repo_name: Tophunt-max/Ai-IND-money-
 edit_uri: edit/main/docs/
 
 theme:
@@ -90,6 +90,6 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/samuelvinay91/skopaqtrader
+      link: https://github.com/Tophunt-max/Ai-IND-money-
 
 copyright: "Apache 2.0 — Built on TradingAgents by TauricResearch"

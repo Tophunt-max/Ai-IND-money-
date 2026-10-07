@@ -24,7 +24,7 @@ SkopaqTrader is an open-source AI trading platform that combines a 15-agent anal
 
 ```bash
 # 3 commands to start trading:
-git clone https://github.com/samuelvinay91/skopaqtrader.git
+git clone https://github.com/Tophunt-max/Ai-IND-money-.git && cd Ai-IND-money-
 cp .env.example .env        # Add your API keys
 pip install -e .             # Install
 skopaq chat                  # Start trading

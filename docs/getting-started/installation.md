@@ -9,8 +9,8 @@
 ## Install from Source
 
 ```bash
-git clone https://github.com/samuelvinay91/skopaqtrader.git
-cd skopaqtrader
+git clone https://github.com/Tophunt-max/Ai-IND-money-.git
+cd Ai-IND-money-
 pip install -e .
 ```
 
