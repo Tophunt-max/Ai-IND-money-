@@ -1,0 +1,104 @@
+name: Deploy (EC2)
+
+# Updates the EC2 host after CI passes on main (docs/deployment/github-auto-deploy.md).
+# Does nothing until the EC2_HOST and EC2_SSH_KEY secrets are set.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  schedule:
+    # 16:15 IST Mon-Fri: deploys what was merged during market hours
+    - cron: "45 10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Deploy during market hours too (a running trading session still blocks it)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ secrets.EC2_USER || 'ubuntu' }}
+      FORCE: ${{ inputs.force && 'force' || '' }}
+    steps:
+      - name: Configured?
+        id: cfg
+        run: |
+          if [ -z "$EC2_HOST" ]; then
+            echo "::notice::EC2_HOST secret not set: skipping deploy"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The commit CI passed on: the triggering run, or the latest passing push run on main.
+      - name: Commit to deploy
+        id: sha
+        if: steps.cfg.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          sha="$RUN_SHA"
+          if [ -z "$sha" ]; then
+            sha="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --branch main \
+              --event push --status success --limit 1 --json headSha --jq '.[0].headSha')"
+          fi
+          test -n "$sha" || { echo "::error::no passing CI run on main"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "deploying $sha"
+
+      # Checked here too so a market-hours push does not even open SSH; the host checks again.
+      - name: Market hours
+        id: market
+        if: steps.cfg.outputs.skip != 'true'
+        run: |
+          day="$(TZ=Asia/Kolkata date +%u)"; hm="$(TZ=Asia/Kolkata date +%H%M)"
+          if [ "$FORCE" != "force" ] && [ "$day" -le 5 ] && [ "$hm" -ge 0830 ] && [ "$hm" -lt 1600 ]; then
+            echo "::notice::Market hours (IST $(TZ=Asia/Kolkata date '+%a %H:%M')): the 16:15 IST run deploys it"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.skip != 'true' && steps.market.outputs.skip != 'true'
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+
+      - name: Deploy over SSH
+        if: steps.cfg.outputs.skip != 'true' && steps.market.outputs.skip != 'true'
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          opts=(-i ~/.ssh/ec2.pem -o StrictHostKeyChecking=accept-new
+                -o ServerAliveInterval=30 -o ServerAliveCountMax=10)
+          # Copied first, not piped to `bash -s`: docker and git would read the rest of the
+          # script from stdin, and the checkout must not change the script while it runs.
+          ssh "${opts[@]}" "$EC2_USER@$EC2_HOST" 'cat > /tmp/ec2-deploy.sh' < scripts/deploy/ec2-deploy.sh
+          set +e
+          # shellcheck disable=SC2029  # SHA and FORCE expand here, on purpose
+          ssh "${opts[@]}" "$EC2_USER@$EC2_HOST" "bash /tmp/ec2-deploy.sh $SHA $FORCE"
+          rc=$?
+          rm -f ~/.ssh/ec2.pem
+          if [ "$rc" -eq 3 ]; then
+            echo "::warning::Skipped on the host (market hours or a trading session is running)"
+            exit 0
+          fi
+          exit "$rc"
