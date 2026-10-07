@@ -82,6 +82,8 @@ jobs:
         if: steps.cfg.outputs.skip != 'true' && steps.market.outputs.skip != 'true'
         env:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          # Optional: the host's whole .env. Written to the host only, never to the runner's disk.
+          ENV_FILE: ${{ secrets.ENV_FILE }}
           SHA: ${{ steps.sha.outputs.sha }}
         run: |
           install -m 700 -d ~/.ssh
@@ -92,9 +94,16 @@ jobs:
           # Copied first, not piped to `bash -s`: docker and git would read the rest of the
           # script from stdin, and the checkout must not change the script while it runs.
           ssh "${opts[@]}" "$EC2_USER@$EC2_HOST" 'cat > /tmp/ec2-deploy.sh' < scripts/deploy/ec2-deploy.sh
+          env_arg=""
+          if [ -n "$ENV_FILE" ]; then
+            printf '%s\n' "$ENV_FILE" \
+              | ssh "${opts[@]}" "$EC2_USER@$EC2_HOST" 'umask 077 && cat > /tmp/ai-ind.env'
+            env_arg="NEW_ENV_FILE=/tmp/ai-ind.env"
+            echo "ENV_FILE secret sent to the host"
+          fi
           set +e
-          # shellcheck disable=SC2029  # SHA and FORCE expand here, on purpose
-          ssh "${opts[@]}" "$EC2_USER@$EC2_HOST" "bash /tmp/ec2-deploy.sh $SHA $FORCE"
+          # shellcheck disable=SC2029  # SHA, FORCE and env_arg expand here, on purpose
+          ssh "${opts[@]}" "$EC2_USER@$EC2_HOST" "$env_arg bash /tmp/ec2-deploy.sh $SHA $FORCE"
           rc=$?
           rm -f ~/.ssh/ec2.pem
           if [ "$rc" -eq 3 ]; then
