@@ -265,3 +265,6 @@ Thumbs.db
 .env.local
 .env.*.local
 site/
+
+# The dashboard's source folder (the Python "lib/" rule above would hide it)
+!frontend/src/lib/
