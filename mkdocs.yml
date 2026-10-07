@@ -80,6 +80,7 @@ nav:
   - Deployment:
     - Mac mini (Docker): deployment/mac-mini.md
     - Auto-deploy to EC2 (GitHub): deployment/github-auto-deploy.md
+    - Web dashboard (Vercel): deployment/dashboard.md
     - Docker: deployment/docker.md
     - Fly.io: deployment/flyio.md
   - Changelog: changelog.md

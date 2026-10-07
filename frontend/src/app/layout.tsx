@@ -1,28 +1,29 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+
+import AuthGate from "@/components/AuthGate";
+import Nav from "@/components/Nav";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SkopaqTrader",
-  description: "AI algorithmic trading platform for Indian equities",
+  title: "AI IND Money",
+  description: "AI algorithmic trading dashboard for Indian equities",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#030712",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className="bg-gray-950 text-gray-100 min-h-screen">
-        <nav className="border-b border-gray-800 px-6 py-4">
-          <div className="max-w-6xl mx-auto flex items-center justify-between">
-            <h1 className="text-xl font-bold tracking-tight">
-              Skopaq<span className="text-blue-400">Trader</span>
-            </h1>
-            <span className="text-xs text-gray-500">v0.1.0</span>
-          </div>
-        </nav>
-        <main className="max-w-6xl mx-auto px-6 py-8">{children}</main>
+        <AuthGate>
+          <Nav />
+          <main className="max-w-6xl mx-auto px-4 md:px-6 py-6 pb-24 md:pb-10">{children}</main>
+        </AuthGate>
       </body>
     </html>
   );
