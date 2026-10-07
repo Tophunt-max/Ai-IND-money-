@@ -7,10 +7,10 @@ import { clearToken } from "@/lib/api";
 
 export const LINKS = [
   { href: "/", label: "Home", icon: "🏠" },
+  { href: "/market", label: "Market", icon: "📈" },
+  { href: "/analyze", label: "Analyze", icon: "🧠" },
   { href: "/trades", label: "Trades", icon: "📒" },
   { href: "/report", label: "Report", icon: "📊" },
-  { href: "/scanner", label: "Scanner", icon: "🔎" },
-  { href: "/analyze", label: "Analyze", icon: "🧠" },
   { href: "/chat", label: "Chat", icon: "💬" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
 ];

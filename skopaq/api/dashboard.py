@@ -11,12 +11,17 @@ the portfolio, trades, the kill switch and LLM-backed jobs.
 - ``GET  /api/dashboard/kill-switch``         halt status
 - ``POST /api/dashboard/kill-switch/halt``    stop new BUYs everywhere
 - ``POST /api/dashboard/kill-switch/resume``  lift the dashboard/CLI halt
-- ``POST /api/dashboard/jobs``                start an ``analyze`` or ``scan`` job
+- ``POST /api/dashboard/jobs``                start an ``analyze``, paper ``trade`` or ``scan`` job
 - ``GET  /api/dashboard/jobs``                recent jobs
 - ``GET  /api/dashboard/jobs/{id}``           one job (poll until done)
+- ``GET  /api/dashboard/market/{quotes,indices,history,watchlist}``  Yahoo Finance prices
+- ``GET  /api/dashboard/pnl-history``         realized P&L per day
+- ``GET  /api/dashboard/scheduler[/log]``     today's plan, session markers and logs
 
 Analyze and scan never place orders: they run the same code as ``skopaq analyze`` and
-``skopaq scan``. One job runs at a time (they make many LLM calls).
+``skopaq scan``. ``trade`` runs ``skopaq trade`` (analysis, safety checks, execution) and
+is refused (403) unless the server is in paper mode. One job runs at a time (they make
+many LLM calls).
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
@@ -38,6 +43,8 @@ from pydantic import BaseModel, Field
 from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def require_dashboard_token(authorization: str = Header(default="")) -> None:
@@ -177,7 +184,190 @@ async def overview() -> dict:
             out["today_trades"] += 1
     out["realized_pnl"] = round(out["realized_pnl"], 2)
     out["invested"] = round(sum(p["cost"] for p in out["positions"]), 2)
+    out["unrealized_pnl"] = None
+    out["market_value"] = None
+    if out["positions"]:
+        await asyncio.to_thread(_mark_to_market, out)
     return out
+
+
+def _mark_to_market(out: dict[str, Any]) -> None:
+    """Add Yahoo prices and unrealized P&L to overview positions (best effort)."""
+    from skopaq.broker import yahoo_quotes
+
+    quotes, errors = yahoo_quotes.get_quotes(sorted({p["symbol"] for p in out["positions"]}))
+    total_value = total_pnl = 0.0
+    priced = 0
+    for p in out["positions"]:
+        q = quotes.get(p["symbol"])
+        if not q or q.get("ltp") is None:
+            p["ltp"] = p["market_value"] = p["unrealized_pnl"] = p["unrealized_pct"] = None
+            p["day_change_pct"] = None
+            continue
+        value = q["ltp"] * p["quantity"]
+        pnl = value - p["cost"]
+        p.update(ltp=q["ltp"], market_value=round(value, 2), unrealized_pnl=round(pnl, 2),
+                 unrealized_pct=(pnl / p["cost"]) if p["cost"] else None,
+                 day_change_pct=q.get("change_pct"))
+        total_value += value
+        total_pnl += pnl
+        priced += 1
+    if priced:
+        out["market_value"] = round(total_value, 2)
+        out["unrealized_pnl"] = round(total_pnl, 2)
+    out["price_source"] = "Yahoo Finance (may be delayed)"
+    if errors:
+        out["price_errors"] = errors
+
+
+# ── Market data (Yahoo Finance) ───────────────────────────────────────────────
+
+
+@router.get("/market/quotes")
+async def market_quotes(symbols: str = Query(..., max_length=400)) -> dict:
+    """Quotes for up to 25 comma-separated symbols (NSE, or Yahoo indices like ^NSEI)."""
+    from skopaq.broker import yahoo_quotes
+
+    wanted = [s.strip() for s in symbols.split(",") if s.strip()][:25]
+    if not wanted:
+        raise HTTPException(422, "Give at least one symbol")
+    bad = []
+    for s in wanted:
+        try:
+            yahoo_quotes.normalize(s)
+        except ValueError:
+            bad.append(s)
+    if bad:
+        raise HTTPException(422, f"Not NSE symbols: {', '.join(bad)}")
+    quotes, errors = await asyncio.to_thread(yahoo_quotes.get_quotes, wanted)
+    return {"quotes": quotes, "errors": errors}
+
+
+@router.get("/market/indices")
+async def market_indices() -> dict:
+    from skopaq.broker import yahoo_quotes
+
+    quotes, errors = await asyncio.to_thread(
+        yahoo_quotes.get_quotes, list(yahoo_quotes.INDICES.values()))
+    return {"indices": [{"name": name, **quotes[t]} for name, t in yahoo_quotes.INDICES.items()
+                        if t in quotes], "errors": errors}
+
+
+@router.get("/market/history")
+async def market_history(symbol: str, range: str = "3mo") -> dict:  # noqa: A002
+    from skopaq.broker import yahoo_quotes
+
+    if range not in yahoo_quotes.RANGES:
+        raise HTTPException(422, f"range must be one of {', '.join(yahoo_quotes.RANGES)}")
+    try:
+        yahoo_quotes.normalize(symbol)
+        data = await asyncio.to_thread(yahoo_quotes.get_history, symbol, range)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Price history unavailable: {exc}") from exc
+    if not data["candles"]:
+        raise HTTPException(404, f"No price history for {symbol}")
+    return data
+
+
+@router.get("/market/watchlist")
+async def market_watchlist() -> dict:
+    from skopaq.scanner.watchlist import NIFTY_50
+
+    return {"symbols": sorted(NIFTY_50)}
+
+
+# ── P&L history ───────────────────────────────────────────────────────────────
+
+
+@router.get("/pnl-history")
+async def pnl_history(days: int = Query(90, ge=1, le=3650)) -> dict:
+    """Realized P&L per day (closed positions) and its running total."""
+
+    config = SkopaqConfig()
+    repo = _trade_repository(config)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    try:
+        closed = repo.get_closed_since(since, is_paper=config.trading_mode != "live")
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read trades: {exc}") from exc
+    by_day: dict[str, float] = {}
+    for t in closed:
+        if t.closed_at is None or t.pnl is None:
+            continue
+        day = t.closed_at.astimezone(_IST).date().isoformat()
+        by_day[day] = by_day.get(day, 0.0) + float(t.pnl)
+    points, running = [], 0.0
+    for day in sorted(by_day):
+        running += by_day[day]
+        points.append({"date": day, "pnl": round(by_day[day], 2), "cumulative": round(running, 2)})
+    return {"days": days, "points": points, "total": round(running, 2)}
+
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+
+
+def _schedule_settings():
+    from skopaq.config import SkopaqConfig as _Config
+    from skopaq.execution.scheduler import ScheduleSettings
+
+    return ScheduleSettings.from_config(_Config())
+
+
+@router.get("/scheduler")
+async def scheduler_status() -> dict:
+    """Today's plan (as `skopaq schedule --check`) and the recent session markers."""
+
+    from skopaq.execution.scheduler import SchedulerState, describe
+    from skopaq.risk import calendar as nse_calendar
+
+    try:
+        settings = _schedule_settings()
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "lines": [], "days": []}
+    now = nse_calendar.now_ist()
+    state = SchedulerState(settings.state_dir, settings.log_dir)
+    days = []
+    for back in range(0, 10):
+        day = now.date() - timedelta(days=back)
+        jobs = {}
+        for job in ("daemon", "monitor", "settle"):
+            if state.started(job, day):
+                jobs[job] = {"started": state.started_note(job, day),
+                             "rc": state.last_exit(job, day)}
+        has_log = settings.log_dir is not None and any(
+            (settings.log_dir / f"{j}-{day.isoformat()}.log").exists()
+            for j in ("daemon", "settle"))
+        if jobs or has_log:
+            days.append({"date": day.isoformat(), "jobs": jobs, "has_log": has_log})
+    return {
+        "ok": True,
+        "enabled": settings.enabled,
+        "mode": settings.mode,
+        "lines": describe(settings, now, state),
+        "days": days,
+    }
+
+
+@router.get("/scheduler/log")
+async def scheduler_log(day: str, job: Literal["daemon", "settle"] = "daemon",
+                        lines: int = Query(300, ge=10, le=2000)) -> dict:
+    """The last *lines* of one session log (logs/daemon/<job>-<day>.log)."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise HTTPException(422, "day must be YYYY-MM-DD")
+    try:
+        settings = _schedule_settings()
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    path = settings.log_dir / f"{job}-{day}.log"
+    if not path.is_file():
+        raise HTTPException(404, f"No {job} log for {day}")
+    from collections import deque
+
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        tail = list(deque(fh, maxlen=lines))
+    return {"day": day, "job": job, "lines": [line.rstrip("\n") for line in tail]}
 
 
 @router.get("/trades")
@@ -254,7 +444,7 @@ _lock = asyncio.Lock()
 
 
 class JobRequest(BaseModel):
-    kind: Literal["analyze", "scan"]
+    kind: Literal["analyze", "trade", "scan"]
     symbol: str = ""
     max_candidates: int = Field(5, ge=1, le=20)
 
@@ -282,6 +472,20 @@ def _analysis_dict(result) -> dict[str, Any]:
         },
         "decision": (result.raw_decision or "")[:20000],
         "reports": reports,
+        "execution": _execution_dict(getattr(result, "execution", None)),
+    }
+
+
+def _execution_dict(ex) -> Optional[dict[str, Any]]:
+    if ex is None:
+        return None
+    order = getattr(ex, "order", None)
+    return {
+        "success": bool(ex.success), "mode": ex.mode, "safety_passed": ex.safety_passed,
+        "rejection_reason": ex.rejection_reason or "", "fill_price": ex.fill_price,
+        "quantity": _jsonable(getattr(ex.signal, "quantity", None)) if ex.signal else None,
+        "order_id": getattr(order, "order_id", None) if order else None,
+        "brokerage": ex.brokerage,
     }
 
 
@@ -294,10 +498,10 @@ async def _run_job(job: dict[str, Any]) -> None:
         try:
             # Each job gets its own event loop in a worker thread: the upstream graph's
             # propagate() is synchronous and would block the API for minutes.
-            if job["kind"] == "analyze":
+            if job["kind"] in ("analyze", "trade"):
                 date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                result = await asyncio.to_thread(
-                    asyncio.run, cli._run_analyze(job["symbol"], date))
+                runner = cli._run_trade if job["kind"] == "trade" else cli._run_analyze
+                result = await asyncio.to_thread(asyncio.run, runner(job["symbol"], date))
                 job["result"] = _analysis_dict(result)
                 job["status"] = "failed" if result.error else "done"
                 if result.error:
@@ -324,8 +528,10 @@ async def start_job(body: JobRequest) -> dict:
     if any(j["status"] in ("queued", "running") for j in _jobs.values()):
         raise HTTPException(409, "Another analysis or scan is still running: wait for it")
     symbol = body.symbol.strip().upper()
-    if body.kind == "analyze" and not _SYMBOL.match(symbol):
+    if body.kind in ("analyze", "trade") and not _SYMBOL.match(symbol):
         raise HTTPException(422, "Give an NSE symbol, e.g. RELIANCE or TCS")
+    if body.kind == "trade" and SkopaqConfig().trading_mode != "paper":
+        raise HTTPException(403, "Dashboard trades are paper only (the server is in live mode)")
     job = {
         "id": uuid.uuid4().hex[:12], "kind": body.kind, "symbol": symbol,
         "max_candidates": body.max_candidates, "status": "queued",

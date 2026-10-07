@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 import { Badge, Button, Card, ErrorBox, Loading, PageTitle } from "@/components/ui";
@@ -109,6 +110,21 @@ export default function SettingsPage() {
           Mode, keys and live trading are changed in the ENV_FILE GitHub secret, then
           Actions → Deploy (EC2) → Run workflow.
         </p>
+      </Card>
+
+      <Card title="More">
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <Link href="/scheduler" className="border border-gray-800 rounded p-3 hover:bg-gray-900">⏰ Scheduler & logs</Link>
+          <Link href="/scanner" className="border border-gray-800 rounded p-3 hover:bg-gray-900">🔎 Scanner</Link>
+        </div>
+      </Card>
+
+      <Card title="📱 Install as an app">
+        <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5">
+          <li>Android (Chrome): ⋮ menu → <b>Install app</b> / <b>Add to Home screen</b></li>
+          <li>iPhone (Safari): Share → <b>Add to Home Screen</b></li>
+          <li>Computer (Chrome/Edge): install icon in the address bar</li>
+        </ul>
       </Card>
 
       <Button
