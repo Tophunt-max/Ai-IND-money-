@@ -79,6 +79,7 @@ nav:
     - Notifications: architecture/notifications.md
   - Deployment:
     - Mac mini (Docker): deployment/mac-mini.md
+    - AWS (EC2): deployment/aws.md
     - Auto-deploy to EC2 (GitHub): deployment/github-auto-deploy.md
     - Docker: deployment/docker.md
     - Fly.io: deployment/flyio.md

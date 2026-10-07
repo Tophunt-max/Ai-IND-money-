@@ -21,8 +21,8 @@ it there. The host keeps its `.env`; only the code and the image change.
 
 ## One-time setup
 
-1. The host (Ubuntu with Docker) is already running the stack: repo cloned at `~/Ai-IND-money-`,
-   `.env` filled in, `docker compose up -d --build` run once, the SSH user in the `docker` group.
+1. The host is already running the stack, as set up in [AWS (EC2)](aws.md): repo cloned at
+   `~/Ai-IND-money-`, `.env` filled in, the stack started once, the SSH user in the `docker` group.
 2. The security group allows SSH (port 22) from GitHub's runners. Their IPs change, so this
    means `0.0.0.0/0`; logins still need the key.
 3. In GitHub: **Settings → Secrets and variables → Actions → New repository secret**:

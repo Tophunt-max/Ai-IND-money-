@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Ai-IND-money backend host (docs/deployment/aws.md): one EC2 instance (Ubuntu 24.04, Docker)
+  in the default VPC with an Elastic IP, an SSH-only security group and an optional budget
+  alert. First boot runs deploy/aws/user-data.sh from GitHub.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Server }
+        Parameters: [KeyName, InstanceType, VolumeGiB, SwapGiB, CpuCredits]
+      - Label: { default: Access }
+        Parameters: [SshCidr]
+      - Label: { default: Code }
+        Parameters: [RepoUrl, Branch]
+      - Label: { default: Cost alert }
+        Parameters: [AlertEmail]
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair (EC2 -> Key pairs) for SSH and GitHub auto-deploy
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.small, t4g.micro, t3.small, t3.micro, c7i-flex.large, m7i-flex.large]
+    Description: >-
+      AWS free-plan types. t4g.small (Arm, 2 GiB) runs the whole stack for about USD 14/month
+      in Mumbai with the Elastic IP and disk.
+  VolumeGiB:
+    Type: Number
+    Default: 30
+    MinValue: 20
+    MaxValue: 100
+    Description: Root disk size (gp3, encrypted)
+  SwapGiB:
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 8
+    Description: Swap file size (needed for the image build and analyses on 1-2 GiB instances)
+  CpuCredits:
+    Type: String
+    Default: standard
+    AllowedValues: [standard, unlimited]
+    Description: >-
+      standard never bills extra CPU credits (bursts slow down when credits run out);
+      unlimited is the T-family default and can add charges
+  SshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$
+    Description: >-
+      Who may connect to SSH (key-only). GitHub auto-deploy and EC2 Instance Connect connect
+      from changing IPs, so they need 0.0.0.0/0.
+  RepoUrl:
+    Type: String
+    Default: https://github.com/Tophunt-max/Ai-IND-money-.git
+  Branch:
+    Type: String
+    Default: main
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional. Emails when real charges (after credits) pass USD 1 this month. Confirm the
+      subscription email AWS sends.
+
+Conditions:
+  IsArm: !Equals [!Select [0, !Split [".", !Ref InstanceType]], t4g]
+  HasAlert: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Mappings:
+  Ubuntu:
+    Ami:
+      Arm: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+      X86: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Ai-IND-money host - SSH only (the API stays on 127.0.0.1)
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+          Description: SSH (key-only)
+      Tags:
+        - { Key: Name, Value: ai-ind-sg }
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !If
+        - IsArm
+        - !Sub
+          - "{{resolve:ssm:${P}}}"
+          - P: !FindInMap [Ubuntu, Ami, Arm]
+        - !Sub
+          - "{{resolve:ssm:${P}}}"
+          - P: !FindInMap [Ubuntu, Ami, X86]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds: [!GetAtt SecurityGroup.GroupId]
+      CreditSpecification:
+        CPUCredits: !Ref CpuCredits
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref VolumeGiB
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            curl -fsSL --retry 5 "${RawBase}/deploy/aws/user-data.sh" -o /root/ai-ind-user-data.sh \
+              || { echo "could not download user-data.sh" >> /var/log/ai-ind-setup.log; exit 1; }
+            REPO_URL='${RepoUrl}' BRANCH='${Branch}' SWAP_GIB='${SwapGiB}' bash /root/ai-ind-user-data.sh
+          - RawBase: !Sub
+              - "https://raw.githubusercontent.com/${Path}/${Branch}"
+              - Path: !Select
+                  - 0
+                  - !Split [".git", !Select [1, !Split ["github.com/", !Ref RepoUrl]]]
+      Tags:
+        - { Key: Name, Value: ai-ind-backend }
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags:
+        - { Key: Name, Value: ai-ind-ip }
+
+  CostAlert:
+    Type: AWS::Budgets::Budget
+    Condition: HasAlert
+    Properties:
+      Budget:
+        BudgetName: !Sub "${AWS::StackName}-real-spend"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        # Credits are subtracted (the default), so this fires only on money actually billed.
+        BudgetLimit: { Amount: 1, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+Outputs:
+  ElasticIp:
+    Description: Fixed IP - whitelist at INDstocks, SKOPAQ_EXPECTED_EGRESS_IP, GitHub secret EC2_HOST
+    Value: !Ref ElasticIp
+  SshCommand:
+    Value: !Sub "ssh -i ${KeyName}.pem ubuntu@${ElasticIp}"
+  InstanceId:
+    Description: Browser terminal - EC2 -> Instances -> this instance -> Connect -> EC2 Instance Connect
+    Value: !Ref Instance
+  NextSteps:
+    Value: >-
+      Wait for ~/setup-done.txt (10-20 min, log /var/log/ai-ind-setup.log), fill in
+      ~/Ai-IND-money-/.env, docker compose up -d, then bash deploy/aws/check.sh
