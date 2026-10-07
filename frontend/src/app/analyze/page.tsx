@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { actionTone, Badge, Button, Card, Collapsible, ErrorBox, PageTitle, StatCard } from "@/components/ui";
 import { inr } from "@/lib/api";
 import PriceChart from "@/components/PriceChart";
+import { useAuth } from "@/components/AuthGate";
 import { useJob } from "@/lib/hooks";
 
 const REPORT_NAMES: Record<string, string> = {
@@ -22,6 +23,7 @@ const REPORT_NAMES: Record<string, string> = {
 
 function Analyze() {
   const params = useSearchParams();
+  const { isAdmin } = useAuth();
   const [symbol, setSymbol] = useState(params.get("symbol") || "");
   const [trade, setTrade] = useState(params.get("trade") === "1");
   const { job, error, running, start } = useJob();
@@ -83,12 +85,17 @@ function Analyze() {
             placeholder="RELIANCE, TCS, INFY..."
             className="flex-1 bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm uppercase"
           />
-          <Button type="submit" disabled={running || !symbol.trim()}>
+          <Button type="submit" disabled={!isAdmin || running || !symbol.trim()}>
             {running ? "Running..." : trade ? "Analyze + trade" : "Analyze"}
           </Button>
         </form>
       </Card>
 
+      {!isAdmin && (
+        <div className="border border-gray-700 bg-gray-900/50 rounded-lg p-3 text-sm text-gray-400">
+          👀 View-only account: running this needs an admin.
+        </div>
+      )}
       <ErrorBox error={error || (job?.status === "failed" ? job.error : null)} />
       {running && (
         <div className="animate-pulse text-gray-400 text-sm">

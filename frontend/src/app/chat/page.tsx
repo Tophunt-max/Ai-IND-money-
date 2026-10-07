@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button, ErrorBox, PageTitle } from "@/components/ui";
+import { useAuth } from "@/components/AuthGate";
 import { api } from "@/lib/api";
 
 interface Msg {
@@ -21,6 +22,21 @@ const SUGGESTIONS = [
 ];
 
 export default function ChatPage() {
+  const { isAdmin } = useAuth();
+  if (!isAdmin) return <ViewOnly />;
+  return <Chat />;
+}
+
+function ViewOnly() {
+  return (
+    <div>
+      <PageTitle title="AI chat" />
+      <p className="text-sm text-gray-400">View-only account: the AI chat can place (paper) trades, so it needs an admin account.</p>
+    </div>
+  );
+}
+
+function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,7 +63,7 @@ export default function ChatPage() {
     setBusy(true);
     try {
       const res = await api<{ message: string; session_id: string; tool_calls: { tool: string }[] }>(
-        "/api/chat/message",
+        "/api/dashboard/chat",
         { method: "POST", json: { message: msg, session_id: sessionStorage.getItem(SESSION_KEY) || "" } },
       );
       sessionStorage.setItem(SESSION_KEY, res.session_id);

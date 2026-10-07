@@ -1,10 +1,13 @@
 """Dashboard API for the web frontend (``frontend/``).
 
-Every endpoint needs ``SKOPAQ_API_TOKEN``: unlike the optional guard on ``/api/chat``,
-the dashboard refuses to run (503) when no token is configured, because it exposes
-the portfolio, trades, the kill switch and LLM-backed jobs.
+Every endpoint needs a logged-in user (``skopaq/api/dashboard_auth.py``): a Supabase Auth
+session of an email listed in ``SKOPAQ_DASHBOARD_USERS``, or ``SKOPAQ_API_TOKEN``. Without
+either configured the dashboard answers 503. ``viewer`` accounts may only read; starting
+jobs, the kill switch and chat need ``admin``.
 
-- ``GET  /api/dashboard/me``                  token check for the login screen
+- ``GET  /api/dashboard/me``                  the logged-in user and role
+- ``GET  /api/dashboard/auth/logins``         login history (own; ``scope=all`` for admins)
+- ``POST /api/dashboard/chat``                the AI chat agent (admin)
 - ``GET  /api/dashboard/overview``            mode, kill switch, open positions, P&L
 - ``GET  /api/dashboard/trades``              recent trades from Supabase
 - ``GET  /api/dashboard/report?days=``        track record (``skopaq report``)
@@ -28,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hmac
 import logging
 import re
 import time
@@ -37,9 +39,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from skopaq.api.dashboard_auth import DashboardUser, current_user, require_admin
 from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
@@ -47,23 +50,9 @@ logger = logging.getLogger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def require_dashboard_token(authorization: str = Header(default="")) -> None:
-    """401 without the bearer token; 503 when SKOPAQ_API_TOKEN is not configured."""
-    expected = SkopaqConfig().api_token.get_secret_value()
-    if not expected:
-        raise HTTPException(503, "Dashboard disabled: set SKOPAQ_API_TOKEN on the server")
-    scheme, _, value = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not hmac.compare_digest(
-        value.strip().encode(), expected.encode()
-    ):
-        raise HTTPException(
-            401, "Missing or invalid API token", headers={"WWW-Authenticate": "Bearer"}
-        )
-
-
 router = APIRouter(
     prefix="/api/dashboard", tags=["dashboard"],
-    dependencies=[Depends(require_dashboard_token)],
+    dependencies=[Depends(current_user)],
 )
 
 
@@ -135,9 +124,9 @@ def _halt_dict() -> dict[str, Any]:
 
 
 @router.get("/me")
-async def me() -> dict:
+async def me(user: DashboardUser = Depends(current_user)) -> dict:
     config = SkopaqConfig()
-    return {"ok": True, "mode": config.trading_mode}
+    return {"ok": True, "mode": config.trading_mode, "user": user.public()}
 
 
 @router.get("/overview")
@@ -414,20 +403,22 @@ async def kill_switch_status() -> dict:
 
 
 @router.post("/kill-switch/halt")
-async def kill_switch_halt(body: HaltRequest) -> dict:
+async def kill_switch_halt(body: HaltRequest,
+                           user: DashboardUser = Depends(require_admin)) -> dict:
     from skopaq.execution import kill_switch
 
-    where = kill_switch.halt(body.reason or "halted from the dashboard", by="dashboard")
+    where = kill_switch.halt(body.reason or "halted from the dashboard",
+                             by=f"dashboard:{user.email}")
     if not where:
         raise HTTPException(500, "Could not write the halt anywhere")
     return {"written": where, **_halt_dict()}
 
 
 @router.post("/kill-switch/resume")
-async def kill_switch_resume() -> dict:
+async def kill_switch_resume(user: DashboardUser = Depends(require_admin)) -> dict:
     from skopaq.execution import kill_switch
 
-    cleared = kill_switch.resume(by="dashboard")
+    cleared = kill_switch.resume(by=f"dashboard:{user.email}")
     after = _halt_dict()
     if after["halted"]:
         after["warning"] = ("Still halted: SKOPAQ_TRADING_HALTED is set on the server "
@@ -524,7 +515,7 @@ def _public(job: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/jobs", status_code=202)
-async def start_job(body: JobRequest) -> dict:
+async def start_job(body: JobRequest, user: DashboardUser = Depends(require_admin)) -> dict:
     if any(j["status"] in ("queued", "running") for j in _jobs.values()):
         raise HTTPException(409, "Another analysis or scan is still running: wait for it")
     symbol = body.symbol.strip().upper()
@@ -557,3 +548,53 @@ async def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(404, "No such job (the API may have restarted)")
     return _public(job)
+
+
+# ── Chat (admin) ──────────────────────────────────────────────────────────────
+
+
+@router.post("/chat")
+async def chat(body: dict, user: DashboardUser = Depends(require_admin)) -> dict:
+    """The chat agent of ``/api/chat/message``, behind the dashboard login."""
+    from skopaq.chat.bridge import ChatMessageRequest, send_message
+
+    try:
+        req = ChatMessageRequest(**body)
+    except Exception as exc:
+        raise HTTPException(422, f"Bad chat request: {exc}") from exc
+    res = await send_message(req)
+    return res.model_dump()
+
+
+# ── Login history ─────────────────────────────────────────────────────────────
+
+
+@router.get("/auth/logins")
+async def logins(limit: int = Query(30, ge=1, le=200),
+                 scope: Literal["mine", "all"] = "mine",
+                 user: DashboardUser = Depends(current_user)) -> dict:
+    """Recent dashboard sign-ins (``dashboard_logins``): your own, or everyone's for admins."""
+    if scope == "all" and not user.is_admin:
+        raise HTTPException(403, "View-only account: this needs an admin")
+    config = SkopaqConfig()
+    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
+        raise HTTPException(503, "Supabase is not configured on the server")
+
+    def read():
+        from supabase import create_client
+
+        client = create_client(config.supabase_url, config.supabase_service_key.get_secret_value())
+        q = (client.table("dashboard_logins")
+             .select("email,role,status,provider,ip,user_agent,created_at")
+             .order("created_at", desc=True).limit(limit))
+        if scope == "mine":
+            q = q.eq("email", user.email)
+        return q.execute().data or []
+
+    try:
+        rows = await asyncio.to_thread(read)
+    except Exception as exc:
+        raise HTTPException(
+            502, f"Login history unavailable (run supabase/migrations/004_dashboard_logins.sql): "
+                 f"{exc}") from exc
+    return {"logins": rows}

@@ -8,6 +8,7 @@ import PriceChart from "@/components/PriceChart";
 import { Button, Card, ErrorBox, Loading, PageTitle, StatCard } from "@/components/ui";
 import { inr, pct, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { useAuth } from "@/components/AuthGate";
 
 interface Quote {
   symbol: string;
@@ -35,6 +36,7 @@ function Change({ q }: { q: { change_pct: number | null } }) {
 function Market() {
   const params = useSearchParams();
   const router = useRouter();
+  const { isAdmin } = useAuth();
   const symbol = (params.get("symbol") || "").toUpperCase();
   const [input, setInput] = useState(symbol);
   useEffect(() => setInput(symbol), [symbol]);
@@ -151,7 +153,7 @@ function Market() {
             <PriceChart symbol={symbol} />
           </Card>
 
-          {!symbol.startsWith("^") && (
+          {isAdmin && !symbol.startsWith("^") && (
             <div className="grid grid-cols-2 gap-3">
               <Link href={`/analyze?symbol=${encodeURIComponent(symbol)}`}>
                 <Button className="w-full">🧠 Analyze</Button>

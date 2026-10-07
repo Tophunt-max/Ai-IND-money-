@@ -24,6 +24,7 @@ def _config(**over):
     base = dict(
         api_token=SecretStr(TOKEN), trading_mode="paper", initial_paper_capital=1_000_000.0,
         supabase_url="https://x.supabase.co", supabase_service_key=SecretStr("svc"),
+        supabase_anon_key="", dashboard_users="",
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -37,6 +38,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("SKOPAQ_HALT_FILE", str(tmp_path / "HALT"))
     monkeypatch.delenv("SKOPAQ_TRADING_HALTED", raising=False)
     monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config())
+    from skopaq.api import dashboard_auth
+
+    monkeypatch.setattr(dashboard_auth, "SkopaqConfig", lambda: _config())
+    dashboard_auth.reset_state()
     from skopaq.execution import kill_switch
 
     # Kill switch: file only (no Supabase, no env var), no cache between calls.
@@ -72,7 +77,9 @@ class _Repo:
 
 
 def test_disabled_without_a_configured_token(client, monkeypatch):
-    monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config(api_token=SecretStr("")))
+    from skopaq.api import dashboard_auth
+
+    monkeypatch.setattr(dashboard_auth, "SkopaqConfig", lambda: _config(api_token=SecretStr("")))
     r = client.get("/api/dashboard/me", headers=AUTH)
     assert r.status_code == 503
 
@@ -87,7 +94,7 @@ def test_rejects_missing_or_wrong_token(client, headers):
 def test_me_with_the_token(client):
     r = client.get("/api/dashboard/me", headers=AUTH)
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "mode": "paper"}
+    assert r.json()["user"]["role"] == "admin" and r.json()["user"]["via"] == "api_token"
 
 
 # ── Overview and trades ───────────────────────────────────────────────────────
