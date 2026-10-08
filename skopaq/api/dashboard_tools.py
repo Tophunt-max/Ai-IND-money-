@@ -19,6 +19,7 @@ bypass the safety checks and the kill switch.
 - ``GET    /api/dashboard/options/suggest``         an option-selling idea (Kite; no order)
 - ``GET    /api/dashboard/kite/gtt``                GTT orders (Kite)
 - ``GET    /api/dashboard/kite/mutual-funds``       mutual fund holdings and SIPs (Kite)
+- ``POST   /api/dashboard/llm/check``               test the custom AI endpoint (admin)
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import asyncio
 import io
 import logging
 import math
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -415,6 +417,48 @@ async def kite_mutual_funds() -> dict:
                   "status": s.get("status"), "next_date": s.get("next_instalment_date")}
                  for s in sips or []],
     }
+
+
+# ── Custom AI endpoint check ──────────────────────────────────────────────────
+
+
+@router.post("/llm/check")
+async def llm_check(user: DashboardUser = Depends(require_admin)) -> dict:
+    """List the custom endpoint's models and send it one tiny prompt (admin). The key is
+    never returned."""
+    import httpx
+
+    from skopaq.llm.model_tier import _create_llm, custom_endpoint
+
+    custom = await asyncio.to_thread(custom_endpoint)
+    if custom is None:
+        raise HTTPException(422, "Set SKOPAQ_CUSTOM_LLM_BASE_URL, SKOPAQ_CUSTOM_LLM_API_KEY and "
+                                 "SKOPAQ_CUSTOM_LLM_MODEL first (Environment page)")
+    out: dict[str, Any] = {"base_url": custom["base_url"], "model": custom["model"],
+                           "judge_model": custom["judge_model"], "models": None,
+                           "models_error": None, "ok": False, "reply": None, "error": None}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(f"{custom['base_url']}/models",
+                                 headers={"Authorization": f"Bearer {custom['api_key']}"})
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            out["models"] = sorted(str(m.get("id")) for m in data if isinstance(m, dict))[:200]
+        else:
+            out["models_error"] = f"HTTP {r.status_code}: {r.text[:200]}"
+    except Exception as exc:
+        out["models_error"] = str(exc)[:300]
+
+    started = time.monotonic()
+    try:
+        llm = await asyncio.to_thread(_create_llm, "custom", custom["model"])
+        msg = await asyncio.wait_for(llm.ainvoke("Reply with exactly: OK"), 60)
+        text = msg.content if isinstance(msg.content, str) else str(msg.content)
+        out.update(ok=True, reply=text.strip()[:200],
+                   seconds=round(time.monotonic() - started, 1))
+    except Exception as exc:
+        out["error"] = str(exc)[:600].replace(custom["api_key"], "***")
+    return out
 
 
 # ── Job runners (backtest, Monte Carlo, settle) ───────────────────────────────
