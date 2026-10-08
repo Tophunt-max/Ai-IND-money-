@@ -50,6 +50,12 @@ export async function api<T = any>(
     if (res.status === 401 && typeof window !== "undefined") {
       window.dispatchEvent(new Event("aiind:unauthorized"));
     }
+    // FastAPI's own 404 for a route the server does not have: the backend is older than
+    // this dashboard (Vercel deploys at once, EC2 only outside market hours).
+    if (res.status === 404 && detail === "Not Found") {
+      throw new ApiError(404, "The server does not have this feature yet: the backend update "
+        + "is pending (EC2 deploys after 16:00 IST, or run Actions → Deploy (EC2)).");
+    }
     throw new ApiError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return data as T;
