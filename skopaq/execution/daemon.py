@@ -156,6 +156,7 @@ class TradingDaemon:
         self._router = None       # OrderRouter
         self._executor = None     # Executor
         self._exit_planner = None  # ExitPlanner (stop-loss, target per position)
+        self._price_feed = None    # PriceFeed (live ticks) while MONITORING
         self._graph = None        # SkopaqTradingGraph
         self._llm_map = None      # Per-role LLM map
         self._memory_store = None # MemoryStore (optional)
@@ -631,14 +632,25 @@ class TradingDaemon:
         still held (its last reads were wrong about them) is started again, a few times
         at most: CLOSING would sell them at MARKET in the middle of the day.
         """
-        result = await self._run_monitor()
-        for _ in range(_MONITOR_RESTARTS):
-            if not self._monitor_again(result):
-                break
-            logger.warning("MONITORING ended before the EOD exit with %s still held — "
-                           "monitoring again", ", ".join(result.positions_left))
-            result = _merged(result, await self._run_monitor())
-        return result
+        # Live ticks for the monitor (one connection across its restarts)
+        from skopaq.broker.websocket import feeds_from_config
+
+        self._price_feed, _ = feeds_from_config(self._config)
+        if self._price_feed is not None:
+            await self._price_feed.start()
+        try:
+            result = await self._run_monitor()
+            for _ in range(_MONITOR_RESTARTS):
+                if not self._monitor_again(result):
+                    break
+                logger.warning("MONITORING ended before the EOD exit with %s still held — "
+                               "monitoring again", ", ".join(result.positions_left))
+                result = _merged(result, await self._run_monitor())
+            return result
+        finally:
+            if self._price_feed is not None:
+                await self._price_feed.stop()
+                self._price_feed = None
 
     async def _run_monitor(self) -> MonitorResult:
         from skopaq.execution.position_monitor import PositionMonitor
@@ -664,6 +676,7 @@ class TradingDaemon:
             sleep=self._sleep,
             wall=self._wall,
             exit_planner=self._exit_planner,
+            price_feed=self._price_feed,
         )
 
         logger.info("Starting position monitor...")

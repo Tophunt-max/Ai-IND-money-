@@ -147,6 +147,70 @@ def status() -> None:
     display_status(__version__, config, health, llms, halt=kill_switch.status())
 
 
+@app.command("ticks")
+def ticks(
+    symbols: list[str] = typer.Argument(..., help="NSE symbols, e.g. RELIANCE TCS"),
+    seconds: int = typer.Option(60, help="How long to listen (seconds)."),
+    interval: int = typer.Option(60, help="Candle size in seconds."),
+    orders: bool = typer.Option(False, "--orders", help="Also print order updates."),
+) -> None:
+    """Watch live INDstocks WebSocket ticks, with candles and indicators (read only)."""
+    from skopaq.config import SkopaqConfig
+
+    _setup_logging("WARNING")
+    raise typer.Exit(asyncio.run(_run_ticks(SkopaqConfig(), symbols, seconds, interval,
+                                            orders)))
+
+
+async def _run_ticks(config, symbols: list[str], seconds: int, interval: int,
+                     orders: bool) -> int:
+    """Subscribe ``symbols``, print each tick and closed candle; returns 1 when no tick
+    arrived (the feed did not work), else 0."""
+    from datetime import datetime, timezone
+
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.scrip_resolver import resolve_scrip_code
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.broker.websocket import OrderUpdateFeed, PriceFeed
+    from skopaq.market.candles import LiveSeries
+
+    tokens = TokenManager()
+    async with INDstocksClient(config, tokens) as client:
+        codes = {await resolve_scrip_code(client, s.upper()): s.upper() for s in symbols}
+    feed = PriceFeed(config.indstocks_ws_price_url, tokens)
+    series = {code: LiveSeries(interval) for code in codes}
+
+    def on_tick(tick) -> None:
+        name = codes.get(tick.scrip_code, tick.instrument)
+        ts = tick.timestamp or datetime.now(timezone.utc)
+        closed = series[tick.scrip_code].add(tick.ltp, ts, tick.volume) \
+            if tick.scrip_code in series else None
+        print(f"{ts.astimezone().strftime('%H:%M:%S')}  {name:<12} {tick.ltp:>10.2f}")
+        if closed is not None:
+            ind = series[tick.scrip_code].indicators.as_dict()
+            print(f"  candle {closed.start.strftime('%H:%M')} O {closed.open} H {closed.high} "
+                  f"L {closed.low} C {closed.close} | {ind}")
+
+    feed.add_listener(on_tick)
+    order_feed = None
+    if orders:
+        order_feed = OrderUpdateFeed(config.indstocks_ws_order_url, tokens)
+        order_feed.add_listener(lambda u: print(
+            f"ORDER {u.order_id} {u.side} {u.entity_name} {u.status} "
+            f"price={u.executed_price} {u.error_message}"))
+        await order_feed.start()
+    await feed.subscribe(list(codes))
+    await feed.start()
+    try:
+        await asyncio.sleep(seconds)
+    finally:
+        await feed.stop()
+        if order_feed is not None:
+            await order_feed.stop()
+    print(f"{feed.ticks} tick(s), {feed.connects} connection(s)")
+    return 0 if feed.ticks else 1
+
+
 @app.command("report")
 def report(
     days: int = typer.Option(90, help="How many days back to include."),
@@ -834,8 +898,15 @@ async def _run_monitor(config, ai_enabled: bool):
     for s in (sig.SIGINT, sig.SIGTERM):
         loop.add_signal_handler(s, _handle_sigint)
 
+    # Live ticks over the INDstocks price WebSocket (REST quotes when it is down)
+    from skopaq.broker.websocket import feeds_from_config
+
+    price_feed, _ = feeds_from_config(config, token_mgr)
+
     # Run monitor within client context
     async with client:
+        if price_feed is not None:
+            await price_feed.start()
         monitor_instance = PositionMonitor(
             executor=executor,
             client=client,
@@ -849,8 +920,13 @@ async def _run_monitor(config, ai_enabled: bool):
             on_late_fill=lambda tracked, conf: _record_late_fill(config, None, None, tracked,
                                                                  conf),
             exit_planner=exit_planner,
+            price_feed=price_feed,
         )
-        return await monitor_instance.run()
+        try:
+            return await monitor_instance.run()
+        finally:
+            if price_feed is not None:
+                await price_feed.stop()
 
 
 # ── Daemon ───────────────────────────────────────────────────────────────────

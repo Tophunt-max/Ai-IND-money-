@@ -10,6 +10,11 @@ target set when its BUY filled, else defaults from the hard stop. At the target,
 trails ``monitor_trailing_stop_pct`` below the high. Plans (with the high-water mark and
 what was booked) are saved per day, so a restarted monitor carries on with them.
 
+With the INDstocks price feed (``price_feed``), prices come from its ticks while they are
+fresh (``ws_tick_max_age_seconds``) and the rules run every ``monitor_tick_poll_seconds``;
+the AI tier and the broker resync keep their pace in seconds, and a stale feed falls back
+to REST quotes, never more often than ``monitor_poll_interval_seconds`` per position.
+
 Live (INDstocks), the monitor also keeps in step with the broker:
 
 - It resyncs from one read of the order book, positions and holdings (in that order),
@@ -63,6 +68,7 @@ from skopaq.broker.order_status import (
     is_non_cnc_product,
     to_decimal,
 )
+from skopaq.broker.websocket import PriceFeed
 from skopaq.execution.exit_plan import ExitPlan, ExitPlanner
 from skopaq.execution.live_orders import (
     Confirmation,
@@ -112,6 +118,14 @@ LateFillFn = Callable[[TrackedOrder, Confirmation], Awaitable[Optional[bool]]]
 
 def _now_ist() -> datetime:
     return datetime.now(_IST)
+
+
+def _positive(value: Any, default: float) -> float:
+    """``value`` as a positive finite float, else ``default`` (a test double, a typo)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    value = float(value)
+    return value if 0 < value < float("inf") else default
 
 
 @dataclass
@@ -753,6 +767,7 @@ class PositionMonitor:
         sleep: Optional[Callable[[float], Awaitable[None]]] = None,
         wall: Optional[Callable[[], datetime]] = None,
         exit_planner: Optional[ExitPlanner] = None,
+        price_feed: Optional[PriceFeed] = None,
     ):
         """``on_exit(signal, execution)`` is awaited after each successful sell,
         e.g. to persist it; its failures are logged, never raised.
@@ -764,6 +779,8 @@ class PositionMonitor:
         replace the poll wait and the IST clock (tests pass virtual time).
         ``exit_planner`` finds each position's exit plan (and saves its progress);
         without one, plans are made from the settings and kept in memory.
+        ``price_feed`` (started and stopped by the caller) supplies live ticks; the
+        monitor subscribes every position it tracks.
         """
         self._executor = executor
         self._on_exit = on_exit
@@ -797,6 +814,20 @@ class PositionMonitor:
         self._trailing_pct = config.monitor_trailing_stop_pct
         self._planner = exit_planner or ExitPlanner(config)
         self._plan_mode = "live" if config.trading_mode == "live" else "paper"
+
+        # Live ticks: a faster loop; cycle counts for the AI tier and the resync are
+        # scaled so they keep their pace in seconds
+        self._feed = price_feed
+        self._rest_at: dict[str, float] = {}
+        self._tick_max_age = _positive(getattr(config, "ws_tick_max_age_seconds", 5.0), 5.0)
+        self._loop_interval = self._poll_interval
+        self._scale = 1
+        if price_feed is not None:
+            tick_poll = _positive(getattr(config, "monitor_tick_poll_seconds", 1.0), 1.0)
+            poll = _positive(self._poll_interval, 10.0)
+            if tick_poll < poll:
+                self._loop_interval = tick_poll
+                self._scale = max(1, round(poll / tick_poll))
 
         # Live: the AI tier's analysis gets at most half the time between two of its
         # turns (10–60 s), so an answer is never older than that
@@ -842,7 +873,7 @@ class PositionMonitor:
             for pos in list(positions):  # copy — may mutate
                 # Fetch current price
                 try:
-                    ltp = await self._client.get_ltp(pos.scrip_code)
+                    ltp = await self._price(pos)
                 except Exception:
                     logger.warning(
                         "LTP fetch failed for %s — skipping cycle",
@@ -880,7 +911,7 @@ class PositionMonitor:
                     continue
 
                 # ── AI TIER (every N cycles) ──
-                if self._ai_enabled and cycle % self._ai_interval == 0:
+                if self._ai_enabled and cycle % (self._ai_interval * self._scale) == 0:
                     decision = await self._check_ai(pos, ltp, pnl_pct)
                     if decision and decision.action == "SELL":
                         # Min profit gate: don't sell for tiny gains brokerage eats
@@ -914,7 +945,7 @@ class PositionMonitor:
             try:
                 await asyncio.wait_for(
                     self._stop.wait(),
-                    timeout=self._poll_interval,
+                    timeout=self._loop_interval,
                 )
                 # stop_event was set — graceful shutdown
                 break
@@ -925,7 +956,7 @@ class PositionMonitor:
         if positions and self._should_eod_exit():
             for pos in list(positions):
                 try:
-                    ltp = await self._client.get_ltp(pos.scrip_code)
+                    ltp = await self._price(pos, any_age=True)
                 except Exception:
                     ltp = 0
                 if ltp > 0:
@@ -978,7 +1009,7 @@ class PositionMonitor:
                 if self._resync_due(cycle, positions):
                     await self._resync(positions, result)
                 await self._check_positions(positions, cycle, result)
-                if await self._pause(self._poll_interval):
+                if await self._pause(self._loop_interval):
                     break  # stop_event was set — graceful shutdown
 
             if self._stop.is_set():
@@ -1033,7 +1064,8 @@ class PositionMonitor:
     def _resync_due(self, cycle: int, positions: list[MonitoredPosition]) -> bool:
         """Every ``monitor_resync_cycles`` polls, and every poll while an order is open or
         a confirmed BUY does not show in positions yet."""
-        return (cycle % self._resync_every == 0 or self._watching() or bool(self._unshown)
+        return (cycle % (self._resync_every * self._scale) == 0 or self._watching()
+                or bool(self._unshown)
                 or any(p.pending_exit for p in positions))
 
     def _after_close(self) -> bool:
@@ -1068,7 +1100,7 @@ class PositionMonitor:
             if not self._router.deadlines.can_place():
                 continue  # after 15:29:55 IST (or the shutdown deadline): watch only
             try:
-                ltp = await self._client.get_ltp(pos.scrip_code)
+                ltp = await self._price(pos)
             except Exception:
                 logger.warning("LTP fetch failed for %s — skipping cycle", pos.symbol,
                                exc_info=True)
@@ -1118,7 +1150,8 @@ class PositionMonitor:
         """
         task = pos.ai_task
         if task is None:
-            if not (self._ai_enabled and cycle % self._ai_interval == 0) or self._stop.is_set():
+            if (not (self._ai_enabled and cycle % (self._ai_interval * self._scale) == 0)
+                    or self._stop.is_set()):
                 return ""
             task = pos.ai_task = asyncio.create_task(self._bounded_ai(pos, ltp, pnl_pct))
             await asyncio.sleep(0)       # a quick answer is used this cycle
@@ -1243,7 +1276,7 @@ class PositionMonitor:
 
         async def sell(pos: MonitoredPosition) -> None:
             try:
-                ltp = await self._client.get_ltp(pos.scrip_code)
+                ltp = await self._price(pos, any_age=True)
             except Exception:
                 ltp = 0
             if ltp > 0 and await self._execute_sell(pos, ltp, "EOD exit (shutdown)", result):
@@ -1668,6 +1701,7 @@ class PositionMonitor:
                 sells_seen=_filled_sells(snap, held.symbol, held.security_id),
             )
             self._attach_plan(pos)
+            await self._watch(pos)
             positions.append(pos)
             result.positions_monitored += 1
             registry = self._router.registry
@@ -1718,6 +1752,7 @@ class PositionMonitor:
                 quantity=int(pos.quantity),
             )
             self._attach_plan(tracked)
+            await self._watch(tracked)
             monitored.append(tracked)
 
         return monitored
@@ -1794,6 +1829,40 @@ class PositionMonitor:
                     f"selling all {pos.quantity}"), pos.quantity
         return (f"TARGET HIT: LTP ₹{ltp:.2f} >= target ₹{plan.target:.2f} — booking "
                 f"{qty} of {pos.quantity}, the rest trails from breakeven"), qty
+
+    # ── Prices ───────────────────────────────────────────────────────────
+
+    async def _price(self, pos: MonitoredPosition, *, any_age: bool = False) -> float:
+        """The position's LTP: a fresh tick from the feed, else a REST quote.
+
+        With a feed, a position whose ticks are stale gets a REST quote at most once per
+        ``monitor_poll_interval_seconds`` (0 in between: the cycle skips it), so the
+        faster loop never breaks the quote rate limit. ``any_age`` (the shutdown sale)
+        always asks REST when there is no fresh tick.
+        """
+        feed = self._feed
+        if feed is None:
+            return await self._client.get_ltp(pos.scrip_code)
+        tick = feed.ltp(pos.scrip_code, self._tick_max_age)
+        if tick:
+            return tick
+        now = feed.clock()
+        last = self._rest_at.get(pos.scrip_code)
+        if not any_age and last is not None and now - last < _positive(self._poll_interval,
+                                                                         10.0):
+            return 0.0
+        self._rest_at[pos.scrip_code] = now
+        return await self._client.get_ltp(pos.scrip_code)
+
+    async def _watch(self, pos: MonitoredPosition) -> None:
+        """Subscribe the position to the price feed (never raises)."""
+        if self._feed is None:
+            return
+        try:
+            await self._feed.subscribe([pos.scrip_code])
+        except Exception:
+            logger.warning("Price feed subscription of %s failed — REST quotes", pos.symbol,
+                           exc_info=True)
 
     # ── Exit plans ───────────────────────────────────────────────────────
 

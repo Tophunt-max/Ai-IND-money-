@@ -224,7 +224,15 @@ Follows each position's **exit plan** (`skopaq/execution/exit_plan.py`), made wh
 | EOD exit | everything | 15:20 IST |
 | AI | everything | the sell analyst says SELL (min-profit gate) |
 
-The target (`SKOPAQ_MONITOR_TARGET_MODE`): `rr` = entry + `SKOPAQ_MONITOR_TARGET_RR` × (entry − stop), 1:2 by default; `pct` = entry × (1 + `SKOPAQ_MONITOR_TARGET_PCT`); `inr` = `SKOPAQ_MONITOR_TARGET_INR` of profit on the whole position; `off`. All are on the dashboard's Environment page. The BUY's stop and target are stored on its trade row (the dashboard shows them on open positions). Plans are saved per day in `SKOPAQ_EXIT_PLAN_DIR` with the high-water mark and what was booked, so a restarted or recovery monitor neither books the target twice nor forgets the high. Every exit is a MARKET SELL worked by the live order worker as before; nothing rests at the broker between polls (INDstocks smart orders are not used yet), so a stop or target is acted on at the next poll (`SKOPAQ_MONITOR_POLL_INTERVAL_SECONDS`) and only while a monitor runs.
+The target (`SKOPAQ_MONITOR_TARGET_MODE`): `rr` = entry + `SKOPAQ_MONITOR_TARGET_RR` × (entry − stop), 1:2 by default; `pct` = entry × (1 + `SKOPAQ_MONITOR_TARGET_PCT`); `inr` = `SKOPAQ_MONITOR_TARGET_INR` of profit on the whole position; `off`. All are on the dashboard's Environment page. The BUY's stop and target are stored on its trade row (the dashboard shows them on open positions). Plans are saved per day in `SKOPAQ_EXIT_PLAN_DIR` with the high-water mark and what was booked, so a restarted or recovery monitor neither books the target twice nor forgets the high. Every exit is a MARKET SELL worked by the live order worker as before; nothing rests at the broker between polls (INDstocks smart orders are not used yet), so a stop or target is acted on at the next poll and only while a monitor runs.
+
+**Live prices.** With the INDstocks price WebSocket (`SKOPAQ_WS_PRICE_FEED_ENABLED`, on by default) the monitor checks every second (`SKOPAQ_MONITOR_TICK_POLL_SECONDS`) against the latest tick. A tick older than `SKOPAQ_WS_TICK_MAX_AGE_SECONDS` (5 s) is not used: the position gets a REST quote instead, at most every `SKOPAQ_MONITOR_POLL_INTERVAL_SECONDS` (10 s), as without the feed. The AI tier and the broker resync keep their pace in seconds. Check the feed on the server with:
+
+```bash
+skopaq ticks RELIANCE --seconds 60
+```
+
+It prints each tick and every closed 1-minute candle with EMA, RSI, ATR and VWAP, and exits 1 when no tick arrived.
 
 In live mode it also keeps in step with the broker: every `SKOPAQ_MONITOR_RESYNC_CYCLES` polls it re-reads the order book, positions and holdings, drops a position only when two successful reads agree it is gone (and takes it back when a later read shows it), resumes orders left open in the background and records their late fills. It exits 4 when positions remain open at the end (see [Shutdown and the close](#shutdown-and-the-close)).
 

@@ -26,6 +26,21 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Live prices over the INDstocks WebSocket.**
+  - `skopaq/broker/websocket.py` is rewritten from the official docs:
+    - `PriceFeed` subscribes with `SEGMENT:TOKEN`, keeps the newest tick per instrument,
+      and drops stale ticks.
+    - `OrderUpdateFeed` decodes the double-encoded frames and the short status codes.
+    - Both send `Authorization: <token>` with no `Bearer`, reconnect with backoff,
+      re-subscribe, and ignore heartbeats.
+  - **Position monitor:** while the feed is on (`SKOPAQ_WS_PRICE_FEED_ENABLED`, default on),
+    it checks stops and targets every `SKOPAQ_MONITOR_TICK_POLL_SECONDS` (1 s) on fresh
+    ticks. Stale ticks fall back to REST quotes at the old pace, and the AI tier and the
+    broker resync keep their pace in seconds.
+  - The daemon and `skopaq monitor` start and stop the feed.
+  - New `skopaq/market/candles.py`: 1-minute candles from ticks, plus EMA, RSI, ATR and
+    VWAP.
+  - New `skopaq ticks SYMBOL [--orders]` prints the live feed, to check it on the server.
 - **Target, stop-loss and partial profit booking for every position**
   (`skopaq/execution/exit_plan.py`, paper and live). Each filled BUY gets an exit plan from
   its fill price and the position sizer's stop. Positions without one get a plan from the
