@@ -42,8 +42,10 @@ from skopaq.broker.models import (
     OrderRequest,
     OrderResponse,
     OrderType,
+    Segment,
     Side,
     TradingSignal,
+    derivative_scrip_code,
 )
 from skopaq.broker.order_status import (
     TERMINAL_STATES,
@@ -717,6 +719,9 @@ def _journal_time(value: object) -> Optional[datetime]:
 # ── Ticks ────────────────────────────────────────────────────────────────────
 
 
+DERIVATIVE_TICK = Decimal("0.05")   # NSE/BSE option and future tick
+
+
 def tick_for(price: Decimal, csv_tick: Optional[Decimal]) -> Decimal:
     """The instruments CSV tick when plausible (0 < tick ≤ 0.2 % of the price), else a
     coarse tick valid in every NSE price band (each a multiple of every smaller tick)."""
@@ -1104,7 +1109,7 @@ class LiveOrderWorker:
         try:
             snap = await self._call(read_broker_snapshot, self._client,
                                     extra_terminal=self._extra, sleep=self._sleep,
-                                    wall=self._wall)
+                                    wall=self._wall, segment=order.segment.value)
         except Exception as exc:
             logger.error("Cannot re-check %s before re-placing: %s", order.symbol, exc)
             return None, None, f"positions unreadable: {exc}"
@@ -1125,7 +1130,7 @@ class LiveOrderWorker:
         view = sellable_quantity(
             symbol=order.symbol, security_id=order.security_id, product=order.product.value,
             positions=snap.positions, holdings=snap.holdings, context=context,
-            order_qty=remaining, exchange=order.exchange.value,
+            order_qty=remaining, exchange=order.exchange.value, segment=order.segment.value,
         )
         sellable = view.position_sellable if position_only else view.sellable
         if snap.holdings_error and sellable < remaining:
@@ -1137,9 +1142,12 @@ class LiveOrderWorker:
         """The remainder as a marketable LIMIT: LTP less a growing buffer, rounded down to
         the tick. MARKET when there is no LTP."""
         s = self._settings
+        if order.segment == Segment.DERIVATIVE:
+            code = derivative_scrip_code(order.exchange.value, order.security_id)
+        else:
+            code = f"{order.exchange.value}_{order.security_id}"
         try:
-            ltp = to_decimal(await self._call(
-                self._client.get_ltp, f"{order.exchange.value}_{order.security_id}"))
+            ltp = to_decimal(await self._call(self._client.get_ltp, code))
         except Exception as exc:
             logger.warning("No LTP for %s (%s); re-placing at MARKET", order.symbol, exc)
             ltp = None
@@ -1158,7 +1166,10 @@ class LiveOrderWorker:
     async def _tick_size(self, order: OrderRequest) -> Optional[Decimal]:
         """The instruments CSV tick: the cached one, however old (never a download while
         the rest of an exit waits); else a lookup given at most ``_TICK_LOOKUP_S`` on the
-        worker's clock. None (the coarse fallback tick) when neither answers."""
+        worker's clock. None (the coarse fallback tick) when neither answers. F&O: the
+        exchange's option/future tick (₹0.05), never the equity file."""
+        if order.segment == Segment.DERIVATIVE:
+            return DERIVATIVE_TICK
         cached = cached_tick_size(order.symbol, order.exchange.value)
         if cached is not None:
             return cached

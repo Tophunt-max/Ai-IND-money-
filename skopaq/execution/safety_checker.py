@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 # Option contract symbols end in a strike and CE/PE: NIFTY23DEC21000CE (exchange style) or
 # NIFTY-Aug2026-24450-CE (INDstocks option chain).
 _OPTION_RE = re.compile(r"\d+-?(?:CE|PE)$")
+# A future BUY's margin as a share of its notional (an estimate: NSE index futures need
+# about 12-20 %; the broker checks the exact SPAN + exposure margin)
+FUTURES_MARGIN_ESTIMATE = 0.20
 
 
 @dataclass
@@ -110,7 +113,8 @@ class SafetyChecker:
         production caller passes it explicitly (tests/unit/execution/test_validate_callers.py).
 
         A SELL can only reduce a held long position (the no-short-sale check
-        rejects anything more, and option SELLs are rejected outright), so the
+        rejects anything more — for F&O too: an option or future SELL only closes a long
+        position of the same contract, never writes one), so the
         checks that limit new risk — position size, order value, lot count,
         the loss limits and the cool-down after a loss — apply to BUYs only.
         Otherwise a stop-loss or EOD exit would be refused exactly when it is
@@ -204,8 +208,11 @@ class SafetyChecker:
         order_value = price * float(order.quantity)
         pct = order_value / portfolio_value
         if pct > self._rules.max_position_pct:
-            # Small-account exemption: allow minimum-qty orders that fit in cash
-            if order.quantity <= 1 and order_value <= portfolio_value:
+            # Small-account exemption: allow minimum-qty orders (one share, one F&O lot)
+            # that fit in cash
+            minimum = (order.lots <= 1 if order.segment == Segment.DERIVATIVE
+                       else order.quantity <= 1)
+            if minimum and order_value <= portfolio_value:
                 logger.info(
                     "Position size %.1f%% exceeds %.0f%% limit, but allowing "
                     "minimum-qty order (small-account exemption)",
@@ -253,8 +260,11 @@ class SafetyChecker:
         """Reject a SELL for more than is held — Skopaq never sells short.
 
         A SELL signal on a stock we do not own (e.g. a Sell rating on a
-        scanner candidate) would otherwise become a short delivery sale.
-        Option writes are handled by the naked-options check.
+        scanner candidate) would otherwise become a short delivery sale. An F&O SELL
+        (segment DERIVATIVE) may likewise only close a long position of the same
+        contract: never an option write or a short future. Its positions are the F&O
+        ones (matched by the contract's security id when both sides have one); it has
+        no holdings.
 
         Sellable = settled holdings + today's net positions, both signed: a
         position is negative after selling earlier holdings today, so those
@@ -271,13 +281,15 @@ class SafetyChecker:
         Returns the code for its rejection: ``book-unreadable``, ``holdings-unreadable``,
         ``open-sell``, ``unshown-fill`` or ``no-short-sale`` (``""`` when it passes).
         """
-        if order.side != Side.SELL or _OPTION_RE.search(order.symbol):
+        if order.side != Side.SELL:
             return ""
+        derivative = order.segment == Segment.DERIVATIVE
         if sell_context is None:
             symbol = _base_symbol(order.symbol)
+            rows = positions if derivative else [*holdings, *positions]
             held = sum(
-                (item.quantity for item in [*holdings, *positions]
-                 if _base_symbol(item.symbol) == symbol),
+                (item.quantity for item in rows
+                 if _same_row(item, symbol, order.security_id if derivative else "")),
                 start=type(order.quantity)(0),
             )
             if held < order.quantity:
@@ -308,6 +320,7 @@ class SafetyChecker:
             symbol=order.symbol, security_id=order.security_id,
             product=order.product.value, positions=positions, holdings=holdings,
             context=sell_context, order_qty=order.quantity, exchange=order.exchange.value,
+            segment=order.segment.value,
         )
         if (sell_context.position_only
                 and view.sellable >= order.quantity > view.position_sellable):
@@ -556,15 +569,21 @@ class SafetyChecker:
             rejections.append(f"Cool-down active: {remaining:.0f} minutes remaining after loss")
 
     def _check_naked_options(self, order: OrderRequest, rejections: list[str]) -> None:
-        """Reject naked option selling (placeholder — requires option chain context)."""
+        """No option writing.
+
+        An F&O SELL (segment DERIVATIVE) passes here: the no-short-sale check lets it only
+        close a long position of the same contract, so it can never open a short option
+        or future. An option symbol on any other segment is refused outright: it cannot
+        be checked against the F&O positions.
+
+        NSE options have a strike price (digits) before the CE/PE suffix
+        (NIFTY23DEC21000CE, NIFTY-Aug2026-24450-CE): the regex avoids false positives on
+        equity symbols like RELIANCE that happen to end with "CE".
+        """
         if not self._rules.no_naked_option_selling:
             return
-        # Full implementation requires checking if the position has a hedge.
-        # For Phase 1, flag any SELL order on option symbols.
-        # NSE options have a strike price (digits) before CE/PE suffix,
-        # e.g. NIFTY23DEC21000CE. Use regex to avoid false positives
-        # on equity symbols like RELIANCE that happen to end with "CE".
-        if order.side == Side.SELL and _OPTION_RE.search(order.symbol):
+        if (order.side == Side.SELL and order.segment != Segment.DERIVATIVE
+                and _OPTION_RE.search(order.symbol)):
             rejections.append(
                 "Naked option selling is forbidden. Ensure a protective position exists."
             )
@@ -572,13 +591,32 @@ class SafetyChecker:
     def _check_sufficient_funds(
         self, order: OrderRequest, funds: Funds, rejections: list[str],
     ) -> None:
-        """Reject BUY if insufficient margin."""
+        """Reject BUY if insufficient margin.
+
+        Equity: the CNC balance. An option BUY pays its premium from the option-buying
+        balance (``option_buy_available``); a future BUY needs about
+        ``FUTURES_MARGIN_ESTIMATE`` of its notional from the futures balance (the broker
+        checks the exact SPAN + exposure margin). Either falls back to
+        ``available_margin`` when the broker gave no segment balance (paper)."""
         if order.side != Side.BUY:
             return
         price = order.price or 0
         if price <= 0:
             return
         required = price * float(order.quantity)
+        if order.segment == Segment.DERIVATIVE:
+            if _OPTION_RE.search(order.symbol):
+                label, available = "option-buying balance", funds.option_buy_available
+            else:
+                label, available = "futures margin", funds.futures_available
+                required *= FUTURES_MARGIN_ESTIMATE
+            if not available or available <= 0:
+                available = funds.available_margin
+            if required > available:
+                rejections.append(
+                    f"Insufficient {label}: need INR {required:,.0f}, available INR "
+                    f"{available:,.0f}")
+            return
         if required > funds.available_margin:
             rejections.append(
                 f"Insufficient margin: need INR {required:,.0f}, available INR {funds.available_margin:,.0f}"
@@ -632,6 +670,15 @@ class SafetyChecker:
     def reset_monthly(self) -> None:
         """Reset monthly P&L counter."""
         self._month_pnl = 0.0
+
+
+def _same_row(item, symbol: str, security_id: str) -> bool:
+    """A position or holding of the instrument: by security id when both have one (F&O),
+    else by base symbol."""
+    row_id = str(getattr(item, "security_id", "") or "")
+    if security_id and row_id:
+        return row_id == str(security_id)
+    return _base_symbol(getattr(item, "symbol", "") or "") == symbol
 
 
 def _base_symbol(symbol: str) -> str:

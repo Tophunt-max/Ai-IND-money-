@@ -84,6 +84,5 @@ before going live.
 
 ## F&O
 
-The strategies work on any instrument's candles. Scalping index futures and options needs
-derivative orders through the Executor, which counts lots and exits a long option by
-selling it. That is the next phase.
+The same strategies drive the F&O engine, which buys index options (a CE on bullish
+setups, a PE on bearish ones) in whole lots: see [F&O Trading](fno.md).

@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional, Sequence
 
+from skopaq.broker.models import is_derivative_segment
 from skopaq.broker.order_status import OrderSnapshot, OrderState, is_non_cnc_product
 from skopaq.execution.safety_checker import _base_symbol
 from skopaq.risk.calendar import IST
@@ -145,6 +146,13 @@ def _row_is_for(row: OrderSnapshot, symbol: str, security_id: str, exchange: str
     return True
 
 
+def other_segment(row_segment: object, segment: object) -> bool:
+    """Both segments known and one is F&O, the other not."""
+    if not row_segment or not segment:
+        return False
+    return is_derivative_segment(row_segment) != is_derivative_segment(segment)
+
+
 def instrument_isin(symbol: str, security_id: str, exchange: str, rows: Sequence) -> str:
     """The instrument's ISIN, from a position or holding row that is plainly it (the same
     security id on the same exchange, or the same symbol); "" when none says."""
@@ -177,6 +185,7 @@ def sellable_quantity(
     context: SellContext,
     order_qty: Decimal,
     exchange: str = "",
+    segment: str = "",
 ) -> SellableView:
     """What can still be sold of one instrument, from one book-first snapshot.
 
@@ -206,6 +215,11 @@ def sellable_quantity(
     id count their open remainder while younger than the lag window (the book lags behind
     an accepted order as it lags behind a fill), and whatever their age once a read found
     them still working (``seen_working``); one the book lists is counted from its row.
+
+    ``segment`` (the SELL's: EQUITY or DERIVATIVE): book rows of the other segment are
+    left out (equity and F&O security ids are numbered apart); a row without a segment
+    still counts (conservative). Positions and holdings come from the SELL's own segment
+    (``read_broker_snapshot(segment=...)``).
     """
     order_product = (product or "").upper()
     cnc = order_product in ("", "CNC")
@@ -253,6 +267,8 @@ def sellable_quantity(
     recent = _ZERO
     for row in context.orders:
         if row.side == "BUY" or not _row_is_for(row, symbol, security_id, exchange, isin):
+            continue
+        if other_segment(getattr(row, "segment", ""), segment):
             continue
         if not counts(row.product):
             if row.state in _OPEN:

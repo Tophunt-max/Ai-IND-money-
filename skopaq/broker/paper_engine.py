@@ -26,6 +26,7 @@ from skopaq.broker.models import (
     Position,
     PortfolioSnapshot,
     Quote,
+    Segment,
     Side,
     TradingSignal,
 )
@@ -99,6 +100,19 @@ class PaperEngine:
         Returns an ``ExecutionResult`` indicating success/failure, fill price,
         slippage, and brokerage.
         """
+        if order.segment == Segment.DERIVATIVE and order.side == Side.SELL:
+            # Paper never writes an option or shorts a future: an F&O SELL closes a long
+            held = self._positions.get(order.symbol)
+            held_qty = held.quantity if held is not None else Decimal("0")
+            if held_qty < order.quantity:
+                return ExecutionResult(
+                    success=False,
+                    mode="paper",
+                    rejection_reason=(f"No short F&O sales: SELL {order.quantity} "
+                                      f"{order.symbol} but only {held_qty} held"),
+                    signal=signal,
+                )
+
         quote = self._quotes.get(order.symbol)
         if quote is None:
             return ExecutionResult(
@@ -211,7 +225,18 @@ class PaperEngine:
         return None
 
     def _apply_fill(self, order: OrderRequest, fill_price: float, brokerage: Decimal | None = None) -> None:
-        """Update positions and cash after a fill."""
+        """Update positions and cash after a fill (an F&O row keeps its segment and
+        contract security id)."""
+        self._apply_fill_rows(order, fill_price, brokerage)
+        if order.segment == Segment.DERIVATIVE:
+            row = self._positions.get(order.symbol)
+            if row is not None:
+                row.segment = Segment.DERIVATIVE.value
+                row.security_id = order.security_id
+                row.lot_size = order.lot_size
+
+    def _apply_fill_rows(self, order: OrderRequest, fill_price: float,
+                         brokerage: Decimal | None = None) -> None:
         symbol = order.symbol
         qty = order.quantity
         price_d = Decimal(str(fill_price))  # Decimal-safe price for all arithmetic
