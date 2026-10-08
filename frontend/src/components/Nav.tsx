@@ -3,20 +3,22 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { clearToken } from "@/lib/api";
+import { useAuth } from "./AuthGate";
 
 export const LINKS = [
   { href: "/", label: "Home", icon: "🏠" },
+  { href: "/market", label: "Market", icon: "📈" },
+  { href: "/analyze", label: "Analyze", icon: "🧠" },
   { href: "/trades", label: "Trades", icon: "📒" },
   { href: "/report", label: "Report", icon: "📊" },
-  { href: "/scanner", label: "Scanner", icon: "🔎" },
-  { href: "/analyze", label: "Analyze", icon: "🧠" },
   { href: "/chat", label: "Chat", icon: "💬" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
 export default function Nav() {
   const path = usePathname();
+  const { user, signOut } = useAuth();
+  if (path.startsWith("/reset-password")) return null;
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
 
   return (
@@ -39,15 +41,14 @@ export default function Nav() {
               </Link>
             ))}
           </div>
-          <button
-            onClick={() => {
-              clearToken();
-              window.location.href = "/";
-            }}
-            className="text-xs text-gray-500 hover:text-gray-300"
-          >
-            Logout
-          </button>
+          <div className="flex items-center gap-3 shrink-0">
+            {user?.role === "viewer" && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 text-gray-300">VIEW ONLY</span>
+            )}
+            <button onClick={() => signOut(false)} className="text-xs text-gray-500 hover:text-gray-300">
+              Logout
+            </button>
+          </div>
         </div>
       </nav>
       {/* Mobile: bottom tab bar */}

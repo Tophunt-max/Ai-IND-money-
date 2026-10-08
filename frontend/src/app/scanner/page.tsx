@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { Badge, Button, Card, Empty, ErrorBox, PageTitle } from "@/components/ui";
 import { useJob } from "@/lib/hooks";
+import { useAuth } from "@/components/AuthGate";
 
 interface Candidate {
   symbol: string;
@@ -16,6 +17,7 @@ interface Candidate {
 
 export default function ScannerPage() {
   const [max, setMax] = useState(5);
+  const { isAdmin } = useAuth();
   const { job, error, running, start } = useJob();
   const candidates: Candidate[] = job?.status === "done" ? job.result?.candidates || [] : [];
 
@@ -38,12 +40,17 @@ export default function ScannerPage() {
               {[3, 5, 10, 20].map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
-          <Button onClick={() => start({ kind: "scan", max_candidates: max })} disabled={running}>
+          <Button onClick={() => start({ kind: "scan", max_candidates: max })} disabled={!isAdmin || running}>
             {running ? "Scanning..." : "Run scan"}
           </Button>
         </div>
       </Card>
 
+      {!isAdmin && (
+        <div className="border border-gray-700 bg-gray-900/50 rounded-lg p-3 text-sm text-gray-400">
+          👀 View-only account: running this needs an admin.
+        </div>
+      )}
       <ErrorBox error={error || (job?.status === "failed" ? job.error : null)} />
       {running && <div className="animate-pulse text-gray-400 text-sm">Scanning the market (up to a minute)...</div>}
 

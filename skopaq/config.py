@@ -125,6 +125,8 @@ class SkopaqConfig(BaseSettings):
     # When set, /api/chat/* and /api/kite/token require Bearer auth
     api_token: SecretStr = SecretStr("")
     cors_origins: str = "*"  # comma-separated browser origins; "" = none
+    # Web dashboard logins (Supabase Auth): "me@x.com:admin,friend@y.com:viewer"
+    dashboard_users: str = ""
 
     # ── Reflection / Memory ─────────────────────────────────────────────
     reflection_enabled: bool = True

@@ -1,25 +1,11 @@
 // Backend client for the dashboard. The browser calls the API directly at
-// NEXT_PUBLIC_BACKEND_URL with the SKOPAQ_API_TOKEN the user typed at login
-// (kept in localStorage on this device only).
+// NEXT_PUBLIC_BACKEND_URL with the logged-in user's Supabase access token.
+
+import { accessToken } from "./supabase";
 
 export const BACKEND_URL = (
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"
 ).replace(/\/+$/, "");
-
-const TOKEN_KEY = "aiind_api_token";
-
-export function getToken(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(TOKEN_KEY) || "";
-}
-
-export function setToken(token: string): void {
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken(): void {
-  window.localStorage.removeItem(TOKEN_KEY);
-}
 
 export class ApiError extends Error {
   status: number;
@@ -37,7 +23,7 @@ export async function api<T = any>(
   const headers: Record<string, string> = {
     ...(rest.headers as Record<string, string> | undefined),
   };
-  const auth = token ?? getToken();
+  const auth = token ?? (await accessToken());
   if (auth) headers["Authorization"] = `Bearer ${auth}`;
   if (json !== undefined) headers["Content-Type"] = "application/json";
 

@@ -24,6 +24,7 @@ def _config(**over):
     base = dict(
         api_token=SecretStr(TOKEN), trading_mode="paper", initial_paper_capital=1_000_000.0,
         supabase_url="https://x.supabase.co", supabase_service_key=SecretStr("svc"),
+        supabase_anon_key="", dashboard_users="",
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -37,6 +38,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("SKOPAQ_HALT_FILE", str(tmp_path / "HALT"))
     monkeypatch.delenv("SKOPAQ_TRADING_HALTED", raising=False)
     monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config())
+    from skopaq.api import dashboard_auth
+
+    monkeypatch.setattr(dashboard_auth, "SkopaqConfig", lambda: _config())
+    dashboard_auth.reset_state()
     from skopaq.execution import kill_switch
 
     # Kill switch: file only (no Supabase, no env var), no cache between calls.
@@ -72,7 +77,9 @@ class _Repo:
 
 
 def test_disabled_without_a_configured_token(client, monkeypatch):
-    monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config(api_token=SecretStr("")))
+    from skopaq.api import dashboard_auth
+
+    monkeypatch.setattr(dashboard_auth, "SkopaqConfig", lambda: _config(api_token=SecretStr("")))
     r = client.get("/api/dashboard/me", headers=AUTH)
     assert r.status_code == 503
 
@@ -87,7 +94,7 @@ def test_rejects_missing_or_wrong_token(client, headers):
 def test_me_with_the_token(client):
     r = client.get("/api/dashboard/me", headers=AUTH)
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "mode": "paper"}
+    assert r.json()["user"]["role"] == "admin" and r.json()["user"]["via"] == "api_token"
 
 
 # ── Overview and trades ───────────────────────────────────────────────────────
@@ -219,3 +226,152 @@ def test_one_job_at_a_time(client):
 
 def test_unknown_job(client):
     assert client.get("/api/dashboard/jobs/nope", headers=AUTH).status_code == 404
+
+
+# ── Paper trade jobs ──────────────────────────────────────────────────────────
+
+
+def test_trade_job_runs_skopaq_trade_in_paper(client, monkeypatch):
+    from skopaq.cli import main as cli
+
+    async def fake_trade(symbol, date):
+        signal = SimpleNamespace(action="BUY", confidence=70, entry_price=100.0, stop_loss=95.0,
+                                 target=110.0, reasoning="r", quantity=Decimal("3"))
+        execution = SimpleNamespace(success=True, mode="paper", safety_passed=True,
+                                    rejection_reason="", fill_price=100.5, signal=signal,
+                                    order=SimpleNamespace(order_id="P-1"), brokerage=5.0)
+        return SimpleNamespace(symbol=symbol, trade_date=date, error=None, duration_seconds=1,
+                               signal=signal, raw_decision="BUY", agent_state={},
+                               execution=execution)
+
+    monkeypatch.setattr(cli, "_run_trade", fake_trade)
+    r = client.post("/api/dashboard/jobs", json={"kind": "trade", "symbol": "INFY"}, headers=AUTH)
+    assert r.status_code == 202
+    job = _wait(client, r.json()["id"])
+    ex = job["result"]["execution"]
+    assert job["status"] == "done"
+    assert ex == {"success": True, "mode": "paper", "safety_passed": True, "rejection_reason": "",
+                  "fill_price": 100.5, "quantity": 3.0, "order_id": "P-1", "brokerage": 5.0}
+
+
+def test_trade_job_refused_in_live_mode(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config(trading_mode="live"))
+    r = client.post("/api/dashboard/jobs", json={"kind": "trade", "symbol": "INFY"}, headers=AUTH)
+    assert r.status_code == 403
+    assert dashboard._jobs == {}
+
+
+# ── Market data ───────────────────────────────────────────────────────────────
+
+
+def _quote(sym, ltp, prev=None):
+    return {"symbol": sym, "ltp": ltp, "prev_close": prev,
+            "change_pct": ((ltp - prev) / prev) if prev else None}
+
+
+def test_overview_marks_positions_to_market(client, monkeypatch):
+    from skopaq.broker import yahoo_quotes
+
+    repo = _Repo([_trade(symbol="TCS", fill_price=Decimal("100")),
+                  _trade(symbol="NOPRICE", fill_price=Decimal("50"))])
+    monkeypatch.setattr(dashboard, "_trade_repository", lambda config: repo)
+    monkeypatch.setattr(yahoo_quotes, "get_quotes",
+                        lambda syms: ({"TCS": _quote("TCS", 110.0, 100.0)}, {"NOPRICE": "none"}))
+    data = client.get("/api/dashboard/overview", headers=AUTH).json()
+    tcs, nop = (next(p for p in data["positions"] if p["symbol"] == s) for s in ("TCS", "NOPRICE"))
+    assert tcs["ltp"] == 110.0 and tcs["unrealized_pnl"] == 20.0 and tcs["market_value"] == 220.0
+    assert abs(tcs["unrealized_pct"] - 0.1) < 1e-9
+    assert nop["ltp"] is None and nop["unrealized_pnl"] is None
+    assert data["unrealized_pnl"] == 20.0 and data["price_errors"] == {"NOPRICE": "none"}
+
+
+def test_market_quotes_validates_symbols(client, monkeypatch):
+    from skopaq.broker import yahoo_quotes
+
+    monkeypatch.setattr(yahoo_quotes, "get_quotes",
+                        lambda syms: ({s: _quote(s, 1.0) for s in syms}, {}))
+    ok = client.get("/api/dashboard/market/quotes?symbols=TCS,^NSEI", headers=AUTH)
+    assert ok.status_code == 200 and set(ok.json()["quotes"]) == {"TCS", "^NSEI"}
+    bad = client.get("/api/dashboard/market/quotes?symbols=TCS,rm%20-rf;", headers=AUTH)
+    assert bad.status_code == 422
+
+
+def test_market_history(client, monkeypatch):
+    from skopaq.broker import yahoo_quotes
+
+    monkeypatch.setattr(yahoo_quotes, "get_history", lambda s, r: {
+        "symbol": s, "range": r, "interval": "1d", "candles": [{"t": 1, "c": 5.0}]})
+    r = client.get("/api/dashboard/market/history?symbol=TCS&range=1mo", headers=AUTH)
+    assert r.status_code == 200 and r.json()["candles"] == [{"t": 1, "c": 5.0}]
+    assert client.get("/api/dashboard/market/history?symbol=TCS&range=9y",
+                      headers=AUTH).status_code == 422
+
+
+def test_watchlist(client):
+    symbols = client.get("/api/dashboard/market/watchlist", headers=AUTH).json()["symbols"]
+    assert "RELIANCE" in symbols and symbols == sorted(symbols)
+
+
+# ── P&L history ───────────────────────────────────────────────────────────────
+
+
+def test_pnl_history_groups_by_ist_day(client, monkeypatch):
+    rows = [
+        _trade(closed_at=datetime(2026, 10, 5, 20, 0, tzinfo=timezone.utc), pnl=Decimal("10")),
+        _trade(closed_at=datetime(2026, 10, 6, 4, 0, tzinfo=timezone.utc), pnl=Decimal("-4")),
+        _trade(closed_at=datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc), pnl=Decimal("6")),
+    ]
+
+    class Repo:
+        def get_closed_since(self, since, is_paper):
+            assert is_paper is True
+            return rows
+
+    monkeypatch.setattr(dashboard, "_trade_repository", lambda config: Repo())
+    data = client.get("/api/dashboard/pnl-history?days=30", headers=AUTH).json()
+    # 20:00 UTC on the 5th is the 6th in IST: it shares a day with the -4.
+    assert data["points"] == [
+        {"date": "2026-10-06", "pnl": 6.0, "cumulative": 6.0},
+        {"date": "2026-10-07", "pnl": 6.0, "cumulative": 12.0},
+    ]
+    assert data["total"] == 12.0
+
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+
+
+def test_scheduler_status_and_log(client, monkeypatch, tmp_path):
+    from skopaq.execution import scheduler
+    from skopaq.risk import calendar as nse_calendar
+
+    state_dir, log_dir = tmp_path / "state", tmp_path / "logs"
+    state_dir.mkdir()
+    log_dir.mkdir()
+    today = nse_calendar.now_ist().date().isoformat()
+    (state_dir / f"daemon-{today}.started").write_text("2026-10-07T09:15:00+05:30")
+    (state_dir / f"daemon-{today}.rc").write_text("0")
+    (log_dir / f"daemon-{today}.log").write_text("".join(f"line {i}\n" for i in range(50)))
+    monkeypatch.setattr(dashboard, "_schedule_settings", lambda: SimpleNamespace(
+        enabled=True, mode="paper", state_dir=state_dir, log_dir=log_dir))
+    monkeypatch.setattr(scheduler, "describe", lambda settings, now, state: ["Mode: paper"])
+
+    data = client.get("/api/dashboard/scheduler", headers=AUTH).json()
+    assert data["ok"] and data["lines"] == ["Mode: paper"]
+    started = {"started": "2026-10-07T09:15:00+05:30", "rc": 0}
+    assert data["days"][0] == {"date": today, "has_log": True, "jobs": {"daemon": started}}
+
+    log = client.get(f"/api/dashboard/scheduler/log?day={today}&lines=10", headers=AUTH).json()
+    assert log["lines"] == [f"line {i}" for i in range(40, 50)]
+    assert client.get("/api/dashboard/scheduler/log?day=2020-01-01",
+                      headers=AUTH).status_code == 404
+    assert client.get("/api/dashboard/scheduler/log?day=../etc",
+                      headers=AUTH).status_code == 422
+
+
+def test_scheduler_bad_config(client, monkeypatch):
+    def broken():
+        raise ValueError("SKOPAQ_SCHEDULER_START: bad")
+
+    monkeypatch.setattr(dashboard, "_schedule_settings", broken)
+    data = client.get("/api/dashboard/scheduler", headers=AUTH).json()
+    assert data == {"ok": False, "error": "SKOPAQ_SCHEDULER_START: bad", "lines": [], "days": []}
