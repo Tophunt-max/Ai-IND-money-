@@ -125,7 +125,10 @@ def build_infrastructure(config: SkopaqConfig) -> Infrastructure:
             atr_period=config.atr_period,
         )
 
-    executor = Executor(router, safety, position_sizer=sizer)
+    from skopaq.execution.exit_plan import planner_from_config
+
+    executor = Executor(router, safety, position_sizer=sizer,
+                        exit_planner=planner_from_config(config))
 
     # LLM map (per-role model assignment)
     llm_map = build_llm_map()

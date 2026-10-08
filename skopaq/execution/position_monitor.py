@@ -1,7 +1,14 @@
 """Position Monitor — two-tier auto-sell worker.
 
-Safety tier (every poll):  hard stop-loss, trailing stop, EOD exit.
+Safety tier (every poll):  stop-loss (the position's exit plan, or the hard stop),
+                           target with partial booking, trailing stop, EOD exit.
 AI tier (every N polls):   Gemini 3 Flash sell analyst for intelligent exits.
+
+Each position has an exit plan (``skopaq/execution/exit_plan.py``): the stop-loss and
+target set when its BUY filled, else defaults from the hard stop. At the target,
+``monitor_partial_booking_pct`` of it is sold; the rest gets a stop at breakeven that
+trails ``monitor_trailing_stop_pct`` below the high. Plans (with the high-water mark and
+what was booked) are saved per day, so a restarted monitor carries on with them.
 
 Live (INDstocks), the monitor also keeps in step with the broker:
 
@@ -56,6 +63,7 @@ from skopaq.broker.order_status import (
     is_non_cnc_product,
     to_decimal,
 )
+from skopaq.execution.exit_plan import ExitPlan, ExitPlanner
 from skopaq.execution.live_orders import (
     Confirmation,
     LiveOrderWorker,
@@ -128,6 +136,8 @@ class MonitoredPosition:
     sells_seen: Decimal = Decimal("0")
     exit_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
     ai_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
+    # Stop-loss, target and booking state (attached by the monitor)
+    plan: Optional[ExitPlan] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         if self.high_water_mark <= 0:
@@ -712,7 +722,10 @@ class PositionMonitor:
     """Two-tier position monitoring loop.
 
     Tier 1 — Safety (every cycle):
-        * Hard stop-loss: LTP <= entry * (1 - hard_stop_pct)
+        * Stop-loss: LTP <= the plan's stop (the BUY's) or entry * (1 - hard_stop_pct),
+          whichever is higher
+        * Target: LTP >= the plan's target → sell the booking share (all at 1); the rest
+          then trails from breakeven: LTP <= max(entry, high_water * (1 - trailing_pct))
         * Trailing stop: LTP <= high_water * (1 - trailing_pct) (if enabled)
         * EOD exit: IST time >= (15:30 - eod_minutes)
 
@@ -739,6 +752,7 @@ class PositionMonitor:
         on_late_fill: Optional[LateFillFn] = None,
         sleep: Optional[Callable[[float], Awaitable[None]]] = None,
         wall: Optional[Callable[[], datetime]] = None,
+        exit_planner: Optional[ExitPlanner] = None,
     ):
         """``on_exit(signal, execution)`` is awaited after each successful sell,
         e.g. to persist it; its failures are logged, never raised.
@@ -748,6 +762,8 @@ class PositionMonitor:
         ``on_late_fill(tracked, confirmation)`` is awaited when an order resolved later
         filled more than was reported (its failures are logged). ``sleep`` and ``wall``
         replace the poll wait and the IST clock (tests pass virtual time).
+        ``exit_planner`` finds each position's exit plan (and saves its progress);
+        without one, plans are made from the settings and kept in memory.
         """
         self._executor = executor
         self._on_exit = on_exit
@@ -779,6 +795,8 @@ class PositionMonitor:
         self._ai_interval = config.monitor_ai_interval_cycles
         self._trailing_enabled = config.monitor_trailing_stop_enabled
         self._trailing_pct = config.monitor_trailing_stop_pct
+        self._planner = exit_planner or ExitPlanner(config)
+        self._plan_mode = "live" if config.trading_mode == "live" else "paper"
 
         # Live: the AI tier's analysis gets at most half the time between two of its
         # turns (10–60 s), so an answer is never older than that
@@ -837,8 +855,9 @@ class PositionMonitor:
                     continue
 
                 # Update high-water mark for trailing stop
-                if ltp > pos.high_water_mark:
-                    pos.high_water_mark = ltp
+                if pos.plan is None:
+                    self._attach_plan(pos)
+                self._note_high(pos, ltp)
 
                 pnl_pct = ((ltp - pos.entry_price) / pos.entry_price) * 100
 
@@ -846,6 +865,16 @@ class PositionMonitor:
                 safety_reason = self._check_safety(pos, ltp)
                 if safety_reason:
                     ok = await self._execute_sell(pos, ltp, safety_reason, result)
+                    if ok:
+                        positions.remove(pos)
+                    continue
+
+                # ── TARGET (the exit plan) ──
+                hit = self._target_exit(pos, ltp)
+                if hit:
+                    reason, qty = hit
+                    ok = await self._execute_sell(pos, ltp, reason, result, quantity=qty,
+                                                  booking=True)
                     if ok:
                         positions.remove(pos)
                     continue
@@ -1047,12 +1076,20 @@ class PositionMonitor:
             if ltp <= 0:
                 logger.debug("Zero LTP for %s — skipping", pos.symbol)
                 continue
-            if ltp > pos.high_water_mark:
-                pos.high_water_mark = ltp
+            if pos.plan is None:
+                self._attach_plan(pos)   # adopted while nothing was sellable
+            self._note_high(pos, ltp)
             pnl_pct = ((ltp - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price else 0.0
 
             # The rest of a partial exit goes first, without asking the AI again
             reason = pos.exit_intent or self._check_safety(pos, ltp)
+            qty: Optional[int] = None
+            booking = False
+            if not reason and pos.quantity > 0:
+                hit = self._target_exit(pos, ltp)
+                if hit:
+                    reason, qty = hit
+                    booking = True
             if not reason and pos.quantity > 0:
                 reason = await self._ai_reason(pos, ltp, pnl_pct, cycle)
             if not reason:
@@ -1066,7 +1103,8 @@ class PositionMonitor:
                     pos.ai_task.cancel()  # its answer would come too late to matter
                     pos.ai_task = None
                 pos.exit_task = asyncio.create_task(
-                    self._execute_sell(pos, ltp, reason, result))
+                    self._execute_sell(pos, ltp, reason, result, quantity=qty,
+                                       booking=booking))
                 await asyncio.sleep(0)  # the exit starts before the next position's work
 
     async def _ai_reason(self, pos: MonitoredPosition, ltp: float, pnl_pct: float,
@@ -1629,6 +1667,7 @@ class PositionMonitor:
                 blocked_by=[o for o in pending if o.order_id not in own],
                 sells_seen=_filled_sells(snap, held.symbol, held.security_id),
             )
+            self._attach_plan(pos)
             positions.append(pos)
             result.positions_monitored += 1
             registry = self._router.registry
@@ -1672,22 +1711,43 @@ class PositionMonitor:
                 )
                 continue
 
-            monitored.append(MonitoredPosition(
+            tracked = MonitoredPosition(
                 symbol=pos.symbol,
                 scrip_code=scrip_code,
                 entry_price=pos.average_price,
                 quantity=int(pos.quantity),
-            ))
+            )
+            self._attach_plan(tracked)
+            monitored.append(tracked)
 
         return monitored
 
     # ── Safety Tier ──────────────────────────────────────────────────────
 
     def _check_safety(self, pos: MonitoredPosition, ltp: float) -> Optional[str]:
-        """Check rule-based exit conditions.  Returns reason string or None."""
+        """Check rule-based exit conditions.  Returns reason string or None.
+
+        Everything is sold at the stop-loss, at the trailing stop and at the EOD exit; the
+        target's booking is :meth:`_target_exit`.
+        """
+        stop_price = pos.entry_price * (1 - self._hard_stop_pct)
+        plan = pos.plan
+
+        if plan is not None and plan.target_hit:
+            # The target was booked: the rest never gives back more than breakeven
+            floor = max(stop_price, plan.stop_loss, plan.entry_price)
+            trail = pos.high_water_mark * (1 - self._planner.trail_pct)
+            stop = max(floor, trail)
+            if ltp <= stop:
+                return (
+                    f"TRAILING STOP after target: LTP ₹{ltp:.2f} <= ₹{stop:.2f} "
+                    f"(breakeven ₹{plan.entry_price:.2f}, HWM ₹{pos.high_water_mark:.2f})"
+                )
+        elif plan is not None and plan.stop_loss > stop_price and ltp <= plan.stop_loss:
+            # The BUY's own stop-loss (ATR), tighter than the hard stop
+            return f"STOP LOSS: LTP ₹{ltp:.2f} <= stop ₹{plan.stop_loss:.2f} (the BUY's stop)"
 
         # Hard stop-loss
-        stop_price = pos.entry_price * (1 - self._hard_stop_pct)
         if ltp <= stop_price:
             return (
                 f"HARD STOP: LTP ₹{ltp:.2f} <= stop ₹{stop_price:.2f} "
@@ -1710,6 +1770,68 @@ class PositionMonitor:
             )
 
         return None
+
+    def _target_exit(self, pos: MonitoredPosition,
+                     ltp: float) -> Optional[tuple[str, int]]:
+        """At the plan's target: (reason, shares to sell) — the booking share still to
+        sell, or the whole position; None otherwise."""
+        plan = pos.plan
+        if plan is None or plan.target is None or plan.target_hit or pos.quantity <= 0:
+            return None
+        if ltp < plan.target:
+            return None
+        wanted = plan.booking_qty
+        if wanted:
+            left = wanted - plan.booked_qty
+            if left <= 0:
+                self._target_done(plan)
+                return None
+            qty = min(left, pos.quantity)
+        else:
+            qty = pos.quantity
+        if qty >= pos.quantity:
+            return (f"TARGET HIT: LTP ₹{ltp:.2f} >= target ₹{plan.target:.2f} — "
+                    f"selling all {pos.quantity}"), pos.quantity
+        return (f"TARGET HIT: LTP ₹{ltp:.2f} >= target ₹{plan.target:.2f} — booking "
+                f"{qty} of {pos.quantity}, the rest trails from breakeven"), qty
+
+    # ── Exit plans ───────────────────────────────────────────────────────
+
+    def _attach_plan(self, pos: MonitoredPosition) -> None:
+        """Give ``pos`` today's exit plan (a default one when its BUY made none)."""
+        if pos.entry_price <= 0 or pos.quantity <= 0:
+            return
+        try:
+            pos.plan = self._planner.plan_for_position(
+                pos.symbol, self._plan_mode, pos.entry_price, pos.quantity)
+        except Exception:
+            logger.warning("No exit plan for %s — hard stop and EOD only", pos.symbol,
+                           exc_info=True)
+            return
+        pos.high_water_mark = max(pos.high_water_mark, pos.plan.high_water_mark)
+        logger.info("[%s] Exit plan: stop %.2f, target %s%s", pos.symbol,
+                    pos.plan.stop_loss,
+                    f"{pos.plan.target:.2f}" if pos.plan.target else "off",
+                    " (booked, trailing)" if pos.plan.target_hit else "")
+
+    def _note_high(self, pos: MonitoredPosition, ltp: float) -> None:
+        """Raise the high-water mark; the plan keeps it across a restart."""
+        if ltp <= pos.high_water_mark:
+            return
+        pos.high_water_mark = ltp
+        if pos.plan is not None:
+            pos.plan.high_water_mark = ltp
+            self._save_plan(pos.plan)
+
+    def _target_done(self, plan: ExitPlan) -> None:
+        plan.target_hit = True
+        self._save_plan(plan)
+
+    def _save_plan(self, plan: ExitPlan) -> None:
+        try:
+            self._planner.save(plan)
+        except Exception:
+            logger.warning("Saving the exit plan of %s failed", plan.symbol, exc_info=True)
 
     def _should_eod_exit(self) -> bool:
         """Check if current IST time is past the EOD exit threshold."""
@@ -1764,17 +1886,25 @@ class PositionMonitor:
         ltp: float,
         reason: str,
         result: MonitorResult,
+        *,
+        quantity: Optional[int] = None,
+        booking: bool = False,
     ) -> bool:
         """Build a SELL signal and route through the executor pipeline.
+
+        ``quantity`` sells only that many (default: the whole position); ``booking``
+        marks the target's booking, recorded on the exit plan (its rest is not sold next
+        cycle: it trails).
 
         Returns True once the position is fully sold. Live, only the quantity the broker
         confirmed counts: after a partial exit the rest stays tracked with the reason in
         ``exit_intent`` (sold next cycle), and an exit that may still be working marks the
         position ``pending_exit`` so the resync resumes it instead of selling it blind.
         """
+        qty = pos.quantity if quantity is None else max(1, min(int(quantity), pos.quantity))
         logger.info(
             "SELLING %s qty=%d — %s",
-            pos.symbol, pos.quantity, reason,
+            pos.symbol, qty, reason,
         )
 
         # MARKET: a LIMIT at the entry price never fills once a stop-loss has
@@ -1785,7 +1915,7 @@ class PositionMonitor:
             confidence=80,
             entry_price=ltp,
             order_type=OrderType.MARKET,
-            quantity=Decimal(pos.quantity),
+            quantity=Decimal(qty),
             reasoning=reason,
             # Live: re-checked under the SELL lock against what the day's position still
             # holds (older holdings of the same stock are never sold by an exit)
@@ -1806,7 +1936,7 @@ class PositionMonitor:
 
             exec_result = await self._executor.execute_signal(signal)
             # Live: what the broker confirmed; paper (and mocked results): the order
-            filled = int(filled_quantity_of(exec_result, pos.quantity))
+            filled = int(filled_quantity_of(exec_result, qty))
 
             if exec_result.success:
                 if self._live:
@@ -1832,8 +1962,11 @@ class PositionMonitor:
                 try:
                     from skopaq.notifications import notify_position_alert
 
-                    alert_type = "TRAILING_STOP" if "trail" in reason.lower() else \
-                                 "EOD_EXIT" if "eod" in reason.lower() else "TARGET_NEAR"
+                    low = reason.lower()
+                    alert_type = ("TRAILING_STOP" if "trail" in low else
+                                  "EOD_EXIT" if "eod" in low else
+                                  "TARGET_HIT" if "target" in low else
+                                  "STOP_LOSS" if "stop" in low else "EXIT")
                     asyncio.get_running_loop().create_task(
                         notify_position_alert(pos.symbol, ltp, pos.entry_price, pnl, alert_type)
                     )
@@ -1842,8 +1975,20 @@ class PositionMonitor:
                 before = pos.quantity
                 pos.quantity = max(0, pos.quantity - filled)
                 pos.sells_seen += filled   # already out of the quantity: proves no drop
-                pos.exit_intent = reason if pos.quantity > 0 else ""
-                if pos.quantity > 0:
+                if booking and pos.plan is not None:
+                    pos.plan.booked_qty += filled
+                    if (not pos.plan.booking_qty or pos.plan.booked_qty >= pos.plan.booking_qty
+                            or pos.quantity <= 0):
+                        pos.plan.target_hit = True
+                    self._save_plan(pos.plan)
+                    if pos.quantity > 0:
+                        logger.info("Booked %d of %s at the target; %d left, trailing from "
+                                    "breakeven", filled, pos.symbol, pos.quantity)
+                # A short fill of a full exit (also a target that sells everything): the
+                # rest is sold next cycle. A partial booking's rest is the trailing part
+                sell_all = not booking or (pos.plan is not None and not pos.plan.booking_qty)
+                pos.exit_intent = reason if pos.quantity > 0 and sell_all else ""
+                if pos.quantity > 0 and not booking and quantity is None:
                     logger.warning("PARTIAL exit of %s: sold %d of %d — the rest is sold "
                                    "next cycle", pos.symbol, filled, before)
                 if is_unconfirmed(exec_result):

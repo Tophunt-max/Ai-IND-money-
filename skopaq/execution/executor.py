@@ -31,6 +31,7 @@ from skopaq.broker.models import (
     filled_quantity_of,
     order_ids_of,
 )
+from skopaq.execution.exit_plan import ExitPlanner
 from skopaq.execution.order_alerts import get_alerter
 from skopaq.execution.order_router import OrderRouter
 from skopaq.execution.safety_checker import SafetyChecker, SafetyResult, _base_symbol
@@ -74,6 +75,8 @@ class Executor:
         safety: Validates orders against immutable safety rules.
         position_sizer: ATR-based position sizer (None = use signal's quantity).
         clock: Monotonic clock for deduplicating refused-SELL notifications.
+        exit_planner: Makes the exit plan (stop-loss, target) of each filled BUY, which
+            the position monitor follows; it also sets ``signal.target``.
     """
 
     def __init__(
@@ -83,11 +86,13 @@ class Executor:
         position_sizer: Optional[PositionSizer] = None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        exit_planner: Optional[ExitPlanner] = None,
     ) -> None:
         self._router = router
         self._safety = safety
         self._sizer = position_sizer
         self._clock = clock
+        self._planner = exit_planner
         self._refusals_notified: dict[tuple[str, str], float] = {}
 
     async def execute_signal(
@@ -192,6 +197,10 @@ class Executor:
         else:
             await notification
 
+        # Step 3b: the exit plan of a filled BUY (stop-loss, target) for the monitor
+        if result.success and signal.action == "BUY":
+            self._plan_exit(signal, result, int(filled))
+
         # Step 4: Record P&L for loss tracking (on fills): the fill against the
         # cost basis of what was sold, for the shares actually sold, so the loss
         # limits and cool-down see it
@@ -212,6 +221,24 @@ class Executor:
         )
 
         return result
+
+    def _plan_exit(self, signal: TradingSignal, result: ExecutionResult, filled: int) -> None:
+        """Save the exit plan of a filled BUY and put its target (and stop) on the signal,
+        so the trade record carries them. Never raises."""
+        if self._planner is None or filled <= 0:
+            return
+        entry = result.fill_price or signal.entry_price
+        if not entry or entry <= 0:
+            return
+        try:
+            plan = self._planner.plan_for_entry(
+                signal.symbol, result.mode, float(entry), filled, signal.stop_loss)
+        except Exception:
+            logger.warning("Exit plan of %s not made — the monitor uses its defaults",
+                           signal.symbol, exc_info=True)
+            return
+        signal.stop_loss = plan.stop_loss
+        signal.target = plan.target
 
     async def _check(
         self, order: OrderRequest, signal: TradingSignal,

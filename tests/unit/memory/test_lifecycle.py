@@ -721,18 +721,37 @@ class TestLiveSell:
         assert row["pnl"] == "2000.00"                   # (2700 - 2500) x 10
 
     @pytest.mark.asyncio
-    async def test_a_paper_sell_closes_the_whole_row_as_before(self, graph):   # T24
+    async def test_a_paper_sell_of_the_whole_row_closes_it_as_before(self, graph):   # T24
         repo = MagicMock()
         open_buy = _make_open_buy_record(quantity=10)
         repo.find_open_buy.return_value = open_buy
         result = _make_sell_result(fill_price=2700.0)
-        result.signal.quantity = Decimal(3)          # paper: the whole BUY row closes
+        result.signal.quantity = Decimal(10)
 
         await TradeLifecycleManager(repo, graph).on_trade(result)
 
         [closed] = _closing_updates(repo, open_buy.id)
         assert closed["pnl"] == "2000.00"
         repo.insert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_paper_partial_sell_books_only_what_it_sold(self, graph):
+        """The monitor booking part of a position at its target (paper): 3 of 10 close,
+        the other 7 stay open on a remainder row."""
+        repo = MagicMock()
+        open_buy = _make_open_buy_record(quantity=10)
+        repo.find_open_buy.side_effect = [open_buy, open_buy]
+        result = _make_sell_result(fill_price=2700.0)
+        result.signal.quantity = Decimal(3)
+
+        await TradeLifecycleManager(repo, graph).on_trade(result)
+
+        assert [c.kwargs.get("is_paper", c.args[1] if len(c.args) > 1 else None)
+                for c in repo.find_open_buy.call_args_list] == [True, True]
+        remainder = repo.insert.call_args.args[0]
+        assert remainder.quantity == Decimal(7) and remainder.is_paper is True
+        [closed] = _closing_updates(repo, open_buy.id)
+        assert closed["quantity"] == "3" and closed["pnl"] == "600.00"
 
 
 class TestLiveSellReviewFixes:

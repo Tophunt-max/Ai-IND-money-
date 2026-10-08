@@ -8,4 +8,4 @@ INDstocks offers **smart orders** (`/smart/order`): a parent order plus a GTT ch
 
 ## Until Then
 
-Open positions are protected by the position monitor (`skopaq monitor`, also run inside `skopaq daemon`): stop-loss, trailing stop and end-of-day exits. See [Live Trading](live-trading.md).
+Open positions are protected by the position monitor (`skopaq monitor`, also run inside `skopaq daemon`). It follows each position's exit plan: the BUY's stop-loss, a target with partial booking, the rest trailing from breakeven, and the end-of-day exit. These run on Skopaq's side, at each poll, while a monitor runs. See [Live Trading](live-trading.md#position-monitor).
