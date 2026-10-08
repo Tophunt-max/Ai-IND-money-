@@ -1,7 +1,7 @@
 -- ============================================================================
 -- SkopaqTrader — Initial Database Schema
 -- ============================================================================
--- Applied via: supabase db push  (or Supabase dashboard SQL editor)
+-- Applied by: scripts/db/migrate.py (GitHub Actions, on deploy). Safe to re-run.
 -- All tables use RLS.  Backend uses service_role key to bypass RLS.
 -- Frontend uses anon key + auth.uid() scoped policies.
 -- ============================================================================
@@ -146,20 +146,25 @@ ALTER TABLE healing_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_snapshots ENABLE ROW LEVEL SECURITY;
 
 -- Users can only see their own data
+DROP POLICY IF EXISTS "users_own_trades" ON trades;
 CREATE POLICY "users_own_trades" ON trades
     FOR ALL USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "users_own_strategies" ON strategy_versions;
 CREATE POLICY "users_own_strategies" ON strategy_versions
     FOR ALL USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "users_own_predictions" ON model_predictions;
 CREATE POLICY "users_own_predictions" ON model_predictions
     FOR ALL USING (
         trade_id IN (SELECT id FROM trades WHERE user_id = auth.uid())
     );
 
+DROP POLICY IF EXISTS "users_own_healing" ON healing_events;
 CREATE POLICY "users_own_healing" ON healing_events
     FOR ALL USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "users_own_snapshots" ON daily_snapshots;
 CREATE POLICY "users_own_snapshots" ON daily_snapshots
     FOR ALL USING (auth.uid() = user_id);
 
@@ -176,6 +181,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trades_updated_at ON trades;
 CREATE TRIGGER trades_updated_at
     BEFORE UPDATE ON trades
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();

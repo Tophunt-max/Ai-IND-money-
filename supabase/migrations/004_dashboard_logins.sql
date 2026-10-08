@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Ai-IND-money — Web dashboard login history
 -- ============================================================================
--- Applied via: supabase db push  (or Supabase dashboard SQL editor)
+-- Applied by: scripts/db/migrate.py (GitHub Actions, on deploy). Safe to re-run.
 -- One row per dashboard session (status 'ok') and per refused account ('denied'),
 -- written by the API (skopaq/api/dashboard_auth.py) with the service_role key.
 -- RLS on, no policies: browsers (anon / authenticated keys) cannot read it.

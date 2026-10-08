@@ -36,7 +36,7 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
 - The API checks every token with Supabase (cached 60 s), so **Logout all devices**
   (Settings) ends every session within a minute.
 - **Login history** (Settings): each new session, and each refused account, is stored in
-  `dashboard_logins` (migration `004_dashboard_logins.sql`, readable only with the service key).
+  `dashboard_logins` (migration `004_dashboard_logins.sql`, applied automatically; readable only with the service key).
 - **Failed logins**: the login screen pauses for 5 minutes after 5 wrong passwords;
   the API refuses an IP for 10 minutes after 20 rejected tokens (429). Supabase rate-limits
   sign-ins too.
@@ -48,7 +48,8 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
 ## Setup
 
 1. **Supabase**
-   - SQL Editor: run `supabase/migrations/004_dashboard_logins.sql`.
+   - Tables come from the automatic migrations (`SUPABASE_DB_URL` secret, see
+     [Auto-deploy](github-auto-deploy.md#database-migrations)); nothing to paste in the SQL Editor.
    - Authentication → URL Configuration: *Site URL* `https://<project>.vercel.app`, and add
      `https://<project>.vercel.app/**` to *Redirect URLs*.
    - Authentication → Users → **Add user** with your email and a password (tick *Auto confirm*),
@@ -99,7 +100,7 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
 | "Access denied: this email is not confirmed" | Confirm it from the Supabase email, or *Auto confirm* in Authentication → Users |
 | Google login returns to the login screen | Vercel URL missing from Supabase *Redirect URLs*, or wrong Google redirect URI |
 | Reset link opens localhost | Supabase *Site URL* is still `http://localhost:3000` |
-| Login history error | Run migration `004_dashboard_logins.sql` |
+| Login history error | The `SUPABASE_DB_URL` secret is missing, or the last **Database migrations** run failed (Actions tab) |
 | "Backend not reachable" | Caddy not running, the path not in the Caddyfile, or `SKOPAQ_CORS_ORIGINS` not your Vercel URL |
 | Database error on the dashboard | `SKOPAQ_SUPABASE_URL` / `SKOPAQ_SUPABASE_SERVICE_KEY` wrong |
 | Analyze fails with "API key not valid" | `SKOPAQ_GOOGLE_API_KEY` wrong |

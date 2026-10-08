@@ -1,7 +1,7 @@
 -- ============================================================================
 -- SkopaqTrader — System flags (kill switch)
 -- ============================================================================
--- Applied via: supabase db push  (or Supabase dashboard SQL editor)
+-- Applied by: scripts/db/migrate.py (GitHub Actions, on deploy). Safe to re-run.
 -- One row per flag, shared by every process (Railway daemon, API server,
 -- CLI, MCP). `skopaq halt` writes key 'trading_halt'; while its value has
 -- "halted": true, every BUY is rejected (skopaq/execution/kill_switch.py).

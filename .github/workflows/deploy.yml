@@ -26,10 +26,22 @@ permissions:
   actions: read
 
 jobs:
-  deploy:
+  # Database first: new code may need a new table. Skipped while SUPABASE_DB_URL is unset.
+  migrate:
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    uses: ./.github/workflows/db-migrate.yml
+    secrets:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+  deploy:
+    needs: migrate
+    # A failed migration stops the deploy (the old code keeps running).
+    if: >-
+      !cancelled() && needs.migrate.result == 'success' &&
+      (github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
