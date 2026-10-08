@@ -94,6 +94,15 @@ class SkopaqConfig(BaseSettings):
     openrouter_api_key: SecretStr = SecretStr("")  # OpenRouter (Grok + Perplexity)
     typesafe_api_key: SecretStr = SecretStr("")  # TypeSafe Jev (post screening, decisions)
 
+    # ── Custom OpenAI-compatible LLM endpoint (skopaq/llm/model_tier.py) ──
+    # Any gateway speaking the OpenAI Chat Completions API (e.g. CodeCraft API). With base
+    # URL, key and model set, every agent role uses it first; the providers above stay as
+    # fallbacks when it is not configured.
+    custom_llm_base_url: str = ""
+    custom_llm_api_key: SecretStr = SecretStr("")
+    custom_llm_model: str = ""  # analysts, researchers, trader, debaters, sell analyst
+    custom_llm_judge_model: str = ""  # research / portfolio manager, chat; "" = custom_llm_model
+
     # ── TypeSafe Jev (calibrated decisions; skopaq/llm/jev.py) ─────────
     jev_enabled: bool = False  # Jev confidence on entries + exit gate
     jev_model: str = "jev-1.13.0"  # pinned: thresholds are tuned per version

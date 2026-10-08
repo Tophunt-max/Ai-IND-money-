@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/AuthGate";
 import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, PageTitle } from "@/components/ui";
+import AiEndpointCard from "@/components/AiEndpointCard";
 import ModeSwitch from "@/components/ModeSwitch";
 import { when } from "@/lib/api";
 import { saveEnvAsking as send, type EnvData, type Setting } from "@/lib/env";
@@ -201,6 +202,10 @@ export default function EnvSettingsPage() {
       {env.loading && !env.data ? <Loading /> : env.data && (
         <>
           <ModeSwitch env={env.data} onChange={env.setData} />
+
+          <AiEndpointCard
+            configured={["SKOPAQ_CUSTOM_LLM_BASE_URL", "SKOPAQ_CUSTOM_LLM_API_KEY", "SKOPAQ_CUSTOM_LLM_MODEL"].every((k) => byKey[k]?.is_set)}
+            onPick={(k) => { setFilter(k); setEditing(k); }} />
 
           <Card title={`Overridden from the dashboard (${overridden.length})`}>
             {overridden.length === 0 ? <Empty>None: every value comes from ENV_FILE or the defaults.</Empty> : (

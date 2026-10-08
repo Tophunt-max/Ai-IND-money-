@@ -23,7 +23,9 @@ Note: Perplexity Sonar is used for the scanner's news screener (plain
 prompts), NOT for the news_analyst agent (which needs tool calling).
 
 Each role gracefully falls back to Gemini Flash if its preferred
-provider key is missing.  When Ollama is enabled, local models serve
+provider key is missing. A custom OpenAI-compatible endpoint
+(SKOPAQ_CUSTOM_LLM_BASE_URL / _API_KEY / _MODEL, optional _JUDGE_MODEL) goes
+first for every role when it is configured.  When Ollama is enabled, local models serve
 as the **last** fallback for non-judge roles — zero cost, works offline.
 
 To move every role to a newer model, change the constants below.
@@ -143,12 +145,45 @@ def _get_ollama_model() -> str:
     return "mistral"  # Safe default
 
 
+# Roles that judge (and the chat brain): they may use a stronger custom model.
+_JUDGE_ROLES = frozenset({"research_manager", "portfolio_manager", "chat_brain"})
+
+
+def custom_endpoint() -> dict[str, str] | None:
+    """The custom OpenAI-compatible endpoint (SKOPAQ_CUSTOM_LLM_*), or None when its base
+    URL, key or model is missing. Read from SkopaqConfig (environment, then .env)."""
+    try:
+        from skopaq.config import SkopaqConfig
+
+        cfg = SkopaqConfig()
+    except Exception:
+        return None
+    base = cfg.custom_llm_base_url.strip()
+    key = cfg.custom_llm_api_key.get_secret_value().strip()
+    model = cfg.custom_llm_model.strip()
+    if not (base and key and model):
+        return None
+    return {"base_url": base.rstrip("/"), "api_key": key, "model": model,
+            "judge_model": cfg.custom_llm_judge_model.strip() or model}
+
+
+def _preferences(role: str, custom: dict[str, str] | None) -> list[tuple[str, str]]:
+    """*role*'s providers in order: the custom endpoint first when configured."""
+    prefs = list(_ROLE_PREFERENCES[role])
+    if custom:
+        model = custom["judge_model"] if role in _JUDGE_ROLES else custom["model"]
+        prefs.insert(0, ("custom", model))
+    return prefs
+
+
 def _has_key(provider: str) -> bool:
     """Check if the env var for *provider* is set and non-empty."""
     import os
 
     if provider == "ollama":
         return _is_ollama_available()
+    if provider == "custom":
+        return custom_endpoint() is not None
 
     env_var = _PROVIDER_ENV_KEYS.get(provider, "")
     return bool(os.environ.get(env_var))
@@ -160,6 +195,16 @@ def _create_llm(provider: str, model: str, **kwargs) -> BaseChatModel:
         return _create_ollama_llm(model)
 
     from tradingagents.llm_clients import create_llm_client
+
+    if provider == "custom":
+        custom = custom_endpoint()
+        if custom is None:
+            raise ValueError("The custom LLM endpoint is not configured")
+        client = create_llm_client(provider="openai_compatible", model=model,
+                                   base_url=custom["base_url"], api_key=custom["api_key"],
+                                   **kwargs)
+        return client.get_llm()
+
     client = create_llm_client(provider=provider, model=model, **kwargs)
     return client.get_llm()
 
@@ -199,7 +244,12 @@ def build_llm_map(config: dict[str, Any] | None = None) -> dict[str, BaseChatMod
     llm_cache: dict[tuple[str, str], BaseChatModel] = {}
     llm_map: dict[str, BaseChatModel] = {}
 
-    for role, preferences in _ROLE_PREFERENCES.items():
+    custom = custom_endpoint()
+    if custom:
+        logger.info("Custom LLM endpoint %s: model %s, judges %s", custom["base_url"],
+                    custom["model"], custom["judge_model"])
+    for role in _ROLE_PREFERENCES:
+        preferences = _preferences(role, custom)
         assigned = False
         for provider, model in preferences:
             if not _has_key(provider):
@@ -223,8 +273,10 @@ def build_llm_map(config: dict[str, Any] | None = None) -> dict[str, BaseChatMod
         if not assigned:
             logger.warning("Role '%s' has no available LLM — will use _default", role)
 
-    # Ensure _default always exists (Gemini Flash or first available)
-    if _GEMINI in llm_cache:
+    # Ensure _default always exists (custom endpoint, Gemini Flash or first available)
+    if custom and ("custom", custom["model"]) in llm_cache:
+        llm_map["_default"] = llm_cache[("custom", custom["model"])]
+    elif _GEMINI in llm_cache:
         llm_map["_default"] = llm_cache[_GEMINI]
     elif llm_cache:
         llm_map["_default"] = next(iter(llm_cache.values()))

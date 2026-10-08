@@ -8,6 +8,10 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Custom OpenAI-compatible AI gateway** (`SKOPAQ_CUSTOM_LLM_BASE_URL`, `_API_KEY`,
+  `_MODEL`, `_JUDGE_MODEL`), e.g. CodeCraft API. When set, every agent role uses it first and
+  the other providers stay as fallbacks. Environment page: **Test connection** lists the
+  gateway's models and sends one test prompt (`POST /api/dashboard/llm/check`, admin).
 - **Dashboard redesign and every backend feature in the web UI.** A new design (sidebar,
   mobile tab bar, cards, charts, `lucide-react` icons) on every page, and new pages:
   Portfolio (INDstocks and Kite positions, holdings, funds, orders, mutual funds, GTT),

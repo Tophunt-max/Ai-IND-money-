@@ -212,6 +212,8 @@ async def system_status() -> dict:
                 "claude": bool(config.anthropic_api_key.get_secret_value()),
                 "perplexity": bool(config.perplexity_api_key.get_secret_value()),
                 "grok": bool(config.xai_api_key.get_secret_value()),
+                "custom": bool(config.custom_llm_base_url and config.custom_llm_model
+                               and config.custom_llm_api_key.get_secret_value()),
             },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
