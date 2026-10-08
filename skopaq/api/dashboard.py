@@ -179,15 +179,15 @@ async def overview() -> dict:
     out["unrealized_pnl"] = None
     out["market_value"] = None
     if out["positions"]:
-        await asyncio.to_thread(_mark_to_market, out)
+        await _mark_to_market(out)
     return out
 
 
-def _mark_to_market(out: dict[str, Any]) -> None:
-    """Add Yahoo prices and unrealized P&L to overview positions (best effort)."""
-    from skopaq.broker import yahoo_quotes
+async def _mark_to_market(out: dict[str, Any]) -> None:
+    """Add prices (INDstocks live, else Yahoo) and unrealized P&L to overview positions."""
+    from skopaq.broker import live_quotes
 
-    quotes, errors = yahoo_quotes.get_quotes(sorted({p["symbol"] for p in out["positions"]}))
+    quotes, errors = await live_quotes.get_quotes(sorted({p["symbol"] for p in out["positions"]}))
     total_value = total_pnl = 0.0
     priced = 0
     for p in out["positions"]:
@@ -207,12 +207,12 @@ def _mark_to_market(out: dict[str, Any]) -> None:
     if priced:
         out["market_value"] = round(total_value, 2)
         out["unrealized_pnl"] = round(total_pnl, 2)
-    out["price_source"] = "Yahoo Finance (may be delayed)"
+    out["price_source"] = live_quotes.source_label(quotes)
     if errors:
         out["price_errors"] = errors
 
 
-# ── Market data (Yahoo Finance) ───────────────────────────────────────────────
+# ── Market data (INDstocks live, Yahoo Finance fallback) ───────────────────────────────────────────────
 
 
 @router.get("/market/quotes")
@@ -231,8 +231,10 @@ async def market_quotes(symbols: str = Query(..., max_length=400)) -> dict:
             bad.append(s)
     if bad:
         raise HTTPException(422, f"Not NSE symbols: {', '.join(bad)}")
-    quotes, errors = await asyncio.to_thread(yahoo_quotes.get_quotes, wanted)
-    return {"quotes": quotes, "errors": errors}
+    from skopaq.broker import live_quotes
+
+    quotes, errors = await live_quotes.get_quotes(wanted)
+    return {"quotes": quotes, "errors": errors, "source": live_quotes.source_label(quotes)}
 
 
 @router.get("/market/indices")

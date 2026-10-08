@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/AuthGate";
 import PriceChart from "@/components/PriceChart";
-import { Button, Card, ErrorBox, PageTitle, Skeleton, StatCard } from "@/components/ui";
+import { Badge, Button, Card, ErrorBox, PageTitle, Skeleton, StatCard } from "@/components/ui";
 import { inr, pct, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 
@@ -22,6 +22,7 @@ interface Quote {
   change_pct: number | null;
   volume: number;
   as_of: string;
+  source?: "indstocks" | "yahoo";
 }
 
 function Change({ q, big = false }: { q: { change_pct: number | null; change?: number | null }; big?: boolean }) {
@@ -49,7 +50,7 @@ function Market() {
   const watch = useApi<{ symbols: string[] }>("/api/dashboard/market/watchlist");
   const quote = useApi<{ quotes: Record<string, Quote>; errors: Record<string, string> }>(
     symbol ? `/api/dashboard/market/quotes?symbols=${encodeURIComponent(symbol)}` : null,
-    60000,
+    15000,
   );
   const q = symbol ? quote.data?.quotes[symbol] : undefined;
   const qErr = symbol ? quote.data?.errors[symbol] : undefined;
@@ -66,7 +67,7 @@ function Market() {
 
   return (
     <div className="space-y-6">
-      <PageTitle title="Market" icon={LineChart} subtitle="NSE indices, quotes and charts (Yahoo Finance, may be delayed)"
+      <PageTitle title="Market" icon={LineChart} subtitle="Live NSE quotes from INDstocks when the token is set; indices and charts from Yahoo Finance"
         right={<Link href="/scanner"><Button variant="ghost" icon={Radar}>Scanner</Button></Link>} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -119,7 +120,12 @@ function Market() {
                   </div>
                   <div className="mt-2"><Change q={q} big /></div>
                 </div>
-                <div className="text-right text-xs text-gray-500">As of {when(q.as_of)}</div>
+                <div className="flex flex-col items-end gap-1.5 text-right text-xs text-gray-500">
+                  {q.source === "indstocks"
+                    ? <Badge tone="ok" dot>LIVE · INDstocks</Badge>
+                    : <Badge tone="warning" dot>Delayed · Yahoo Finance</Badge>}
+                  <span>As of {when(q.as_of)} · refreshes every 15 s</span>
+                </div>
               </div>
             ) : null}
             {q && (

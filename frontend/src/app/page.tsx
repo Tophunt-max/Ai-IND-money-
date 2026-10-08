@@ -222,7 +222,7 @@ export default function Home() {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Positions */}
         <Card title="Open positions" icon={Activity} className="lg:col-span-2" padded
-          right={o?.price_source && <span className="text-[10px] text-gray-500">{o.price_source}</span>}>
+          right={o?.price_source && <Badge tone={o.price_source.startsWith("INDstocks") ? "ok" : "warning"} dot>{o.price_source}</Badge>}>
           {o && o.positions.length === 0 ? (
             <Empty icon={Activity} title="No open positions">The scheduler opens trades on NSE trading days from 09:15 IST.</Empty>
           ) : o ? (
