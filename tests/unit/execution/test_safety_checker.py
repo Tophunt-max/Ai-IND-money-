@@ -333,16 +333,16 @@ class TestMaxLots:
 
     @pytest.fixture
     def strict_checker(self):
-        """Checker with max_lots_per_position=5 for testing the lot limit."""
+        """Checker with max_shares_per_position=5 for testing the share limit."""
         rules = SafetyRules(
             max_position_pct=1.0, max_order_value_inr=10_000_000,
             require_stop_loss=False, market_hours_only=False,
-            max_lots_per_position=5,
+            max_shares_per_position=5,
         )
         return SafetyChecker(rules=rules)
 
     def test_within_limit_passes(self, strict_checker, funds, signal_with_sl):
-        """Quantity 5 == max_lots_per_position (5) → passes."""
+        """Quantity 5 == max_shares_per_position (5) → passes."""
         order = _buy_order(qty=5, price=100)
         result = strict_checker.validate(order, signal_with_sl, [], funds, 1_000_000)
         assert result.passed
@@ -702,3 +702,25 @@ class TestNoShortSaleWithOpenOrders:
         assert first.passed and first.codes == []
         assert second.codes == ["no-short-sale", "safety"]   # the order rate
         assert len(second.codes) == len(second.rejections)
+
+
+def test_equity_counts_shares_and_fno_counts_lots_separately():
+    """Defaults: 1000 shares per equity order, 5 lots per F&O order (independent)."""
+    from skopaq.constants import DAEMON_SAFETY_RULES, SAFETY_RULES
+
+    assert SAFETY_RULES.max_shares_per_position == 1000
+    assert SAFETY_RULES.max_lots_per_position == 5
+    assert DAEMON_SAFETY_RULES.max_shares_per_position == 1000
+    checker = SafetyChecker(rules=SafetyRules(max_position_pct=1.0,
+                                              max_order_value_inr=10_000_000))
+    rejections: list[str] = []
+    checker._check_max_lots(_buy_order(qty=500, price=100), rejections)
+    assert rejections == []                                    # 500 shares: fine now
+    checker._check_max_lots(_buy_order(qty=1001, price=100), rejections)
+    assert rejections and "1000 shares" in rejections[0]
+    rejections = []
+    fno = OrderRequest(symbol="NIFTY-OCT2026-25400-CE", side=Side.BUY, quantity=450,
+                       price=150, segment=Segment.DERIVATIVE, product=Product.INTRADAY,
+                       lot_size=75)
+    checker._check_max_lots(fno, rejections)                   # 6 lots > 5
+    assert rejections and "6 lots" in rejections[0]

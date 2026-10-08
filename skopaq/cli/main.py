@@ -343,7 +343,7 @@ async def _run_scalp(config):
             config, Executor(router, safety), client, router, feed=feed, control=control,
             on_trade=lambda signal, execution: _record_exit(config, None, None, signal,
                                                             execution),
-            max_qty=rules.max_lots_per_position)
+            max_qty=rules.max_shares_per_position)
         try:
             report = await engine.run(stop)
         finally:
@@ -442,7 +442,7 @@ def scalp_backtest(
     days: int = typer.Option(5, help="Trading days of 1-minute candles (INDstocks)."),
     strategies: str = typer.Option("", help="vwap_pullback,ema_rsi,orb,range_reversal"),
     max_qty: int = typer.Option(0, help="Share cap per scalp (0 = none; the safety rules "
-                                        "allow max_lots_per_position)."),
+                                        "allow max_shares_per_position)."),
     equity: float = typer.Option(1_000_000.0, help="Equity the risk per trade is taken of."),
 ) -> None:
     """Backtest the scalping strategies on past 1-minute candles (no orders)."""

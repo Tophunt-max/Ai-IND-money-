@@ -457,11 +457,12 @@ class SafetyChecker:
             )
 
     def _check_max_lots(self, order: OrderRequest, rejections: list[str]) -> None:
-        """Reject if order quantity exceeds the per-position lot limit.
+        """Reject if order quantity exceeds the per-position limit.
 
         Prevents accidentally sized orders (e.g., 50 lots from a parsing error)
-        from reaching the broker. Derivatives count lots (quantity / lot size); equity
-        counts shares.
+        from reaching the broker. Derivatives count lots (quantity / lot size) against
+        ``max_lots_per_position``; equity counts shares against
+        ``max_shares_per_position``.
         """
         if order.segment == Segment.DERIVATIVE:
             if order.lots > self._rules.max_lots_per_position:
@@ -470,9 +471,10 @@ class SafetyChecker:
                     "lots per position"
                 )
             return
-        if order.quantity > self._rules.max_lots_per_position:
+        if order.quantity > self._rules.max_shares_per_position:
             rejections.append(
-                f"Quantity {order.quantity} exceeds max {self._rules.max_lots_per_position} per position"
+                f"Quantity {order.quantity} exceeds max {self._rules.max_shares_per_position} "
+                "shares per position"
             )
 
     def _check_sector_concentration(

@@ -704,7 +704,7 @@ async def test_the_scalper_runs_beside_the_session_and_reports(daemon, config):
             return report
 
     daemon._router = MagicMock()
-    daemon._rules = MagicMock(max_lots_per_position=5)
+    daemon._rules = MagicMock(max_shares_per_position=5)
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock), \
          patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=[]), \

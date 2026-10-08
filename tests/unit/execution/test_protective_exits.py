@@ -45,6 +45,7 @@ RULES = SafetyRules(
     max_monthly_loss_pct=0.12,
     max_order_value_inr=100_000,
     max_lots_per_position=5,
+    max_shares_per_position=5,
     require_stop_loss=False,
     market_hours_only=False,
     cool_down_after_loss_minutes=15,
@@ -90,9 +91,9 @@ class TestSafetyChecker:
         assert sell.passed, sell.rejections
 
     def test_a_grown_position_can_be_sold_whole(self):
-        """Above the size (15%), value (1 lakh) and lot (5) caps that bound a BUY."""
+        """Above the size (15%), value (1 lakh) and share (5) caps that bound a BUY."""
         checker = SafetyChecker(rules=RULES)
-        # 41 x 2500 = 1,02,500: 20.5% of 5 lakh, over 1 lakh, and 41 > 5 lots
+        # 41 x 2500 = 1,02,500: 20.5% of 5 lakh, over 1 lakh, and 41 > 5 shares
         buy = checker.validate(_order(Side.BUY, qty=41), None, [], FUNDS, 500_000)
         sell = checker.validate(_order(Side.SELL, qty=41), None, _held(41), FUNDS, 500_000)
 

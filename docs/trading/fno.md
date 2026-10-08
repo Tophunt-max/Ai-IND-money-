@@ -35,7 +35,7 @@ beside the daily session when `SKOPAQ_FNO_ENABLED=true` (off by default), or alo
    risk per lot (`SKOPAQ_FNO_PREMIUM_STOP_PCT` of the premium × the lot size). The result
    is then capped by:
    - `SKOPAQ_FNO_MAX_LOTS`;
-   - the safety rules' `max_lots_per_position` (5 lots);
+   - the safety rules' `max_lots_per_position` (5 lots; equity has its own share cap);
    - `SKOPAQ_FNO_MAX_PREMIUM_INR` of premium;
    - the safety rules' position percentage (one lot is always allowed).
 
