@@ -7,11 +7,11 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 | Page | What it does | API |
 |---|---|---|
 | Dashboard | Total P&L with the 90-day chart, kill-switch and token banners, today's auto-trading session, open positions, system health | `/api/dashboard/overview`, `/pnl-history`, `/scheduler`, `/api/status` |
-| Portfolio | Positions, holdings, funds and today's order book at INDstocks and Kite; Kite mutual funds, SIPs and GTT orders. Read only | `/api/dashboard/portfolio`, `/kite/mutual-funds`, `/kite/gtt` |
+| Portfolio | INDstocks equity positions, F&O positions, holdings, funds (incl. option-buy and futures balances) and today's order book. Read only | `/api/dashboard/portfolio` |
 | Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y) | `/api/dashboard/market/*` |
 | Analyze | Full multi-agent analysis (`skopaq analyze`), or analysis + **paper** trade (`skopaq trade`, refused unless the server is in paper mode), 2–5 min | `/api/dashboard/jobs` |
 | Scanner | One scan of the watchlist (`skopaq scan`), and the background scanner's status and candidates | `/api/dashboard/jobs`, `/scanner/status` |
-| Options | Option chain and a rule-based option-selling idea (short put / call / strangle). Needs Kite; places nothing | `/api/dashboard/options/*` |
+| Options | INDstocks expiries, option chain (with Delta) and a rule-based option-selling idea (short put / call / strangle). Needs the INDstocks token; places nothing | `/api/dashboard/options/expiries`, `/options/chain`, `/options/suggest` |
 | Trades | Trades from Supabase (current mode, paper, live, all), with totals and a symbol filter | `/api/dashboard/trades` |
 | Track record | AI calls vs NIFTY, closed trades, calibration (`skopaq report`) | `/api/dashboard/report` |
 | AI learning | Signal-tracker insights (calibration, sectors, regimes, hours, stops; needs `DATABASE_URL`), one symbol's record, agent memory search (Supabase) | `/api/dashboard/learning[/symbol]`, `/memory` |
@@ -19,17 +19,12 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 | Scheduler | `skopaq schedule --check` plan, the last 10 days' sessions, logs, **Settle now** (`skopaq settle`) | `/api/dashboard/scheduler[/log]`, `/jobs` |
 | Jobs | Every analysis, scan, backtest and settle started from the dashboard (kept in memory) | `/api/dashboard/jobs` |
 | AI chat | The AI chat agent (paper trades in paper mode) | `/api/dashboard/chat` |
-| Broker | INDstocks token: health, expiry, **set today's token** or delete it (admin; like `skopaq token set`). Kite connection and login link | `/api/dashboard/broker[/indstocks-token]` |
+| Broker | INDstocks token: health, expiry, **set today's token** or delete it (admin; like `skopaq token set`), and an info card on equity and F&O at INDstocks | `/api/dashboard/broker[/indstocks-token]` |
 | Settings | Kill switch, account, login history, links | `/api/dashboard/kill-switch*` |
 | Environment (admin) | View and change `SKOPAQ_*` settings: trading mode, live switch, scheduler, keys (see below) | `/api/dashboard/settings/env` |
 
-The dashboard never places, changes or cancels a broker order itself: the MCP server's order
-tools (GTT, AMO, bracket, options, futures, mutual funds) bypass the safety checks and the kill
-switch, so they are left out. `skopaq monitor` is not a button either: the scheduler runs it,
-and a second monitor beside it would sell the same positions.
-
-The Kite login link is `SKOPAQ_PUBLIC_BASE_URL/api/kite/login` (or the backend URL). For it to
-work, add `/api/kite/*` to the Caddy matcher below; Telegram `/login` works without that.
+The dashboard never places, changes or cancels a broker order itself. `skopaq monitor` is not
+a button either: the scheduler runs it, and a second monitor beside it would sell the same positions.
 
 Prices, charts and unrealized P&L come from Yahoo Finance (`skopaq/broker/yahoo_quotes.py`)
 and can lag NSE by a few minutes. Paper fills use the same price when INDstocks has no
@@ -127,7 +122,7 @@ Settings → **⚙️ Environment** lets an admin change `SKOPAQ_*` settings wit
   are written as `(secret)`) and shown under *Change history*.
 - **Locked** (ENV_FILE only): Supabase URL and keys, `SKOPAQ_API_TOKEN`, `SKOPAQ_CORS_ORIGINS`,
   `SKOPAQ_DASHBOARD_USERS`, API host/port, `SKOPAQ_DATABASE_URL`, the state, lock, journal and
-  log directories, the heartbeat file, `SKOPAQ_KITE_ACCESS_TOKEN`,
+  log directories, the heartbeat file,
   `SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK` and `SKOPAQ_TRADING_HALTED` (use the kill switch).
   A mistake there could lock the dashboard out.
 - To undo everything from the host: `docker compose exec api rm ~/.skopaq/env_overrides.json`,

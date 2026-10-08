@@ -68,7 +68,6 @@ LOCKED: dict[str, str] = {
     "heartbeat_file": "container health checks",
     "allow_sell_without_order_book": "dangerous: may sell the same shares twice",
     "trading_halted": "use the kill switch instead",
-    "kite_access_token": "set by the Kite login",
 }
 
 # Read straight from os.environ by the code, not SkopaqConfig fields.
@@ -127,7 +126,6 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("AI models & keys", ("custom_llm_", "google_", "anthropic_", "perplexity_", "xai_", "openrouter_",
                           "typesafe_", "jev_", "ollama_", "langcache_", "max_debate",
                           "max_risk", "selected_analysts", "reflection_")),
-    ("Kite (Zerodha)", ("kite_",)),
 )
 
 _lock = threading.Lock()  # os.environ updates

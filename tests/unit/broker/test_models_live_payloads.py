@@ -87,7 +87,7 @@ def test_holding_older_shape():
 
 
 def test_holding_by_field_name():
-    """PaperEngine and KiteClient build holdings by field name."""
+    """PaperEngine builds holdings by field name."""
     h = Holding(symbol="RELIANCE", exchange="NSE", quantity=Decimal("3"), average_price=1400.0,
                 last_price=1410.0, pnl=30.0)
     assert (h.symbol, h.quantity, h.average_price) == ("RELIANCE", Decimal("3"), 1400.0)
@@ -160,7 +160,7 @@ def test_execution_result_defaults_unchanged_for_paper():
     assert r.fill_unconfirmed is False
     assert r.fill_price_source == ""
     assert r.broker_message == ""
-    assert r.brokerage == 5.0
+    assert r.brokerage == 10.0  # INDstocks flat fee per order
 
 
 def test_readers_on_a_live_result():

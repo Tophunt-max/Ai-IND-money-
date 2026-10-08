@@ -14,6 +14,7 @@ from skopaq.broker.models import (
     OrderType,
     Position,
     Product,
+    Segment,
     Side,
     TradingSignal,
 )
@@ -226,7 +227,7 @@ class TestNakedOptions:
         order = OrderRequest(
             symbol="NIFTY23DEC21000CE", exchange=Exchange.NSE, side=Side.SELL,
             quantity=50, order_type=OrderType.LIMIT, price=200,
-            product=Product.NRML,
+            product=Product.NRML, segment=Segment.DERIVATIVE, lot_size=50,
         )
         result = checker.validate(order, None, [], funds, 1_000_000)
         assert not result.passed
@@ -236,7 +237,7 @@ class TestNakedOptions:
         order = OrderRequest(
             symbol="NIFTY23DEC21000CE", exchange=Exchange.NSE, side=Side.BUY,
             quantity=50, order_type=OrderType.LIMIT, price=200,
-            product=Product.NRML,
+            product=Product.NRML, segment=Segment.DERIVATIVE, lot_size=50,
         )
         result = checker.validate(order, signal_with_sl, [], funds, 1_000_000)
         assert result.passed

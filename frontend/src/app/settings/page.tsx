@@ -156,7 +156,7 @@ export default function SettingsPage() {
 
   const k = ks.data;
   const links = [
-    { href: "/broker", label: "Broker connections", text: "INDstocks token, Kite login", icon: PlugZap },
+    { href: "/broker", label: "Broker connections", text: "INDstocks token (equity and F&O)", icon: PlugZap },
     ...(isAdmin ? [{ href: "/settings/environment", label: "Environment", text: "Mode, keys, live trading", icon: SlidersHorizontal }] : []),
   ];
 

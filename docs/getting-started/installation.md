@@ -4,7 +4,7 @@
 
 - Python 3.11+
 - At least one LLM API key (Google Gemini recommended as minimum)
-- Zerodha Kite Connect account (for live trading)
+- INDstocks (INDmoney) account with an API token (market data and live trading; F&O segment activated for options)
 
 ## Install from Source
 
@@ -44,8 +44,7 @@ SKOPAQ_ANTHROPIC_API_KEY=...       # Claude Opus (research/risk manager)
 SKOPAQ_OPENROUTER_API_KEY=...      # Grok + Perplexity (social + news)
 
 # Broker
-SKOPAQ_KITE_API_KEY=...            # Zerodha Kite Connect
-SKOPAQ_KITE_API_SECRET=...         # Kite API secret
+SKOPAQ_INDSTOCKS_TOKEN=...         # INDstocks API token (or: skopaq token set)
 
 # Telegram Bot
 SKOPAQ_TELEGRAM_BOT_TOKEN=...      # From @BotFather

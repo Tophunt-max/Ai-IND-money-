@@ -126,12 +126,8 @@ class SkopaqConfig(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    # ── Public URLs / API access ────────────────────────────────────────
-    # Public HTTPS URL of the API (Kite login links), e.g. the tunnel host
-    public_base_url: str = ""
-    # HTTP fallback for other processes to fetch the Kite token; never set on the api itself
-    api_base_url: str = ""
-    # When set, /api/chat/* and /api/kite/token require Bearer auth
+    # ── API access ───────────────────────────────────────────────────────
+    # When set, /api/chat/* require Bearer auth (and it works as an admin dashboard login)
     api_token: SecretStr = SecretStr("")
     cors_origins: str = "*"  # comma-separated browser origins; "" = none
     # Web dashboard logins (Supabase Auth): "me@x.com:admin,friend@y.com:viewer"
@@ -238,12 +234,6 @@ class SkopaqConfig(BaseSettings):
     ollama_enabled: bool = False        # Opt-in: set True to use local models
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = ""              # Auto-detect if empty
-
-    # ── Kite Connect (Zerodha) ───────────────────────────────────────────────
-    kite_api_key: str = ""
-    kite_api_secret: SecretStr = SecretStr("")
-    kite_client_id: str = ""
-    kite_access_token: SecretStr = SecretStr("")  # Set after OAuth login
 
     # ── Telegram Bot ────────────────────────────────────────────────────────
     telegram_bot_token: SecretStr = SecretStr("")

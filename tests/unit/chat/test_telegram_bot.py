@@ -149,24 +149,49 @@ async def test_halt_and_resume_commands(allow, tmp_path, monkeypatch):
 
 
 
-def test_kite_login_url_comes_from_config(monkeypatch):
-    monkeypatch.setenv("SKOPAQ_PUBLIC_BASE_URL", "")
-    assert telegram_bot._kite_login_url() == ""
+def _health(valid, remaining_s=None, warning=""):
+    from datetime import timedelta
 
-    monkeypatch.setenv("SKOPAQ_PUBLIC_BASE_URL", "https://x.example/")
-    assert telegram_bot._kite_login_url() == "https://x.example/api/kite/login"
+    return SimpleNamespace(
+        valid=valid, warning=warning,
+        remaining=timedelta(seconds=remaining_s) if remaining_s is not None else None)
 
 
 @pytest.mark.asyncio
-async def test_login_without_a_public_url_says_so(allow, monkeypatch):
-    monkeypatch.setenv("SKOPAQ_PUBLIC_BASE_URL", "")
+async def test_token_command_reports_the_indstocks_token(allow, monkeypatch):
     update = _update(111)
-    # Not a sys.modules stub: `import skopaq.broker.kite_client as kite` finds an already
-    # imported real module through the package attribute and would read its token file.
-    monkeypatch.setattr(telegram_bot, "_kite_token", lambda: "")
+    monkeypatch.setattr(telegram_bot, "_token_health", lambda: _health(True, 5 * 3600 + 60))
+    await telegram_bot.cmd_token(update, MagicMock())
+    assert update.message.reply_text.await_args.args[0] == "INDstocks token valid (5h 1m left)."
 
-    await telegram_bot.cmd_login(update, MagicMock())
-    assert "SKOPAQ_PUBLIC_BASE_URL" in update.message.reply_text.await_args.args[0]
+    monkeypatch.setattr(telegram_bot, "_token_health", lambda: _health(False))
+    await telegram_bot.cmd_token(update, MagicMock())
+    text = update.message.reply_text.await_args.args[0]
+    assert "missing or expired" in text and "Broker page" in text
+
+
+@pytest.mark.asyncio
+async def test_pre_market_job_sends_the_token_status(monkeypatch):
+    from datetime import datetime
+
+    from skopaq.risk.calendar import IST
+
+    monkeypatch.setenv("SKOPAQ_NSE_HOLIDAYS", "")
+    monkeypatch.setattr("skopaq.risk.calendar.now_ist",
+                        lambda: datetime(2026, 10, 8, 9, 0, tzinfo=IST))  # a Thursday
+    monkeypatch.setattr(telegram_bot, "alert_chat_ids", {111})
+    monkeypatch.setattr(telegram_bot, "_token_health", lambda: _health(False))
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    await telegram_bot.job_pre_market_token(context)
+    text = context.bot.send_message.await_args.kwargs["text"]
+    assert "INDstocks token missing" in text
+
+
+def test_bot_has_no_kite_login():
+    assert not hasattr(telegram_bot, "cmd_login")
+    assert not hasattr(telegram_bot, "_kite_token")
 
 
 @pytest.mark.asyncio
@@ -182,7 +207,7 @@ async def test_market_jobs_skip_non_trading_days(monkeypatch):
     context = MagicMock()
     context.bot.send_message = AsyncMock()
 
-    for job in (telegram_bot.job_pre_market_login, telegram_bot.job_market_scan,
+    for job in (telegram_bot.job_pre_market_token, telegram_bot.job_market_scan,
                 telegram_bot.job_eod_summary):
         await job(context)
 

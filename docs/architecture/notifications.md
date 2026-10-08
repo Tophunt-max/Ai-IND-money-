@@ -34,7 +34,7 @@ await notify("Order filled: BUY 10x RELIANCE @ Rs 2,485")
 |----------|---------|----------|
 | `notify_trade_event()` | Order fill/rejection | `side`, `symbol`, `price`, `quantity`, `status`, `reason` |
 | `notify_order_alert()` | CRITICAL/WARNING alert about a live order | `severity`, `title`, `text`, `order_ids` |
-| `notify_gtt_event()` | GTT placed/triggered/cancelled | `event`, `symbol`, `trigger_price`, `trigger_id` |
+| `notify_gtt_event()` | GTT / smart order placed/triggered/cancelled (not called yet) | `event`, `symbol`, `trigger_price`, `trigger_id` |
 | `notify_position_alert()` | Position monitoring alerts | `symbol`, `ltp`, `entry`, `pnl`, `alert_type` |
 | `notify_market_scan()` | Scanner results | `results` (list of quote dicts) |
 | `notify_options_trade()` | Options recommendation | `trade_text` |
@@ -68,13 +68,15 @@ What each means and what to do: [Live Trading](../trading/live-trading.md#fill-c
 
 ### GTT Events
 
-| Event | When | Example Message |
-|-------|------|-----------------|
-| `PLACED` | GTT order created | "GTT BUY set: buy 50x HDFCBANK when price hits Rs 1,450" |
-| `TRIGGERED` | Price hit the trigger | "GTT TRIGGERED: HDFCBANK -- order executed!" |
-| `CANCELLED` | User cancelled GTT | "GTT CANCELLED: HDFCBANK" |
-| `EXPIRED` | GTT expired (1 year) | "GTT EXPIRED: RELIANCE" |
-| `REJECTED` | Zerodha rejected GTT | "GTT REJECTED: insufficient margin" |
+`notify_gtt_event()` is broker-neutral and kept for INDstocks smart orders (`GTT-…` ids), which are planned for the next phase ([GTT Orders](../trading/gtt-orders.md)). Nothing calls it today.
+
+| Event | Example Message |
+|-------|-----------------|
+| `PLACED` | "GTT PLACED: HDFCBANK" (trigger, target/stop, qty, id) |
+| `TRIGGERED` | "GTT TRIGGERED: HDFCBANK" |
+| `CANCELLED` | "GTT CANCELLED: HDFCBANK" |
+| `EXPIRED` | "GTT EXPIRED: RELIANCE" |
+| `REJECTED` | "GTT REJECTED: RELIANCE" |
 
 ### Position Alerts
 
@@ -172,4 +174,3 @@ async def notify(message: str) -> None:
 | `skopaq/telegram_bot.py` | Telegram bot (also sends notifications) |
 | `skopaq/execution/daemon.py` | Daemon sends trade/scan notifications |
 | `skopaq/execution/position_monitor.py` | Position alerts |
-| `skopaq/options/gtt.py` | GTT event notifications |

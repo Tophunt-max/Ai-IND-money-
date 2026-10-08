@@ -19,6 +19,7 @@ from skopaq.broker.models import (
     OrderRequest,
     OrderType,
     Position,
+    Segment,
     Side,
     TradingSignal,
 )
@@ -35,8 +36,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# NSE option contract symbols end in a strike and CE/PE, e.g. NIFTY23DEC21000CE.
-_OPTION_RE = re.compile(r"\d+(?:CE|PE)$")
+# Option contract symbols end in a strike and CE/PE: NIFTY23DEC21000CE (exchange style) or
+# NIFTY-Aug2026-24450-CE (INDstocks option chain).
+_OPTION_RE = re.compile(r"\d+-?(?:CE|PE)$")
 
 
 @dataclass
@@ -445,8 +447,16 @@ class SafetyChecker:
         """Reject if order quantity exceeds the per-position lot limit.
 
         Prevents accidentally sized orders (e.g., 50 lots from a parsing error)
-        from reaching the broker.
+        from reaching the broker. Derivatives count lots (quantity / lot size); equity
+        counts shares.
         """
+        if order.segment == Segment.DERIVATIVE:
+            if order.lots > self._rules.max_lots_per_position:
+                rejections.append(
+                    f"{order.lots} lots exceeds max {self._rules.max_lots_per_position} "
+                    "lots per position"
+                )
+            return
         if order.quantity > self._rules.max_lots_per_position:
             rejections.append(
                 f"Quantity {order.quantity} exceeds max {self._rules.max_lots_per_position} per position"

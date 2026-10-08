@@ -11,11 +11,11 @@ Commands:
     /status         — System health check
     /analyze SYMBOL — Quick Claude-style analysis (using data tools)
     /pnl            — Current P&L on open positions
-    /login          — Send Kite Connect login link
+    /token          — INDstocks token status (set it on the dashboard Broker page)
     /help           — List commands
 
 Scheduled jobs (Monday to Friday, skipped on NSE holidays):
-    09:00 IST — Pre-market Kite login reminder
+    09:00 IST — Pre-market INDstocks token check
     09:25 IST — Auto market scan (top movers)
     15:35 IST — EOD P&L summary
 """
@@ -149,10 +149,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/portfolio - Positions & P&L\n"
         "/status - System health\n"
         "/pnl - Open position P&L\n"
-        "/login - Connect to Zerodha\n"
+        "/token - INDstocks token status\n"
         "/help - All commands\n\n"
         "Scheduled (auto):\n"
-        "  09:00 IST - Login reminder\n"
+        "  09:00 IST - Token check\n"
         "  09:25 IST - Market scan\n"
         "  15:35 IST - EOD summary\n\n"
         "Or just chat naturally - I understand trading questions!"
@@ -167,6 +167,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/status — System health, mode, token\n"
         "/pnl — P&L on open positions\n"
         "/analyze SYMBOL — Quick technical analysis\n"
+        "/token — INDstocks token status\n"
         "/halt REASON — Kill switch: stop all new BUYs everywhere\n"
         "/resume — Lift the kill switch\n"
         "/confirm, /cancel — Answer a pending trade\n"
@@ -582,17 +583,34 @@ async def send_alert(app: Application, chat_id: int, message: str) -> None:
 
 # ── Scheduled Jobs ───────────────────────────────────────────────────────────
 
-_LOGIN_LINK_MISSING = (
-    "Kite login link not configured: set SKOPAQ_PUBLIC_BASE_URL to the API's public HTTPS URL."
+_TOKEN_HELP = (
+    "Set today's INDstocks token on the dashboard Broker page, or run "
+    "`skopaq token set <TOKEN>` on the server."
+)
+
+_SCAN_SYMBOLS = (
+    "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
+    "SBIN", "LT", "BHARTIARTL", "WIPRO", "NTPC",
 )
 
 
-def _kite_login_url() -> str:
-    """The API's Kite login URL (SKOPAQ_PUBLIC_BASE_URL), or "" when not configured."""
-    from skopaq.config import SkopaqConfig
+def _token_health():
+    """INDstocks token health (no Telegram alert from the check itself)."""
+    from skopaq.broker.token_manager import TokenManager
 
-    base = SkopaqConfig().public_base_url.rstrip("/")
-    return f"{base}/api/kite/login" if base else ""
+    return TokenManager().get_health(notify=False)
+
+
+def _token_text(health) -> str:
+    if not health.valid:
+        return f"INDstocks token missing or expired.\n{_TOKEN_HELP}"
+    left = ""
+    if health.remaining:
+        hours = int(health.remaining.total_seconds() // 3600)
+        minutes = int(health.remaining.total_seconds() % 3600 // 60)
+        left = f" ({hours}h {minutes}m left)"
+    warning = f"\n{health.warning}" if health.warning else ""
+    return f"INDstocks token valid{left}.{warning}"
 
 
 def _is_trading_day_ist() -> bool:
@@ -614,45 +632,39 @@ async def _heartbeat_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     path.touch()
 
 
-def _kite_token() -> str:
-    """The current Kite token, re-read rather than taken from this process's cache.
-
-    The api process writes the token file at each OAuth login (shared /data volume under
-    docker compose), so a new login is seen here; get_access_token() skips a token past
-    its 06:00 IST expiry.
-    """
-    import skopaq.broker.kite_client as kite
-
-    kite._access_token = ""
-    return kite.get_access_token()
-
-
-async def job_pre_market_login(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """9:00 AM IST — Send Kite login link before market opens."""
+async def job_pre_market_token(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """9:00 AM IST — Check the INDstocks token before the market opens."""
     if not _is_trading_day_ist():
         return
 
-    token = _kite_token()
+    health = _token_health()
+    text = (
+        "Good morning! " + _token_text(health)
+        + ("\nMarket opens at 9:15 IST. Auto-scan at 9:25." if health.valid else "")
+    )
     for chat_id in list(alert_chat_ids):
-        if token:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "Good morning! Kite is already connected.\n"
-                    "Market opens at 9:15 IST. Standing by for auto-scan at 9:25."
-                ),
-            )
-        else:
-            login_url = _kite_login_url()
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "Good morning! Time to connect to Zerodha.\n\n"
-                    f"Tap to login: {login_url}\n\n"
-                    "After login, I'll auto-scan the market at 9:25 IST "
-                    "and send you the top picks."
-                ) if login_url else f"Good morning! Kite is not connected.\n{_LOGIN_LINK_MISSING}",
-            )
+        await context.bot.send_message(chat_id=chat_id, text=text)
+
+
+async def _scan_quotes(symbols) -> list[dict]:
+    """Live quotes for *symbols* from INDstocks (one batched call)."""
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.scrip_resolver import resolve_scrip_code
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.config import SkopaqConfig
+
+    async with INDstocksClient(SkopaqConfig(), TokenManager()) as client:
+        codes: dict[str, str] = {}
+        for sym in symbols:
+            try:
+                codes[await resolve_scrip_code(client, sym)] = sym
+            except ValueError:
+                logger.warning("Scan: %s not in the instruments file", sym)
+        if not codes:
+            return []
+        quotes = await client.get_quotes(list(codes), symbols=list(codes.values()))
+    return [{"symbol": q.symbol, "ltp": q.ltp, "change_pct": q.change_pct,
+             "volume": q.volume} for q in quotes]
 
 
 async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -660,17 +672,10 @@ async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_trading_day_ist():
         return
 
-    token = _kite_token()
-    if not token:
-        login_url = _kite_login_url()
+    health = _token_health()
+    if not health.valid:
         for chat_id in list(alert_chat_ids):
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"Kite not connected. Please login first:\n{login_url}"
-                    if login_url else f"Kite not connected. {_LOGIN_LINK_MISSING}"
-                ),
-            )
+            await context.bot.send_message(chat_id=chat_id, text=_token_text(health))
         return
 
     for chat_id in list(alert_chat_ids):
@@ -679,29 +684,8 @@ async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
             text="Market open! Scanning NIFTY 50 for opportunities...",
         )
 
-    # Scan top stocks using Kite directly
     try:
-        from skopaq.broker.kite_client import KiteClient
-
-        api_key = os.environ.get("SKOPAQ_KITE_API_KEY", "")
-        client = KiteClient(api_key=api_key, access_token=token)
-
-        symbols = [
-            "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
-            "SBIN", "LT", "BHARTIARTL", "WIPRO", "NTPC",
-        ]
-        results = []
-        for sym in symbols:
-            try:
-                q = await client.get_quote(f"NSE:{sym}", symbol=sym)
-                results.append({
-                    "symbol": q.symbol,
-                    "ltp": q.ltp,
-                    "change_pct": q.change_pct,
-                    "volume": q.volume,
-                })
-            except Exception:
-                pass
+        results = await _scan_quotes(_SCAN_SYMBOLS)
 
         # Sort by change% (top movers)
         results.sort(key=lambda x: abs(x.get("change_pct", 0)), reverse=True)
@@ -734,23 +718,26 @@ async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def job_eod_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """3:35 PM IST — End of day P&L summary."""
+    """3:35 PM IST — End of day P&L summary (INDstocks equity and F&O positions)."""
     if not _is_trading_day_ist():
         return
 
-    token = _kite_token()
-    if not token:
+    if not _token_health().valid:
         return
 
     try:
-        from skopaq.broker.kite_client import KiteClient
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.token_manager import TokenManager
+        from skopaq.config import SkopaqConfig
 
         _ensure_infra()
-        api_key = os.environ.get("SKOPAQ_KITE_API_KEY", "")
-        client = KiteClient(api_key=api_key, access_token=token)
-
-        positions = await client.get_positions()
-        funds = await client.get_funds()
+        async with INDstocksClient(SkopaqConfig(), TokenManager()) as client:
+            positions = list(await client.get_positions())
+            try:
+                positions += await client.get_derivative_positions()
+            except Exception:
+                logger.warning("EOD summary: F&O positions unavailable", exc_info=True)
+            funds = await client.get_funds()
 
         total_pnl = sum(p.pnl for p in positions) if positions else 0
 
@@ -760,37 +747,28 @@ async def job_eod_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
 
         if positions:
-            lines.append(f"\nOpen Positions ({len(positions)}):")
+            lines.append(f"\nPositions ({len(positions)}):")
             for p in positions:
                 lines.append(
-                    f"  {p.symbol}: {int(p.quantity)}x @ {p.average_price:.2f} "
+                    f"  {p.symbol} [{p.product}]: {int(p.quantity)}x @ {p.average_price:.2f} "
                     f"P&L: Rs {p.pnl:+,.2f}"
                 )
-            lines.append(f"\nTotal Day P&L: Rs {total_pnl:+,.2f}")
+            lines.append(f"\nTotal realised P&L: Rs {total_pnl:+,.2f}")
         else:
-            lines.append("\nNo open positions.")
+            lines.append("\nNo positions today.")
 
         msg = "\n".join(lines)
         for chat_id in list(alert_chat_ids):
             await context.bot.send_message(chat_id=chat_id, text=msg)
 
-    except Exception as exc:
+    except Exception:
         logger.exception("EOD summary failed")
 
 
-async def cmd_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send Kite login link."""
+async def cmd_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """INDstocks token status."""
     alert_chat_ids.add(update.message.chat.id)
-    login_url = _kite_login_url()
-
-    if _kite_token():
-        await update.message.reply_text("Already connected to Zerodha!")
-    elif not login_url:
-        await update.message.reply_text(_LOGIN_LINK_MISSING)
-    else:
-        await update.message.reply_text(
-            f"Tap to connect Zerodha:\n{login_url}"
-        )
+    await update.message.reply_text(_token_text(_token_health()))
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────────
@@ -832,7 +810,7 @@ def main() -> None:
     for name, handler in (
         ("start", cmd_start), ("help", cmd_help), ("quote", cmd_quote),
         ("portfolio", cmd_portfolio), ("status", cmd_status), ("pnl", cmd_pnl),
-        ("analyze", cmd_analyze), ("login", cmd_login), ("halt", cmd_halt),
+        ("analyze", cmd_analyze), ("token", cmd_token), ("halt", cmd_halt),
         ("resume", cmd_resume), ("confirm", cmd_confirm), ("cancel", cmd_cancel),
     ):
         app.add_handler(CommandHandler(name, authorized(handler)))
@@ -846,10 +824,10 @@ def main() -> None:
 
     # IST 9:00 = UTC 3:30
     app.job_queue.run_daily(
-        job_pre_market_login,
+        job_pre_market_token,
         time=dt_time(hour=3, minute=30, tzinfo=timezone.utc),
         days=weekdays,
-        name="pre_market_login",
+        name="pre_market_token",
     )
 
     # IST 9:25 = UTC 3:55
@@ -876,7 +854,7 @@ def main() -> None:
         app.job_queue.run_repeating(_heartbeat_job, interval=60, first=1, data=hb, name="heartbeat")
 
     print("Scheduled jobs (Mon-Fri, NSE trading days):")
-    print("  09:00 IST — Pre-market login reminder")
+    print("  09:00 IST — Pre-market INDstocks token check")
     print("  09:25 IST — Auto market scan")
     print("  15:35 IST — EOD P&L summary")
     print("Bot ready. Polling for messages...")

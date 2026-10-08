@@ -65,7 +65,6 @@ dev = [
 deploy = [
     "python-telegram-bot[job-queue]>=22.4,<23",  # 22.4+: run_polling works on Python 3.14; job-queue pins APScheduler<3.12
     "langchain-ollama>=1.0.0",
-    "kiteconnect>=5.0.0",
     "psycopg2-binary>=2.9.11",  # first release with cp314 wheels
     "quantstats>=0.0.80",
     "langchain-community>=0.3",

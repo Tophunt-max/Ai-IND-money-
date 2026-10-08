@@ -22,9 +22,8 @@ All configuration is via environment variables with the `SKOPAQ_` prefix, loaded
 
 | Variable | Description |
 |----------|-------------|
-| `SKOPAQ_KITE_API_KEY` | Zerodha Kite Connect API key |
-| `SKOPAQ_KITE_API_SECRET` | Kite API secret |
-| `SKOPAQ_INDSTOCKS_TOKEN` | INDstocks API token (alternative broker) |
+| `SKOPAQ_INDSTOCKS_TOKEN` | INDstocks API token (the only broker: market data, equity and F&O) |
+| `SKOPAQ_INDSTOCKS_BASE_URL` | INDstocks API base URL (default `https://api.indstocks.com`) |
 
 ## Live Orders (INDstocks)
 

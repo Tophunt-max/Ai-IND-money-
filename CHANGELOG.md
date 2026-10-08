@@ -6,7 +6,44 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **Kite Connect (Zerodha).** INDstocks is now the only broker. Gone:
+  - `skopaq/broker/kite_client.py`, `skopaq/options/gtt.py`, `skopaq/trading/` and the
+    `kiteconnect` dependency.
+  - The `/api/kite/*` routes.
+  - The `SKOPAQ_KITE_*`, `SKOPAQ_PUBLIC_BASE_URL` and `SKOPAQ_API_BASE_URL` settings (old
+    values in `.env` are ignored).
+  - The dashboard's Kite card, Kite portfolio, mutual funds and GTT views.
+  - Telegram `/login`.
+  - Eleven MCP tools: `place_gtt_order`, `list_gtt_orders`, `setup_swing_trade`,
+    `place_amo_order`, `place_bracket`, `place_cover`, `place_basket`,
+    `buy_option_contract`, `trade_future`, `invest_mutual_fund` and `list_mutual_funds`.
+
+  The MCP order tools placed real Zerodha orders outside the `SafetyChecker` and the kill
+  switch. The only MCP order tool left is `place_order`. Mutual funds are no longer
+  supported, because the INDstocks API has no mutual-fund endpoints.
+
 ### Added
+
+- **F&O groundwork on INDstocks.**
+  - New `INDstocksClient` methods: `get_option_chain` (`/market/option-chain`, with IV and
+    Greeks), `get_expiries`, `search_derivatives`, `get_margin` (`/margin`) and
+    `get_derivative_positions`. `get_funds` now also returns the intraday, option-buy,
+    option-sell and futures balances.
+  - New `skopaq/broker/fno.py` maps a name to the INDstocks ids: index or stock underlying,
+    expiries, lot size, option contract, future.
+  - `OrderRequest` gains `lot_size`. It refuses a derivative quantity that is not a whole
+    number of lots, `CNC` on a derivative and `MARGIN` on equity.
+  - `max_lots_per_position` counts lots for derivatives.
+  - The naked-option rule also recognises INDstocks chain symbols
+    (`NIFTY-Aug2026-24450-CE`).
+- **Option chain from INDstocks** on the dashboard, MCP and the strategy selectors. All
+  strikes are kept (ITM and OTM) and each contract carries its `security_id`, Delta and Theta.
+  There is a new `GET /api/dashboard/options/expiries` endpoint.
+- **Portfolio shows F&O positions**, and the Telegram EOD summary includes them.
+- **Telegram `/token`** and a 09:00 IST INDstocks token check, replacing the Kite login
+  reminder. The 09:25 IST scan uses INDstocks quotes.
 
 - **Custom OpenAI-compatible AI gateway** (`SKOPAQ_CUSTOM_LLM_BASE_URL`, `_API_KEY`,
   `_MODEL`, `_JUDGE_MODEL`), e.g. CodeCraft API. When set, every agent role uses it first and
@@ -33,6 +70,12 @@ All notable changes to SkopaqTrader. The format follows
 Moves the vendored TradingAgents from v0.5.1 to **v0.5.2** (upstream commit
 `5eb5085`, 65 commits). No Skopaq-facing behaviour change beyond the notes
 below.
+
+### Changed
+
+- **Brokerage is booked at ₹10 per executed order**, the INDstocks API fee
+  (`INDSTOCKS_BROKERAGE_PER_ORDER_INR`). Live orders were booked at ₹20 and paper orders
+  at ₹5.
 
 ### Breaking
 
@@ -65,6 +108,7 @@ below.
   [`UPSTREAM_CHANGES.md`](UPSTREAM_CHANGES.md) modification 2.
 - Verified against upstream's own suite: 1137 passed, identical to the
   pristine v0.5.2 baseline. Skopaq's `tests/unit`: 1664 passed.
+
 
 ## [0.2.0] — 2026-09-26
 

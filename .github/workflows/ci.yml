@@ -143,7 +143,7 @@ jobs:
         run: |
           docker run --rm skopaqtrader:local status
           docker run --rm skopaqtrader:local version
-          docker run --rm skopaqtrader:local python -c 'import kiteconnect, psycopg2, quantstats, langchain_ollama, langchain_community, telegram.ext'
+          docker run --rm skopaqtrader:local python -c 'import psycopg2, quantstats, langchain_ollama, langchain_community, telegram.ext'
           # no files created by shell redirections (e.g. an unquoted ">=" in a RUN line)
           test -z "$(docker run --rm skopaqtrader:local sh -c 'ls /app | grep "^="' || true)"
 

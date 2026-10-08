@@ -125,8 +125,8 @@ AI-powered options selling analysis. Fetches the option chain, selects the optim
 
 The output includes strike selection, premium, max profit/loss, margin, stop-loss, and win probability estimate.
 
-!!! tip "Requires Kite Connect"
-    Options data comes from Zerodha's option chain API. Login via the Telegram bot (`/login`) or visit `https://skopaq-trader.fly.dev/api/kite/login`.
+!!! tip "Requires the INDstocks token"
+    Options data comes from the INDstocks option chain API (with IV and Greeks). Check the token with `/token` in Telegram or `skopaq token status`; the account needs F&O activated at INDstocks.
 
 ## How Skills Work
 

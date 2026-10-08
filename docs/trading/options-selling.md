@@ -12,11 +12,14 @@ SkopaqTrader includes an AI-powered options selling module that analyzes option 
 
 ## How It Works
 
-The options module (`skopaq/options/`) has three components:
+The options module (`skopaq/options/`) has two components:
 
-1. **Chain Fetcher** (`chain.py`) -- Fetches the full option chain from Kite Connect with calls, puts, strikes, premiums, OI, and volume
-2. **Strategy Selector** (`strategy.py`) -- AI algorithm that picks the optimal strike based on distance from spot, premium yield, liquidity, and risk
-3. **GTT Integration** (`gtt.py`) -- Places automated stop-loss orders on Zerodha
+1. **Chain Fetcher** (`chain.py`) -- Fetches the option chain from INDstocks (`GET /market/option-chain`, expiries from `GET /market/instruments/expiries`) with calls, puts, strikes, premiums, OI, volume, IV and Greeks. Underlyings, expiries, lot sizes and contracts are resolved by `skopaq/broker/fno.py`
+2. **Strategy Selector** (`strategy.py`) -- Picks the optimal strike based on distance from spot, premium yield, liquidity, and risk. It is advisory and places no orders
+
+There is no GTT integration: stop-losses on option positions are not placed automatically (INDstocks smart orders are planned, see [GTT Orders](gtt-orders.md)).
+
+Supported underlyings: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX and F&O stocks.
 
 ### Strike Selection Criteria
 
@@ -63,7 +66,7 @@ Risk Management:
 
 | Tool | Purpose |
 |------|---------|
-| `get_option_chain` | Fetch raw chain data (calls + puts with OI, volume) |
+| `get_option_chain` | Fetch raw chain data from INDstocks (calls + puts with OI, volume) |
 | `suggest_option_trade` | Get AI recommendation with risk metrics |
 
 **Example -- fetch chain manually:**
@@ -103,7 +106,7 @@ Before selling options, check for:
   get_quote(NIFTY)          ← spot price
         │
         ▼
-  get_option_chain(NIFTY)   ← full chain from Kite
+  get_option_chain(NIFTY)   ← chain from INDstocks
         │
         ▼
   suggest_option_trade()    ← AI selects strike
@@ -112,15 +115,15 @@ Before selling options, check for:
   Claude presents risk analysis
         │
         ▼
-  User confirms → place_order()
+  User decides (the selector places nothing)
 ```
 
 ## Prerequisites
 
 Options trading requires:
 
-1. **Kite Connect** -- Login via `/api/kite/login` (options data comes from Zerodha)
-2. **F&O enabled** -- Your Zerodha account must have F&O segment activated
+1. **INDstocks token** -- A valid INDstocks access token (`skopaq token set`; options data comes from INDstocks)
+2. **F&O enabled** -- Your INDstocks account must have the F&O segment activated
 3. **Sufficient margin** -- Options selling requires margin (shown in recommendation)
 
 !!! tip "Start with NIFTY"

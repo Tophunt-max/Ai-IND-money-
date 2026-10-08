@@ -12,7 +12,7 @@ The SkopaqTrader Telegram bot supports both slash commands and natural language 
 | `/pnl` | P&L on open positions | `/pnl` |
 | `/status` | System health check | `/status` |
 | `/analyze SYMBOL` | Quick technical analysis | `/analyze TCS` |
-| `/login` | Send Kite Connect login link | `/login` |
+| `/token` | INDstocks token status | `/token` |
 | `/help` | List all commands | `/help` |
 
 ## Command Details
@@ -29,11 +29,11 @@ Commands:
 /portfolio - Positions & P&L
 /status - System health
 /pnl - Open position P&L
-/login - Connect to Zerodha
+/token - INDstocks token status
 /help - All commands
 
 Scheduled (auto):
-  09:00 IST - Login reminder
+  09:00 IST - Token check
   09:25 IST - Market scan
   15:35 IST - EOD summary
 
@@ -42,7 +42,7 @@ Or just chat naturally - I understand trading questions!
 
 ### /quote SYMBOL
 
-Fetches a real-time quote via Kite Connect (or INDstocks fallback).
+Fetches a real-time quote from INDstocks.
 
 ```
 /quote HDFCBANK
@@ -106,25 +106,25 @@ Runs a quick analysis using gathered data and presents key findings. This is fas
 /analyze INFY
 ```
 
-### /login
+### /token
 
-Sends the Kite Connect OAuth login URL. If already connected, confirms the connection.
-
-```
-/login
-```
-
-Response (not connected):
+Shows whether the INDstocks access token is valid and how long it has left.
 
 ```
-Tap to connect Zerodha:
-https://skopaq-trader.fly.dev/api/kite/login
+/token
 ```
 
-Response (already connected):
+Response (valid):
 
 ```
-Already connected to Zerodha!
+INDstocks token valid (5h 12m left).
+```
+
+Response (missing or expired):
+
+```
+INDstocks token missing or expired.
+Set today's INDstocks token on the dashboard Broker page, or run `skopaq token set <TOKEN>` on the server.
 ```
 
 ## Natural Language Chat
@@ -152,7 +152,6 @@ Beyond user-initiated commands, the bot sends automatic notifications for:
 | Event | Example Message |
 |-------|----------------|
 | Order filled | "BUY 10x RELIANCE @ Rs 2,485 -- FILLED" |
-| GTT triggered | "GTT TRIGGERED: HDFCBANK -- order executed at Rs 1,450" |
 | Position alert | "NEW HIGH: TCS LTP Rs 3,900 (+2.5%)" |
 | Stop warning | "STOP WARNING: INFY approaching stop-loss at Rs 1,400" |
 | Market scan | "Market Scan: RELIANCE +1.5%, HDFCBANK +0.8%..." |

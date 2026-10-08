@@ -11,7 +11,7 @@ Usage::
 
     await notify("Order filled: BUY 1x TCS @ Rs 2,503")
     await notify_trade_event("BUY", "TCS", 2503.0, 1, "FILLED")
-    await notify_gtt_event("PLACED", "HDFCBANK", 756.0, trigger_id=314196971)
+    await notify_gtt_event("PLACED", "HDFCBANK", 756.0, trigger_id="GTT-2914581")
 """
 
 from __future__ import annotations
@@ -140,10 +140,10 @@ async def notify_gtt_event(
     trigger_price: float,
     target_price: float = 0,
     stop_loss_price: float = 0,
-    trigger_id: int = 0,
+    trigger_id: int | str = 0,
     quantity: int = 1,
 ) -> None:
-    """Send a GTT order notification."""
+    """Send a GTT / smart-order notification (INDstocks ``GTT-…`` ids)."""
     emoji = {
         "PLACED": "🎯", "TRIGGERED": "🔔", "CANCELLED": "🚫",
         "EXPIRED": "⏰", "REJECTED": "❌",
@@ -162,9 +162,9 @@ async def notify_gtt_event(
         lines.append(f"ID: {trigger_id}")
 
     if event == "PLACED":
-        lines.append("\nZerodha watches 24/7. You'll be notified when triggered.")
+        lines.append("\nINDstocks holds the trigger. You'll be notified when it fires.")
     elif event == "TRIGGERED":
-        lines.append("\nOrder executed automatically by Zerodha!")
+        lines.append("\nTriggered and sent to the exchange by INDstocks.")
 
     await notify("\n".join(lines))
 

@@ -112,7 +112,7 @@ async def test_filled_on_the_first_poll_reports_the_trades_vwap():   # T1
     assert result.order_ids == ["EQ-1"]
     assert (result.order.order_id, result.order.status) == ("EQ-1", "SUCCESS")
     assert result.remaining_open is False and result.fill_unconfirmed is False
-    assert result.brokerage == 20.0
+    assert result.brokerage == 10.0  # INDstocks ₹10 per order
     assert "cancel_order" not in rig.client.names()
     assert rig.alerts.alerts == []
 
@@ -388,7 +388,7 @@ async def test_resting_exit_is_cancelled_and_replaced_at_a_tick_rounded_limit():
     assert second[1:4] == ("LIMIT", 6, 98.5)                   # floor(99 × 0.995 = 98.505, 0.05)
     assert ("get_ltp", "NSE_11536") in rig.client.calls
     assert result.fill_price == pytest.approx(99.16)          # (4 × 100 + 6 × 98.6) / 10
-    assert result.brokerage == 40.0
+    assert result.brokerage == 20.0  # two filled orders × ₹10
     assert rig.registry.recent_exit_qty("TCS", "11536", 600) == 10
 
 

@@ -1,6 +1,6 @@
 # Live Trading
 
-Going live with SkopaqTrader requires an INDstocks account, safety verification, and careful configuration. Skopaq's own trading pipeline — the daemon, the position monitor, `skopaq trade`, chat — sends live orders to INDstocks only (the MCP server's `place_order` goes to the paper engine). Kite Connect is optional: that pipeline uses it for market data and the Telegram `/login` flow. But once a Kite session exists, the MCP server's advanced-order tools place **real orders on your Zerodha account**, whatever `SKOPAQ_TRADING_MODE` says and outside every check on this page (see [Residual limits](#residual-limits)). Paper mode is always the default.
+Going live with SkopaqTrader requires an INDstocks account, safety verification, and careful configuration. INDstocks is the only broker: the daemon, the position monitor, `skopaq trade` and chat send live orders to INDstocks, through the `SafetyChecker` and the kill switch (the MCP server's `place_order` goes to the paper engine). Paper mode is always the default.
 
 !!! warning "Real Money at Risk"
     Live trading uses real money. Thoroughly test in paper mode first. SkopaqTrader is experimental software -- the authors are not responsible for trading losses.
@@ -13,64 +13,7 @@ Before going live:
 - [ ] INDstocks account with API access; today's token set (`skopaq token set <TOKEN>`, or `SKOPAQ_INDSTOCKS_TOKEN`)
 - [ ] The host's egress IPv4 whitelisted at INDstocks (orders and cancels are refused from any other IP; see the [Mac mini runbook](../deployment/mac-mini.md) §3)
 - [ ] All unit tests passing (`python3 -m pytest tests/unit/ -x -q`)
-- [ ] Optional: Kite Connect credentials (market data and the Telegram login for Skopaq's pipeline). A connected Kite session also lets the MCP server's Kite order tools trade that Zerodha account for real: see [Residual limits](#residual-limits)
-
-## Kite Connect Setup (optional)
-
-!!! warning "A Kite session lets the MCP server trade your Zerodha account"
-    Skopaq's pipeline only reads market data from Kite. The MCP server's Kite tools (`place_amo_order`, `place_bracket`, `place_cover`, `place_basket`, `buy_option_contract`, `trade_future`, `invest_mutual_fund`, `place_gtt_order`, `setup_swing_trade`) place real Zerodha orders as soon as a session exists, even in paper mode and without the safety rules. Connect a funded account only if you want that.
-
-### 1. Get API Credentials
-
-1. Go to [Kite Connect Developer Console](https://developers.kite.trade/)
-2. Create a new app
-3. Note your **API Key** and **API Secret**
-4. Set the redirect URL to your deployment URL + `/api/kite/callback`
-
-### 2. Configure Environment
-
-Add to your `.env`:
-
-```bash
-SKOPAQ_KITE_API_KEY=your_api_key
-SKOPAQ_KITE_API_SECRET=your_api_secret
-```
-
-### 3. OAuth Login Flow
-
-The login flow happens daily (Kite tokens expire at end of day):
-
-```
-User → /api/kite/login → Zerodha Login Page → /api/kite/callback
-                                                     │
-                                                     ▼
-                                              Access token stored
-                                              (memory + /data file)
-```
-
-**Via Telegram:**
-
-```
-/login
-```
-
-The bot sends a login link. After login, the token is stored and persisted.
-
-**Via browser:**
-
-Visit `https://your-deployment.fly.dev/api/kite/login`
-
-### 4. Verify Connection
-
-```
-/status
-```
-
-Or check the API:
-
-```
-GET /api/kite/status
-```
+- [ ] For F&O: the account activated for NSE F&O (`is_nse_fno_onboarded` in `GET /user/profile`)
 
 ## Switching to Live Mode
 
@@ -170,7 +113,7 @@ sellable = holdings + CNC positions
 - **The order book is read first**, then positions, then holdings. An order that fills between the reads is then counted twice (which only understates what can be sold), never zero times.
 - **If the order book cannot be read, the SELL is refused** (after one retry) with a CRITICAL `sell-refused:<symbol>:book-unreadable` alert, at most one per symbol every 10 minutes. Holdings that cannot be read count as none; a SELL refused because of that says so (`sell-refused:<symbol>:holdings-unreadable`, CRITICAL), never "only 0 held". Without the book Skopaq cannot see open SELLs, and selling shares that are already being sold makes a short delivery, settled through the exchange's auction at a penalty; a delayed exit is the smaller risk. The monitor tries again on its next cycle.
 - `SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK=true` lets such a SELL through without counting open orders. It is not recommended: it is logged at CRITICAL when the order router starts and on every use, and a CRITICAL `sell-without-book` alert is sent at most once per symbol every 10 minutes.
-- **One SELL per symbol at a time.** A per-symbol lock (`~/.skopaq/locks/sell-<SYMBOL>.lock`) is held from the order-book read until the SELL is final, across the daemon, `skopaq monitor`, `skopaq trade` and chat on the same host. (The MCP server's `place_order` has no live INDstocks client: it goes to the paper engine and takes no lock. Its Kite order tools are outside all of this: see [Residual limits](#residual-limits).) A second SELL of the same symbol waits, then is refused ("Another Skopaq process is already selling …").
+- **One SELL per symbol at a time.** A per-symbol lock (`~/.skopaq/locks/sell-<SYMBOL>.lock`) is held from the order-book read until the SELL is final, across the daemon, `skopaq monitor`, `skopaq trade` and chat on the same host. (The MCP server's `place_order` has no live INDstocks client: it goes to the paper engine and takes no lock.) A second SELL of the same symbol waits, then is refused ("Another Skopaq process is already selling …").
 - A refused live SELL sends a `sell-refused` alert (CRITICAL for a protective exit). When the monitor or CLOSING finds a needed exit blocked by someone else's open SELL, it sends a CRITICAL `exit-blocked` alert: cancel the listed order at the broker if you do not want to keep it.
 
 Paper mode checks holdings and positions as before.
@@ -188,7 +131,6 @@ Paper mode checks holdings and positions as before.
 
 - An unconfirmed order (stuck, uncertain or interrupted) needs a manual check of the broker's order book; the alert names it.
 - A sustained order-book outage near 15:30 refuses SELLs and can carry shares overnight (with CRITICAL alerts).
-- **The MCP server can place real Zerodha orders.** Once a Kite session exists (the compose `mcp` container reads it from `/data`; the native server fetches it through `SKOPAQ_API_BASE_URL`), the MCP tools `place_amo_order`, `place_bracket`, `place_cover`, `place_basket`, `buy_option_contract`, `trade_future`, `invest_mutual_fund`, `place_gtt_order` and `setup_swing_trade` place real orders on the Zerodha account through Kite, whatever `SKOPAQ_TRADING_MODE` says. They bypass the `SafetyChecker` (the safety rules and the kill switch), the no-short-sale check, the SELL locks and the order journal, and Skopaq neither confirms nor books their fills. The repo's `.claude/settings.json` does not auto-allow them, so Claude Code asks before each call (unless permissions are bypassed); leave Kite unconnected on a host where they should not trade.
 - The per-symbol and per-order locks cover processes on this host only (the compose containers share them). A live Skopaq process on another machine would be guarded by the order-book check alone. (The MCP server's `place_order`, native or in its container, has no live INDstocks client: it goes to the paper engine.)
 - An order that only looks like an uncertain placement is never cancelled by Skopaq: if it is Skopaq's and should not stay, cancel it at the INDstocks order book (the `placement-match` alert names it).
 - Some API details are still unverified (how positions and holdings split T1 shares, the unit of the instruments' tick size, which order lookup path works): see [INDstocks API](../indstocks_api.md#to-verify-live).
@@ -298,6 +240,5 @@ If something goes wrong:
 1. **Halt new BUYs everywhere**: `skopaq halt "reason"`, Telegram `/halt`, the MCP `halt_trading` tool, or `SKOPAQ_TRADING_HALTED=true`. Every BUY is refused while it is on (the daemon skips scanning and trading); exits and the monitor keep running, so open positions stay protected. `skopaq resume` (or `/resume`) lifts it.
 2. **Stop live sessions altogether**: dashboard → Settings → ⚙️ Environment → **Switch to PAPER** (the scheduler uses it from its next session, without a restart), or set `SKOPAQ_SCHEDULER_MODE=paper` and recreate the scheduler (`docker compose up -d scheduler`). A dashboard override wins over `ENV_FILE`, so if one is set, change it there. The scheduler launches its sessions with `daemon --once --live` from that setting, so `SKOPAQ_TRADING_MODE` alone does not stop them. Recreating it stops a session that is running (its CLOSING sells what it holds; see [Mac mini](../deployment/mac-mini.md)), and during a recovery `skopaq monitor` it leaves positions unmanaged until the scheduler is back, so prefer a moment when nothing is held.
 3. **INDstocks**: Cancel open orders directly in the INDstocks order book (web/app); every order alert names the order ids.
-4. **Zerodha (Kite)**: the MCP server's Kite order tools are not stopped by any of the above; cancel their orders in Kite, and log the Kite session out if they should not trade.
 
 Nothing shuts the daemon down by itself when the broker API keeps failing: `auto_shutdown_on_api_failure_minutes` is declared in `SafetyRules` but not enforced. A failed broker read keeps the last known state (positions are never dropped on it), failed or unconfirmed orders are alerted, and a SELL whose order book cannot be read is refused; use the kill switch above to stop new BUYs.

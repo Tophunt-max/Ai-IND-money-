@@ -108,7 +108,7 @@ You can use both modes in a single session:
 4. Execute with `/trade SYMBOL` (Claude-native) for the actual order
 
 !!! tip "Data gathering is shared"
-    Both modes use the same underlying data sources (INDstocks, Kite Connect, yfinance). The difference is only in who reasons over the data -- multiple specialized LLMs or a single Claude instance.
+    Both modes use the same underlying data sources (INDstocks, yfinance). The difference is only in who reasons over the data -- multiple specialized LLMs or a single Claude instance.
 
 ## Configuration
 

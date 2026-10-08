@@ -1,11 +1,10 @@
 "use client";
 
-import { Banknote, Landmark, PiggyBank, PlugZap, RefreshCw, Target, Wallet } from "lucide-react";
+import { Banknote, Landmark, Layers, PlugZap, RefreshCw, Target, Wallet } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
 
 import {
-  Badge, Button, Card, Empty, ErrorBox, Notice, PageTitle, pnlClass, Segmented, Skeleton, StatCard, Table,
+  Badge, Button, Card, Empty, ErrorBox, Notice, PageTitle, pnlClass, Skeleton, StatCard, Table,
 } from "@/components/ui";
 import { inr, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -18,6 +17,7 @@ interface BrokerBook {
   error?: string;
   errors?: Record<string, string>;
   positions?: Row[];
+  fno_positions?: Row[];
   holdings?: Row[];
   funds?: Row | null;
   orders?: Row[];
@@ -26,13 +26,12 @@ interface BrokerBook {
 interface Portfolio {
   mode: string;
   indstocks: BrokerBook;
-  kite: BrokerBook;
   fetched_at: string;
 }
 
 const num = (v: any) => (v == null || v === "" ? null : Number(v));
 
-/** INDstocks and Kite order rows have different keys. */
+/** INDstocks order rows (a few alternate key names accepted). */
 function order(o: Row) {
   return {
     id: o.order_id ?? o.id ?? "",
@@ -53,10 +52,28 @@ function statusTone(s: string) {
   return "warning" as const;
 }
 
-function Book({ book, broker }: { book: BrokerBook; broker: "INDstocks" | "Kite" }) {
+function PositionsTable({ rows, empty }: { rows: Row[]; empty: string }) {
+  if (rows.length === 0) return <Empty>{empty}</Empty>;
+  return (
+    <Table head={["Symbol", "Qty", "Avg", "LTP", "P&L", "Day P&L"]}>
+      {rows.map((p, i) => (
+        <tr key={i} className="hover:bg-white/[0.02]">
+          <td><div className="font-medium text-white">{p.symbol}</div><div className="text-[11px] text-gray-500">{p.exchange} · {p.product}</div></td>
+          <td>{num(p.quantity)}</td>
+          <td>{inr(num(p.average_price))}</td>
+          <td>{inr(num(p.last_price))}</td>
+          <td className={pnlClass(num(p.pnl))}>{inr(num(p.pnl))}</td>
+          <td className={pnlClass(num(p.day_pnl))}>{inr(num(p.day_pnl))}</td>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
+function Book({ book }: { book: BrokerBook }) {
   if (!book.available) {
     return (
-      <Notice tone="warning" icon={PlugZap} title={`${broker} not available`}
+      <Notice tone="warning" icon={PlugZap} title="INDstocks not available"
         action={<Link href="/broker" className="text-sm font-medium underline">Connect</Link>}>
         {book.error}
       </Notice>
@@ -64,11 +81,12 @@ function Book({ book, broker }: { book: BrokerBook; broker: "INDstocks" | "Kite"
   }
   const f = book.funds;
   const positions = book.positions || [];
+  const fno = book.fno_positions || [];
   const holdings = book.holdings || [];
   const orders = (book.orders || []).map(order);
   const holdingValue = holdings.reduce((s, h) => s + (num(h.last_price) || 0) * (num(h.quantity) || 0), 0);
   const holdingPnl = holdings.reduce((s, h) => s + (num(h.pnl) || 0), 0);
-  const posPnl = positions.reduce((s, p) => s + (num(p.pnl) || 0), 0);
+  const posPnl = [...positions, ...fno].reduce((s, p) => s + (num(p.pnl) || 0), 0);
   const errors = Object.entries(book.errors || {});
 
   return (
@@ -81,33 +99,24 @@ function Book({ book, broker }: { book: BrokerBook; broker: "INDstocks" | "Kite"
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Available cash" icon={Banknote} tone="info" value={inr(num(f?.available_cash))}
           detail={f?.available_margin != null ? `Margin ${inr(num(f.available_margin))}` : undefined} />
-        <StatCard title="Used margin" icon={PiggyBank} value={inr(num(f?.used_margin))}
-          detail={f?.total_collateral ? `Collateral ${inr(num(f.total_collateral))}` : undefined} />
+        <StatCard title="F&O balance" icon={Layers} value={inr(num(f?.option_buy_available))}
+          detail={`Option buy · futures ${inr(num(f?.futures_available))} · intraday ${inr(num(f?.intraday_available))}`} />
         <StatCard title="Holdings value" icon={Landmark} value={inr(holdingValue)}
           detail={<span className={pnlClass(holdingPnl)}>P&L {inr(holdingPnl)}</span>} tone={holdingPnl >= 0 ? "ok" : "error"} />
         <StatCard title="Positions P&L" icon={Target} value={<span className={pnlClass(posPnl)}>{inr(posPnl)}</span>}
-          detail={`${positions.length} open`} tone={posPnl === 0 ? "neutral" : posPnl > 0 ? "ok" : "error"} />
+          detail={`${positions.length} equity · ${fno.length} F&O`} tone={posPnl === 0 ? "neutral" : posPnl > 0 ? "ok" : "error"} />
       </div>
 
-      <Card title="Positions" subtitle="Today's intraday and carry-forward positions">
-        {positions.length === 0 ? <Empty>No open positions at {broker}.</Empty> : (
-          <Table head={["Symbol", "Qty", "Avg", "LTP", "P&L", "Day P&L"]}>
-            {positions.map((p, i) => (
-              <tr key={i} className="hover:bg-white/[0.02]">
-                <td><div className="font-medium text-white">{p.symbol}</div><div className="text-[11px] text-gray-500">{p.exchange} · {p.product}</div></td>
-                <td>{num(p.quantity)}</td>
-                <td>{inr(num(p.average_price))}</td>
-                <td>{inr(num(p.last_price))}</td>
-                <td className={pnlClass(num(p.pnl))}>{inr(num(p.pnl))}</td>
-                <td className={pnlClass(num(p.day_pnl))}>{inr(num(p.day_pnl))}</td>
-              </tr>
-            ))}
-          </Table>
-        )}
+      <Card title="Equity positions" subtitle="Today's delivery (CNC) and intraday positions">
+        <PositionsTable rows={positions} empty="No equity positions today." />
+      </Card>
+
+      <Card title="F&O positions" subtitle="Futures and options: carry forward (MARGIN) and intraday">
+        <PositionsTable rows={fno} empty="No F&O positions today." />
       </Card>
 
       <Card title="Holdings" subtitle="Delivery (CNC) shares in your demat">
-        {holdings.length === 0 ? <Empty>No holdings at {broker}.</Empty> : (
+        {holdings.length === 0 ? <Empty>No holdings.</Empty> : (
           <Table head={["Symbol", "Qty", "Avg", "LTP", "P&L", "Today"]}>
             {holdings.map((h, i) => (
               <tr key={i} className="hover:bg-white/[0.02]">
@@ -140,55 +149,6 @@ function Book({ book, broker }: { book: BrokerBook; broker: "INDstocks" | "Kite"
         )}
       </Card>
 
-      {broker === "Kite" && <KiteExtras />}
-    </div>
-  );
-}
-
-function KiteExtras() {
-  const mf = useApi<{ holdings: Row[]; sips: Row[] }>("/api/dashboard/kite/mutual-funds");
-  const gtt = useApi<{ gtts: Row[] }>("/api/dashboard/kite/gtt");
-  return (
-    <div className="grid gap-5 lg:grid-cols-2">
-      <Card title="Mutual funds" subtitle="Holdings and SIPs at Zerodha Coin">
-        <ErrorBox error={mf.error} />
-        {mf.loading && !mf.data ? <Skeleton className="h-20" /> : mf.data && (
-          mf.data.holdings.length + mf.data.sips.length === 0 ? <Empty>No mutual funds or SIPs.</Empty> : (
-            <div className="space-y-3">
-              {mf.data.holdings.map((h, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0"><div className="truncate text-gray-200">{h.fund}</div><div className="num text-xs text-gray-500">{h.units} units @ {inr(num(h.avg_price))}</div></div>
-                  <div className={`num shrink-0 font-medium ${pnlClass(num(h.pnl))}`}>{inr(num(h.pnl))}</div>
-                </div>
-              ))}
-              {mf.data.sips.map((s, i) => (
-                <div key={`s${i}`} className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0"><div className="truncate text-gray-200">{s.fund}</div><div className="text-xs text-gray-500">SIP {inr(num(s.amount), 0)} · {s.frequency} · next {s.next_date || "—"}</div></div>
-                  <Badge tone={s.status === "ACTIVE" ? "ok" : "neutral"}>{s.status}</Badge>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </Card>
-      <Card title="GTT orders" subtitle="Good-till-triggered orders at Kite">
-        <ErrorBox error={gtt.error} />
-        {gtt.loading && !gtt.data ? <Skeleton className="h-20" /> : gtt.data && (
-          gtt.data.gtts.length === 0 ? <Empty>No GTT orders.</Empty> : (
-            <div className="divide-y divide-white/[0.04]">
-              {gtt.data.gtts.map((g, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                  <div>
-                    <div className="font-medium text-gray-200">{g.condition?.tradingsymbol || "—"}</div>
-                    <div className="num text-xs text-gray-500">{g.type} · trigger {(g.condition?.trigger_values || []).map((v: number) => inr(v)).join(" / ")}</div>
-                  </div>
-                  <Badge tone={g.status === "active" ? "ok" : "neutral"}>{g.status}</Badge>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </Card>
     </div>
   );
 }
@@ -196,28 +156,21 @@ function KiteExtras() {
 export default function PortfolioPage() {
   const open = useMarketOpen();
   const { data, error, loading, reload } = useApi<Portfolio>("/api/dashboard/portfolio", open ? 15000 : 60000);
-  const [broker, setBroker] = useState<"indstocks" | "kite">("indstocks");
 
   return (
     <div className="space-y-6">
       <PageTitle
         title="Portfolio"
         icon={Wallet}
-        subtitle={data ? `Live from your brokers · updated ${when(data.fetched_at)}` : "Live from your brokers"}
+        subtitle={data ? `Live from INDstocks · updated ${when(data.fetched_at)}` : "Live from INDstocks"}
         right={<Button variant="ghost" icon={RefreshCw} onClick={reload} loading={loading && !!data}>Refresh</Button>}
       />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Segmented value={broker} onChange={setBroker} options={[
-          { value: "indstocks", label: <span className="flex items-center gap-2">INDstocks {data && <span className={`h-1.5 w-1.5 rounded-full ${data.indstocks.available ? "bg-emerald-400" : "bg-gray-600"}`} />}</span> },
-          { value: "kite", label: <span className="flex items-center gap-2">Zerodha Kite {data && <span className={`h-1.5 w-1.5 rounded-full ${data.kite.available ? "bg-emerald-400" : "bg-gray-600"}`} />}</span> },
-        ]} />
-        <span className="text-xs text-gray-500">Read only: orders are placed by the safety-checked pipeline only.</span>
-      </div>
+      <p className="text-xs text-gray-500">Read only: orders are placed by the safety-checked pipeline only.</p>
       <ErrorBox error={error} />
       {loading && !data ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-24" />)}</div>
       ) : data ? (
-        <Book key={broker} book={data[broker]} broker={broker === "kite" ? "Kite" : "INDstocks"} />
+        <Book book={data.indstocks} />
       ) : null}
     </div>
   );

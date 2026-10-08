@@ -75,32 +75,6 @@ def _get_router():
 # ── Market Data Tools ────────────────────────────────────────────────────────
 
 
-def _get_kite():
-    """Return a connected KiteClient if available.
-
-    Always reads the latest token from file/API — never caches stale tokens.
-    This ensures the MCP server (long-running process) picks up new tokens
-    after daily Kite login without restart.
-    """
-    try:
-        from skopaq.broker.kite_client import KiteClient
-        import skopaq.broker.kite_client as _kmod
-
-        # Force re-read from file/API every time (don't trust memory cache)
-        _kmod._access_token = ""  # Clear memory cache
-
-        from skopaq.broker.kite_client import get_access_token
-        token = get_access_token()
-        if not token:
-            return None
-        config = _get_config()
-        if not config.kite_api_key:
-            return None
-        return KiteClient(api_key=config.kite_api_key, access_token=token)
-    except Exception:
-        return None
-
-
 @mcp.tool()
 async def get_quote(symbol: str) -> str:
     """Get a real-time market quote for a stock symbol.
@@ -112,19 +86,14 @@ async def get_quote(symbol: str) -> str:
     """
     config = _get_config()
 
-    # Try Kite Connect first (no IP whitelist issues)
-    kite = _get_kite()
-    if kite:
-        q = await kite.get_quote(f"NSE:{symbol}", symbol=symbol)
-    else:
-        from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.scrip_resolver import resolve_scrip_code
-        from skopaq.broker.token_manager import TokenManager
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.scrip_resolver import resolve_scrip_code
+    from skopaq.broker.token_manager import TokenManager
 
-        token_mgr = TokenManager()
-        async with INDstocksClient(config, token_mgr) as client:
-            scrip_code = await resolve_scrip_code(client, symbol)
-            q = await client.get_quote(scrip_code, symbol=symbol)
+    token_mgr = TokenManager()
+    async with INDstocksClient(config, token_mgr) as client:
+        scrip_code = await resolve_scrip_code(client, symbol)
+        q = await client.get_quote(scrip_code, symbol=symbol)
 
     return json.dumps({
         "symbol": q.symbol,
@@ -193,12 +162,8 @@ async def get_historical(
 @mcp.tool()
 async def get_positions() -> str:
     """Get open positions with P&L."""
-    kite = _get_kite()
-    if kite:
-        positions = await kite.get_positions()
-    else:
-        router = _get_router()
-        positions = await router.get_positions()
+    router = _get_router()
+    positions = await router.get_positions()
     return json.dumps([
         {
             "symbol": p.symbol,
@@ -215,12 +180,8 @@ async def get_positions() -> str:
 @mcp.tool()
 async def get_holdings() -> str:
     """Get delivery holdings."""
-    kite = _get_kite()
-    if kite:
-        holdings = await kite.get_holdings()
-    else:
-        router = _get_router()
-        holdings = await router.get_holdings()
+    router = _get_router()
+    holdings = await router.get_holdings()
     return json.dumps([
         {
             "symbol": h.symbol,
@@ -236,12 +197,8 @@ async def get_holdings() -> str:
 @mcp.tool()
 async def get_funds() -> str:
     """Get available cash, margin, and collateral."""
-    kite = _get_kite()
-    if kite:
-        funds = await kite.get_funds()
-    else:
-        router = _get_router()
-        funds = await router.get_funds()
+    router = _get_router()
+    funds = await router.get_funds()
     return json.dumps({
         "available_cash": funds.available_cash,
         "used_margin": funds.used_margin,
@@ -721,14 +678,10 @@ async def get_option_chain(
         symbol: Underlying (NIFTY, BANKNIFTY, RELIANCE, etc.)
         expiry_index: 0 = nearest expiry, 1 = next week, etc.
     """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected. Login first."})
-
     try:
-        from skopaq.options.chain import fetch_option_chain
+        from skopaq.options.chain import load_option_chain
 
-        chain = await fetch_option_chain(kite, symbol, expiry_index)
+        chain = await load_option_chain(symbol, expiry_index, config=_get_config())
 
         return json.dumps({
             "symbol": chain.symbol,
@@ -779,12 +732,8 @@ async def suggest_option_trade(
         strategy: SHORT_PUT, SHORT_CALL, or SHORT_STRANGLE
         expiry_index: 0 = nearest expiry, 1 = next week
     """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected. Login first."})
-
     try:
-        from skopaq.options.chain import fetch_option_chain
+        from skopaq.options.chain import load_option_chain
         from skopaq.options.strategy import (
             select_short_put,
             select_short_call,
@@ -792,7 +741,7 @@ async def suggest_option_trade(
             format_trade_for_telegram,
         )
 
-        chain = await fetch_option_chain(kite, symbol, expiry_index)
+        chain = await load_option_chain(symbol, expiry_index, config=_get_config())
 
         if strategy == "SHORT_PUT":
             trade = select_short_put(chain)
@@ -810,423 +759,6 @@ async def suggest_option_trade(
 
     except Exception as exc:
         logger.exception("Option trade suggestion failed")
-        return json.dumps({"error": str(exc)})
-
-
-# ── GTT (Good Till Triggered) Orders ─────────────────────────────────────────
-
-
-@mcp.tool()
-async def place_gtt_order(
-    symbol: str,
-    action: str = "BUY",
-    trigger_price: float = 0,
-    target_price: float = 0,
-    stop_loss_price: float = 0,
-    quantity: int = 1,
-) -> str:
-    """Place a GTT order that triggers automatically when the price is hit.
-
-    For BUY: single trigger — executes when price drops to trigger_price (buy at support).
-    For SELL with target + stop_loss: OCO order — whichever hits first executes.
-
-    GTT orders live on Zerodha's server — zero monitoring needed.
-
-    Args:
-        symbol: Stock symbol (e.g., RELIANCE).
-        action: BUY or SELL.
-        trigger_price: Price at which to trigger (for single-trigger BUY).
-        target_price: Upper sell trigger (for OCO SELL).
-        stop_loss_price: Lower sell trigger (for OCO SELL).
-        quantity: Number of shares.
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.options.gtt import place_gtt_buy, place_gtt_oco_sell
-
-        if action.upper() == "BUY" and trigger_price > 0:
-            result = await place_gtt_buy(
-                kite, symbol, trigger_price, trigger_price, quantity,
-            )
-            return json.dumps({
-                "success": True,
-                "type": "GTT_BUY",
-                "symbol": symbol,
-                "trigger": trigger_price,
-                "quantity": quantity,
-                "gtt_id": result.get("trigger_id", ""),
-                "message": f"GTT BUY set: buy {quantity}x {symbol} when price hits Rs {trigger_price}",
-            })
-
-        elif action.upper() == "SELL" and target_price > 0 and stop_loss_price > 0:
-            result = await place_gtt_oco_sell(
-                kite, symbol, target_price, stop_loss_price, quantity,
-            )
-            return json.dumps({
-                "success": True,
-                "type": "GTT_OCO_SELL",
-                "symbol": symbol,
-                "target": target_price,
-                "stop_loss": stop_loss_price,
-                "quantity": quantity,
-                "gtt_id": result.get("trigger_id", ""),
-                "message": (
-                    f"GTT OCO SELL set: sell {quantity}x {symbol} at "
-                    f"Rs {target_price} (target) or Rs {stop_loss_price} (stop-loss)"
-                ),
-            })
-        else:
-            return json.dumps({
-                "error": "For BUY: provide trigger_price. For SELL: provide target_price + stop_loss_price.",
-            })
-
-    except Exception as exc:
-        logger.exception("GTT order failed")
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def list_gtt_orders() -> str:
-    """List all active GTT (Good Till Triggered) orders."""
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.options.gtt import list_gtts, format_gtt_for_telegram
-
-        gtts = await list_gtts(kite)
-        if not gtts:
-            return "No active GTT orders."
-
-        lines = [f"Active GTT Orders ({len(gtts)})\n"]
-        for g in gtts:
-            lines.append(format_gtt_for_telegram(g))
-            lines.append("")
-
-        return "\n".join(lines)
-
-    except Exception as exc:
-        logger.exception("List GTT failed")
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def setup_swing_trade(
-    symbol: str,
-    entry_price: float,
-    target_price: float,
-    stop_loss_price: float,
-    quantity: int = 1,
-) -> str:
-    """Set up a complete CNC swing trade with automated exit via GTT.
-
-    Places a GTT BUY at the entry price, then after fill, sets up a
-    GTT OCO SELL with target + stop-loss. Fully automated — zero monitoring.
-
-    Args:
-        symbol: Stock symbol.
-        entry_price: Buy trigger price (support level).
-        target_price: Sell target price (resistance level).
-        stop_loss_price: Stop-loss price.
-        quantity: Number of shares.
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.options.gtt import place_gtt_buy
-
-        # Step 1: Place GTT BUY at entry
-        buy_result = await place_gtt_buy(
-            kite, symbol, entry_price, entry_price, quantity,
-        )
-
-        risk = entry_price - stop_loss_price
-        reward = target_price - entry_price
-        rr = reward / risk if risk > 0 else 0
-
-        return json.dumps({
-            "success": True,
-            "type": "SWING_TRADE_SETUP",
-            "symbol": symbol,
-            "entry": entry_price,
-            "target": target_price,
-            "stop_loss": stop_loss_price,
-            "quantity": quantity,
-            "risk_reward": f"1:{rr:.1f}",
-            "buy_gtt_id": buy_result.get("trigger_id", ""),
-            "message": (
-                f"Swing trade set for {symbol}:\n"
-                f"  BUY trigger: Rs {entry_price:,.2f} (GTT active)\n"
-                f"  Target: Rs {target_price:,.2f} (+{((target_price-entry_price)/entry_price)*100:.1f}%)\n"
-                f"  Stop Loss: Rs {stop_loss_price:,.2f} (-{((entry_price-stop_loss_price)/entry_price)*100:.1f}%)\n"
-                f"  R:R = 1:{rr:.1f}\n\n"
-                f"After BUY fills, set OCO SELL via: "
-                f"place_gtt_order SELL {symbol} target={target_price} stop_loss={stop_loss_price}"
-            ),
-        })
-
-    except Exception as exc:
-        logger.exception("Swing trade setup failed")
-        return json.dumps({"error": str(exc)})
-
-
-# ── Advanced Order Types ─────────────────────────────────────────────────────
-
-
-@mcp.tool()
-async def place_amo_order(
-    symbol: str,
-    side: str = "BUY",
-    quantity: int = 1,
-    price: float = 0,
-) -> str:
-    """Place an After Market Order — executes at next day's open (9:15 AM).
-
-    Can be placed between 3:30 PM and 9:00 AM. Perfect for evening analysis.
-
-    Args:
-        symbol: Stock symbol (e.g., RELIANCE).
-        side: BUY or SELL.
-        quantity: Number of shares.
-        price: Limit price.
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.trading.advanced_orders import place_amo
-
-        result = await place_amo(kite, symbol, side, quantity, price)
-        return json.dumps({"success": True, **result,
-            "message": f"AMO {side} {quantity}x {symbol} @ Rs {price} — executes at 9:15 AM"})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def place_bracket(
-    symbol: str,
-    side: str = "BUY",
-    quantity: int = 1,
-    price: float = 0,
-    stoploss_points: float = 10,
-    target_points: float = 20,
-    trailing_sl: float = 0,
-) -> str:
-    """Place a Bracket Order — entry + target + stop-loss in one order (intraday).
-
-    All three legs managed by exchange. Auto-squared at 3:20 PM.
-
-    Args:
-        symbol: Stock symbol.
-        side: BUY or SELL.
-        quantity: Number of shares.
-        price: Entry limit price.
-        stoploss_points: Stop-loss distance in points from entry.
-        target_points: Target distance in points from entry.
-        trailing_sl: Trailing stop-loss distance (0 = disabled).
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.trading.advanced_orders import place_bracket_order
-
-        result = await place_bracket_order(
-            kite, symbol, side, quantity, price,
-            stoploss_points, target_points, trailing_sl,
-        )
-        return json.dumps({"success": True, **result})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def place_cover(
-    symbol: str,
-    side: str = "BUY",
-    quantity: int = 1,
-    price: float = 0,
-    stoploss_price: float = 0,
-) -> str:
-    """Place a Cover Order — entry + mandatory stop-loss (intraday, reduced margin).
-
-    Args:
-        symbol: Stock symbol.
-        side: BUY or SELL.
-        quantity: Number of shares.
-        price: Entry limit price.
-        stoploss_price: Stop-loss trigger price (absolute).
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.trading.advanced_orders import place_cover_order
-
-        result = await place_cover_order(kite, symbol, side, quantity, price, stoploss_price)
-        return json.dumps({"success": True, **result})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def place_basket(orders_json: str) -> str:
-    """Place multiple orders as a basket — execute the scanner's top picks at once.
-
-    Args:
-        orders_json: JSON array of orders, each with: symbol, side, quantity, price.
-            Example: [{"symbol":"TCS","side":"BUY","quantity":1,"price":2500}]
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        orders = json.loads(orders_json)
-        from skopaq.trading.advanced_orders import place_basket_orders
-
-        results = await place_basket_orders(kite, orders)
-        return json.dumps({"success": True, "orders": results})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def buy_option_contract(
-    tradingsymbol: str,
-    quantity: int = 1,
-    price: float = 0,
-) -> str:
-    """Buy an option contract for directional trades (defined risk = premium paid).
-
-    Use get_option_chain first to find the right contract.
-
-    Args:
-        tradingsymbol: Full option symbol (e.g., NIFTY2641323200CE).
-        quantity: Number of lots x lot_size.
-        price: Limit price (0 = market).
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.trading.advanced_orders import buy_option
-
-        result = await buy_option(kite, tradingsymbol, quantity, price)
-        return json.dumps({"success": True, **result})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def trade_future(
-    tradingsymbol: str,
-    side: str = "BUY",
-    quantity: int = 1,
-    price: float = 0,
-) -> str:
-    """Trade futures contracts (NIFTY/BANKNIFTY/stock futures).
-
-    Args:
-        tradingsymbol: Futures symbol (e.g., NIFTY26APRFUT).
-        side: BUY or SELL.
-        quantity: Number of lots x lot_size.
-        price: Limit price (0 = market).
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.trading.advanced_orders import trade_futures
-
-        result = await trade_futures(kite, tradingsymbol, side, quantity, price)
-        return json.dumps({"success": True, **result})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def invest_mutual_fund(
-    tradingsymbol: str,
-    amount: float,
-    sip: bool = False,
-    frequency: str = "monthly",
-) -> str:
-    """Invest in mutual funds — lumpsum or SIP.
-
-    Args:
-        tradingsymbol: MF tradingsymbol (e.g., INF846K01DP8).
-        amount: Investment amount in INR.
-        sip: True for SIP, False for lumpsum.
-        frequency: SIP frequency (monthly, weekly) — only for SIP.
-    """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        if sip:
-            from skopaq.trading.advanced_orders import place_mf_sip
-
-            result = await place_mf_sip(kite, tradingsymbol, amount, frequency)
-        else:
-            from skopaq.trading.advanced_orders import place_mf_order
-
-            result = await place_mf_order(kite, tradingsymbol, amount)
-
-        return json.dumps({"success": True, **result})
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
-@mcp.tool()
-async def list_mutual_funds() -> str:
-    """List mutual fund holdings and active SIPs."""
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
-    try:
-        from skopaq.trading.advanced_orders import list_mf_holdings, list_mf_sips
-
-        holdings = await list_mf_holdings(kite)
-        sips = await list_mf_sips(kite)
-
-        return json.dumps({
-            "holdings": [
-                {
-                    "fund": h.get("tradingsymbol", ""),
-                    "units": h.get("quantity", 0),
-                    "avg_price": h.get("average_price", 0),
-                    "ltp": h.get("last_price", 0),
-                    "pnl": h.get("pnl", 0),
-                }
-                for h in holdings
-            ],
-            "sips": [
-                {
-                    "fund": s.get("tradingsymbol", ""),
-                    "amount": s.get("instalment_amount", 0),
-                    "frequency": s.get("frequency", ""),
-                    "status": s.get("status", ""),
-                    "next_date": str(s.get("next_instalment_date", "")),
-                }
-                for s in sips
-            ],
-        })
-    except Exception as exc:
         return json.dumps({"error": str(exc)})
 
 

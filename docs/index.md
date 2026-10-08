@@ -10,12 +10,11 @@ SkopaqTrader is an open-source AI trading platform that combines a 15-agent anal
 
 | Feature | Description |
 |---------|-------------|
-| **Claude Code Native** | 23 MCP tools + 6 custom skills — trade directly from Claude Code |
+| **Claude Code Native** | 29 MCP tools + 6 custom skills — trade directly from Claude Code |
 | **15-Agent Pipeline** | 4 analysts, bull/bear debate, risk debate, trader — all perspectives before every trade |
 | **Zero Extra LLM Cost** | Claude Code IS the analyst — no separate API calls needed |
 | **Telegram Bot** | AI chatbot on your phone with scheduled scans and alerts |
 | **Options Selling** | AI selects optimal OTM strikes with win probability and Greeks |
-| **GTT Orders** | Set-and-forget trades — Zerodha watches 24/7 |
 | **Auto-Notifications** | Every trade event fires Telegram alerts automatically |
 | **Ollama Fallback** | Works offline with local models on Apple Silicon |
 | **Docker Ready** | One image, 10 services — `docker compose up` |
@@ -41,7 +40,7 @@ docker run -it --env-file .env samuelvinay91/skopaq chat
 ```
 User → Claude Code / Telegram / CLI
   ↓
-MCP Server (23 tools)
+MCP Server (29 tools)
   ↓
 ┌─────────────────────────────────┐
 │ Analysis Pipeline               │
@@ -52,7 +51,7 @@ MCP Server (23 tools)
   ↓
 Safety Checker → Order Router
   ↓
-Kite Connect / INDstocks / Paper Engine
+INDstocks / Paper Engine
   ↓
 Telegram Notification
 ```

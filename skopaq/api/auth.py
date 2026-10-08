@@ -1,8 +1,7 @@
 """Optional API access control: a bearer token and the CORS origin list.
 
 ``SKOPAQ_API_TOKEN`` unset keeps every endpoint open (the previous behaviour).
-Set, it guards the endpoints that execute tools or hand out credentials
-(``/api/chat/*``, ``/api/kite/token``), which then need
+Set, it guards the endpoints that execute tools (``/api/chat/*``), which then need
 ``Authorization: Bearer <token>``.
 """
 
