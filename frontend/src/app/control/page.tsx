@@ -106,6 +106,8 @@ const EXIT_KEYS = [
   ["SKOPAQ_MONITOR_TRAILING_STOP_PCT", "Trailing stop"],
   ["SKOPAQ_MONITOR_HARD_STOP_PCT", "Hard stop"],
   ["SKOPAQ_DAEMON_MAX_TRADES_PER_SESSION", "Max BUYs / session"],
+  ["SKOPAQ_MAX_SHARES_PER_ORDER", "Max shares / equity order (≤ 5000)"],
+  ["SKOPAQ_MAX_LOTS_PER_ORDER", "Max lots / F&O order (≤ 20)"],
 ] as const;
 
 const SCALP_KEYS = [
@@ -131,7 +133,7 @@ const FNO_KEYS = [
   ["SKOPAQ_FNO_STRATEGIES", "Strategies (priority)"],
   ["SKOPAQ_FNO_STRIKE_OFFSET", "Strike (0 ATM, -1 ITM, +1 OTM)"],
   ["SKOPAQ_FNO_RISK_PER_TRADE_INR", "Risk / trade ₹"],
-  ["SKOPAQ_FNO_MAX_LOTS", "Max lots / trade"],
+  ["SKOPAQ_FNO_MAX_LOTS", "Max lots / trade (≤ max lots / F&O order)"],
   ["SKOPAQ_FNO_MAX_PREMIUM_INR", "Max premium / trade ₹"],
   ["SKOPAQ_FNO_PREMIUM_STOP_PCT", "Premium stop"],
   ["SKOPAQ_FNO_TRAIL_PCT", "Trail after +1R"],
@@ -303,7 +305,7 @@ export default function ControlPage() {
           )}
 
           {isAdmin && <SettingsCard keys={EXIT_KEYS} title="Exits & risk"
-            subtitle="Target, booking and stops for new swing positions (a running monitor uses them from its next start). All settings: Environment." />}
+            subtitle="Target, booking and stops for new swing positions, and the order size limits of every strategy (equity shares, F&O lots; capped by the safety ceilings 5000 / 20, and still bound by the ₹ order-value and 15% position rules). Changes apply from the next session. All settings: Environment." />}
           {isAdmin && <SettingsCard keys={SCALP_KEYS} title="Scalping"
             subtitle="The intraday scalper runs inside the daily session when on (INTRADAY orders, flattened before the close). Changes apply from the next session." />}
           {isAdmin && <SettingsCard keys={FNO_KEYS} title="F&O (options buying)"

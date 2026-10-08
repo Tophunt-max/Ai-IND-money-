@@ -145,7 +145,7 @@ class FnoEngine:
         chain_loader: Optional[Callable[..., Awaitable[Any]]] = None,
         future_loader: Optional[Callable[..., Awaitable[Any]]] = None,
     ) -> None:
-        """``max_lots``: the safety rules' lot cap (``max_lots_per_position``);
+        """``max_lots``: the safety checker's lot limit (``max_lots``);
         ``max_position_pct``: theirs too — a bigger order would only be refused."""
         from skopaq.broker import fno
         from skopaq.options.chain import fetch_option_chain

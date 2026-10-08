@@ -391,7 +391,7 @@ class Executor:
                     "Position capped %s: %d → %d shares (safety limits: "
                     "max_shares=%d, max_position=%.0f%%, max_order=₹%.0f)",
                     signal.symbol, size.quantity, capped_qty,
-                    self._safety._rules.max_shares_per_position,
+                    _share_limit(self._safety, self._safety._rules),
                     self._safety._rules.max_position_pct * 100,
                     self._safety._rules.max_order_value_inr,
                 )
@@ -500,7 +500,7 @@ class Executor:
         """Cap raw ATR-computed quantity to respect safety limits.
 
         Applies three caps (takes the minimum):
-        1. max_shares_per_position — absolute share limit per trade
+        1. max_shares — share limit per order (dashboard, ≤ max_shares_per_position)
         2. max_position_pct — order value as % of portfolio
         3. max_order_value_inr — absolute order value cap
 
@@ -511,8 +511,8 @@ class Executor:
         rules = self._safety._rules
         qty = raw_qty
 
-        # Cap 1: max shares per position (equity)
-        qty = min(qty, rules.max_shares_per_position)
+        # Cap 1: max shares per order (equity; the dashboard's limit)
+        qty = min(qty, _share_limit(self._safety, rules))
 
         # Cap 2: max position % of portfolio
         if price > 0 and equity > 0:
@@ -550,6 +550,14 @@ class Executor:
         except Exception:
             logger.debug("yfinance price fetch failed for %s", symbol, exc_info=True)
         return None
+
+
+def _share_limit(safety, rules) -> int:
+    """The checker's working share limit (the rules' ceiling for a checker without one)."""
+    value = getattr(safety, "max_shares", None)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return rules.max_shares_per_position
 
 
 def _in_background(coro) -> None:

@@ -256,6 +256,17 @@ def _check_local(r: Readiness, config: Any) -> None:
     else:
         r.add("kill switch", "ok", "off (BUYs allowed)")
 
+    from skopaq.constants import SAFETY_RULES
+    from skopaq.execution.safety_checker import SafetyChecker
+
+    limits = SafetyChecker()
+    notes = limits.apply_config_limits(config)
+    r.add("order limits", "warn" if notes else "ok",
+          f"{limits.max_shares} shares per equity order, {limits.max_lots} lots per F&O order "
+          f"(ceilings {SAFETY_RULES.max_shares_per_position} / "
+          f"{SAFETY_RULES.max_lots_per_position})" + (f"; {'; '.join(notes)}" if notes else ""),
+          "Control → Exits & risk" if notes else "")
+
     feeds = sum(getattr(config, name, False) is True
                 for name in ("ws_price_feed_enabled", "ws_order_feed_enabled"))
     r.add("websockets", "ok" if feeds <= WS_CONNECTIONS_PER_ACCOUNT else "warn",
@@ -336,7 +347,8 @@ async def check_readiness(
 
 
 _ORDER = ["mode", "token", "auto token", "broker", "NSE segment", "F&O segment", "DDPI",
-          "clock", "static IP", "funds", "kill switch", "websockets", "control dir",
+          "clock", "static IP", "funds", "order limits", "kill switch", "websockets",
+          "control dir",
           "database"]
 
 

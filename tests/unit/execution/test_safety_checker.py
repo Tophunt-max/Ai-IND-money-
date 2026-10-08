@@ -705,17 +705,26 @@ class TestNoShortSaleWithOpenOrders:
 
 
 def test_equity_counts_shares_and_fno_counts_lots_separately():
-    """Defaults: 1000 shares per equity order, 5 lots per F&O order (independent)."""
+    """Ceilings (immutable): 5000 shares, 20 lots. Working limits (dashboard) default to
+    1000 shares and 5 lots and are clamped to the ceilings."""
+    from types import SimpleNamespace
+
+    from skopaq.config import SkopaqConfig
     from skopaq.constants import DAEMON_SAFETY_RULES, SAFETY_RULES
 
-    assert SAFETY_RULES.max_shares_per_position == 1000
-    assert SAFETY_RULES.max_lots_per_position == 5
-    assert DAEMON_SAFETY_RULES.max_shares_per_position == 1000
+    assert SAFETY_RULES.max_shares_per_position == 5000
+    assert SAFETY_RULES.max_lots_per_position == 20
+    assert DAEMON_SAFETY_RULES.max_shares_per_position == 5000
+    cfg = SkopaqConfig()
+    assert (cfg.max_shares_per_order, cfg.max_lots_per_order) == (1000, 5)
+
     checker = SafetyChecker(rules=SafetyRules(max_position_pct=1.0,
                                               max_order_value_inr=10_000_000))
+    assert checker.apply_config_limits(cfg) == []
+    assert (checker.max_shares, checker.max_lots) == (1000, 5)
     rejections: list[str] = []
     checker._check_max_lots(_buy_order(qty=500, price=100), rejections)
-    assert rejections == []                                    # 500 shares: fine now
+    assert rejections == []
     checker._check_max_lots(_buy_order(qty=1001, price=100), rejections)
     assert rejections and "1000 shares" in rejections[0]
     rejections = []
@@ -724,3 +733,26 @@ def test_equity_counts_shares_and_fno_counts_lots_separately():
                        lot_size=75)
     checker._check_max_lots(fno, rejections)                   # 6 lots > 5
     assert rejections and "6 lots" in rejections[0]
+
+    # Raised from the dashboard: 6 lots pass; above the ceiling is clamped
+    notes = checker.apply_config_limits(SimpleNamespace(max_shares_per_order=9000,
+                                                        max_lots_per_order=10))
+    assert (checker.max_shares, checker.max_lots) == (5000, 10)
+    assert len(notes) == 1 and "ceiling 5000" in notes[0]
+    rejections = []
+    checker._check_max_lots(fno, rejections)
+    assert rejections == []
+    checker.set_order_limits(0, "lots")                        # bad values
+    assert (checker.max_shares, checker.max_lots) == (1, 10)
+
+
+def test_seeding_a_checker_applies_the_dashboard_limits(monkeypatch):
+    from types import SimpleNamespace
+
+    from skopaq.execution import pnl_history
+
+    monkeypatch.setattr(pnl_history, "load_realized_pnl", lambda config, now=None: None)
+    checker = SafetyChecker()
+    pnl_history.seed_safety_checker(checker, SimpleNamespace(max_shares_per_order=250,
+                                                             max_lots_per_order=8))
+    assert (checker.max_shares, checker.max_lots) == (250, 8)

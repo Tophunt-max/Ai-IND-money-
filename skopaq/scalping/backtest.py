@@ -10,7 +10,7 @@ The same strategies and exit rules as the live engine, bar by bar:
   charges of ``skopaq/scalping/costs.py``.
 
 It ignores the broker's fill quality, slippage beyond the next open, and the safety
-rules' caps (pass ``max_qty`` to apply a share cap such as ``max_shares_per_position``).
+rules' caps (pass ``max_qty`` to apply a share cap such as ``SKOPAQ_MAX_SHARES_PER_ORDER``).
 """
 
 from __future__ import annotations
