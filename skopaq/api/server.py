@@ -19,6 +19,11 @@ from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
 
+# Settings saved from the dashboard (also when uvicorn imports this module directly)
+from skopaq import env_overrides  # noqa: E402
+
+env_overrides.apply()
+
 app = FastAPI(
     title="SkopaqTrader API",
     version=__version__,

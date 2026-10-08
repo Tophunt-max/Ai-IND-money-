@@ -123,11 +123,15 @@ def test_viewer_can_read_but_not_act(env):
     for path, body in [("/api/dashboard/jobs", {"kind": "scan"}),
                        ("/api/dashboard/kill-switch/halt", {"reason": "x"}),
                        ("/api/dashboard/kill-switch/resume", None),
-                       ("/api/dashboard/chat", {"message": "hi"})]:
+                       ("/api/dashboard/chat", {"message": "hi"}),
+                       ("/api/dashboard/settings/env",
+                        {"set": {"SKOPAQ_TRADING_MODE": "live"}, "confirm_live": True})]:
         r = env.client.post(path, json=body, headers=h)
         assert r.status_code == 403, path
         assert "View-only" in r.json()["detail"]
     assert env.client.get("/api/dashboard/auth/logins?scope=all", headers=h).status_code == 403
+    # Server settings are not even readable by a viewer
+    assert env.client.get("/api/dashboard/settings/env", headers=h).status_code == 403
 
 
 @respx.mock

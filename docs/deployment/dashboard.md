@@ -10,7 +10,8 @@
 | Trades | Trades from Supabase (current mode, paper, live, all) | `/api/dashboard/trades` |
 | Report | Track record: AI calls vs NIFTY, closed trades, calibration (`skopaq report`) | `/api/dashboard/report` |
 | Chat | The AI chat agent (paper trades in paper mode) | `/api/chat/message` |
-| Settings | Kill switch (halt / resume), links to Scheduler and Scanner, install instructions, logout | `/api/dashboard/kill-switch*` |
+| Settings | Kill switch (halt / resume), links to Environment, Scheduler and Scanner, install instructions, logout | `/api/dashboard/kill-switch*` |
+| Environment (admin) | View and change `SKOPAQ_*` settings: trading mode, live switch, scheduler, keys (see below) | `/api/dashboard/settings/env` |
 | Scheduler | `skopaq schedule --check` plan, the last 10 days' session results, session logs | `/api/dashboard/scheduler[/log]` |
 | Scanner | One scan of the watchlist (`skopaq scan`); needs an INDstocks token for quotes | `/api/dashboard/jobs` |
 
@@ -89,6 +90,32 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
    ```
 
 5. Open the Vercel URL and log in.
+
+## Environment settings (admin)
+
+Settings → **⚙️ Environment** lets an admin change `SKOPAQ_*` settings without editing the
+`ENV_FILE` secret and redeploying (`skopaq/env_overrides.py`):
+
+- Saved values go to `~/.skopaq/env_overrides.json` (mode 600) on the shared home volume. They
+  **win over `ENV_FILE`** and survive deploys; **Reset** brings the `ENV_FILE` value (or the
+  default) back. Each row shows where its value comes from: DASHBOARD, ENV_FILE or DEFAULT.
+- When they apply: the API at once; the scheduler on its next poll while no session runs (a
+  running session keeps its settings; the change is sent to Telegram); every new daemon,
+  `skopaq monitor` or CLI run; the Telegram bot after its restart.
+- Values are checked before saving (types, choices, the scheduler's times together). A
+  secret (API keys, tokens) is never sent back to the browser, only whether it is set.
+- **Switch to LIVE** sets `SKOPAQ_TRADING_MODE`, `SKOPAQ_SCHEDULER_MODE` and
+  `SKOPAQ_SCHEDULER_CONFIRM_LIVE`. Anything that turns real-money trading on asks you to type
+  `LIVE` (the API answers 409 without `confirm_live`), and is sent to Telegram.
+- Every change is appended to `~/.skopaq/env_overrides.log` (who, when, keys; secret values
+  are written as `(secret)`) and shown under *Change history*.
+- **Locked** (ENV_FILE only): Supabase URL and keys, `SKOPAQ_API_TOKEN`, `SKOPAQ_CORS_ORIGINS`,
+  `SKOPAQ_DASHBOARD_USERS`, API host/port, `SKOPAQ_DATABASE_URL`, the state, lock, journal and
+  log directories, the heartbeat file, `SKOPAQ_KITE_ACCESS_TOKEN`,
+  `SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK` and `SKOPAQ_TRADING_HALTED` (use the kill switch).
+  A mistake there could lock the dashboard out.
+- To undo everything from the host: `docker compose exec api rm ~/.skopaq/env_overrides.json`,
+  then restart the services.
 
 ## Troubleshooting
 

@@ -59,6 +59,16 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+
+@app.callback()
+def _apply_dashboard_settings() -> None:
+    """Settings saved from the dashboard (~/.skopaq/env_overrides.json) win over the
+    environment in every command: api, scheduler, daemon, monitor, ..."""
+    from skopaq import env_overrides
+
+    env_overrides.apply()
+
+
 # ── Token management ─────────────────────────────────────────────────────────
 
 token_app = typer.Typer(help="INDstocks API token management.")
@@ -954,6 +964,7 @@ def schedule(
         alert_invalid_config,
         check_ok,
         describe,
+        reload_settings,
         run_forever,
     )
     from skopaq.risk import calendar as nse_calendar
@@ -974,7 +985,8 @@ def schedule(
             typer.echo(line)
         raise typer.Exit(0 if check_ok(settings, now) else 1)
 
-    raise typer.Exit(run_forever(settings))
+    # Settings saved from the dashboard are picked up between sessions.
+    raise typer.Exit(run_forever(settings, reload=reload_settings))
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────

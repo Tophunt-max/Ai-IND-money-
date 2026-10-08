@@ -1943,4 +1943,7 @@ def _compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
 # ── Entry Point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from skopaq import env_overrides
+
+    env_overrides.apply()  # settings saved from the dashboard
     mcp.run(transport="stdio")

@@ -74,6 +74,14 @@ GET /api/kite/status
 
 ## Switching to Live Mode
 
+### Via the dashboard
+
+Settings → ⚙️ Environment → **Switch to LIVE** (admins; you type `LIVE` to confirm). It sets
+`SKOPAQ_TRADING_MODE`, `SKOPAQ_SCHEDULER_MODE` and `SKOPAQ_SCHEDULER_CONFIRM_LIVE` as
+dashboard overrides, which win over `ENV_FILE`. The scheduler uses them from its next session
+(never a running one); **Switch to PAPER** goes back the same way. See
+[Web dashboard](../deployment/dashboard.md#environment-settings-admin).
+
 ### Via Environment
 
 ```bash
@@ -288,7 +296,7 @@ All trade events are sent via Telegram:
 If something goes wrong:
 
 1. **Halt new BUYs everywhere**: `skopaq halt "reason"`, Telegram `/halt`, the MCP `halt_trading` tool, or `SKOPAQ_TRADING_HALTED=true`. Every BUY is refused while it is on (the daemon skips scanning and trading); exits and the monitor keep running, so open positions stay protected. `skopaq resume` (or `/resume`) lifts it.
-2. **Stop live sessions altogether**: set `SKOPAQ_SCHEDULER_MODE=paper` and recreate the scheduler (`docker compose up -d scheduler`). The scheduler launches its sessions with `daemon --once --live` from that setting, so `SKOPAQ_TRADING_MODE` alone does not stop them. Recreating it stops a session that is running (its CLOSING sells what it holds; see [Mac mini](../deployment/mac-mini.md)), and during a recovery `skopaq monitor` it leaves positions unmanaged until the scheduler is back, so prefer a moment when nothing is held.
+2. **Stop live sessions altogether**: dashboard → Settings → ⚙️ Environment → **Switch to PAPER** (the scheduler uses it from its next session, without a restart), or set `SKOPAQ_SCHEDULER_MODE=paper` and recreate the scheduler (`docker compose up -d scheduler`). A dashboard override wins over `ENV_FILE`, so if one is set, change it there. The scheduler launches its sessions with `daemon --once --live` from that setting, so `SKOPAQ_TRADING_MODE` alone does not stop them. Recreating it stops a session that is running (its CLOSING sells what it holds; see [Mac mini](../deployment/mac-mini.md)), and during a recovery `skopaq monitor` it leaves positions unmanaged until the scheduler is back, so prefer a moment when nothing is held.
 3. **INDstocks**: Cancel open orders directly in the INDstocks order book (web/app); every order alert names the order ids.
 4. **Zerodha (Kite)**: the MCP server's Kite order tools are not stopped by any of the above; cancel their orders in Kite, and log the Kite session out if they should not trade.
 

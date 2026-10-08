@@ -40,6 +40,10 @@ os.environ["SKOPAQ_HALT_FILE"] = os.path.join(
     os.path.dirname(__file__), ".no-such-dir", "HALT-for-tests"
 )
 os.environ.pop("SKOPAQ_TRADING_HALTED", None)
+# Settings saved from the dashboard (~/.skopaq/env_overrides.json) never reach tests either.
+os.environ["SKOPAQ_ENV_OVERRIDES_FILE"] = os.path.join(
+    os.path.dirname(__file__), ".no-such-dir", "env-overrides-for-tests.json"
+)
 # Likewise the Kite session file (/data or /tmp/skopaq_kite_token.json, which the native MCP
 # server writes on a Mac): a real token there would make tests call api.kite.trade. A test
 # that needs a token file sets kite_client._TOKEN_FILE to its own tmp path.

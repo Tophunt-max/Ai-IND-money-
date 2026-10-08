@@ -14,6 +14,8 @@ jobs, the kill switch and chat need ``admin``.
 - ``GET  /api/dashboard/kill-switch``         halt status
 - ``POST /api/dashboard/kill-switch/halt``    stop new BUYs everywhere
 - ``POST /api/dashboard/kill-switch/resume``  lift the dashboard/CLI halt
+- ``GET  /api/dashboard/settings/env``        SKOPAQ_* settings and their source (admin)
+- ``POST /api/dashboard/settings/env``        set / remove dashboard overrides (admin)
 - ``POST /api/dashboard/jobs``                start an ``analyze``, paper ``trade`` or ``scan`` job
 - ``GET  /api/dashboard/jobs``                recent jobs
 - ``GET  /api/dashboard/jobs/{id}``           one job (poll until done)
@@ -424,6 +426,72 @@ async def kill_switch_resume(user: DashboardUser = Depends(require_admin)) -> di
         after["warning"] = ("Still halted: SKOPAQ_TRADING_HALTED is set on the server "
                             "(remove it from ENV_FILE and redeploy)")
     return {"cleared": cleared, **after}
+
+
+# ── Environment settings (skopaq/env_overrides.py) ───────────────────────────
+
+
+class EnvChangeRequest(BaseModel):
+    set: dict[str, str] = Field(default_factory=dict, max_length=50)
+    remove: list[str] = Field(default_factory=list, max_length=50)
+    # Required when the change turns real-money trading on
+    confirm_live: bool = False
+
+
+def _env_payload() -> dict[str, Any]:
+    from skopaq import env_overrides
+
+    return {
+        "settings": env_overrides.describe(),
+        "file": str(env_overrides.overrides_file()),
+        "history": env_overrides.history(20),
+    }
+
+
+@router.get("/settings/env")
+async def env_settings(user: DashboardUser = Depends(require_admin)) -> dict:
+    """Every SKOPAQ_* setting, its value (never a secret's) and its source (admin)."""
+    return await asyncio.to_thread(_env_payload)
+
+
+@router.post("/settings/env")
+async def env_settings_change(body: EnvChangeRequest,
+                              user: DashboardUser = Depends(require_admin)) -> dict:
+    """Add, change or remove dashboard overrides (admin). Turning live trading on needs
+    ``confirm_live``; every change is logged and sent to Telegram."""
+    from skopaq import env_overrides
+
+    by = f"dashboard:{user.email}"
+    try:
+        result = await asyncio.to_thread(env_overrides.change, body.set, body.remove,
+                                         by=by, confirm_live=body.confirm_live)
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Could not save the dashboard settings")
+        raise HTTPException(500, f"Could not save the settings: {exc}") from exc
+
+    if result.set or result.removed:
+        parts = []
+        if result.set:
+            parts.append("set " + ", ".join(result.set))
+        if result.removed:
+            parts.append("removed " + ", ".join(result.removed))
+        text = f"⚙️ Settings changed from the dashboard by {user.email}: {'; '.join(parts)}"
+        if result.live:
+            text = ("🔴 LIVE TRADING (real money) turned on from the dashboard by "
+                    f"{user.email}: {', '.join(result.live)}\n" + text)
+        try:
+            from skopaq.notifications import notify
+
+            await asyncio.wait_for(notify(text), 15)
+        except Exception:
+            logger.warning("Settings-change notification failed", exc_info=True)
+
+    payload = await asyncio.to_thread(_env_payload)
+    return {"changed": result.set, "removed": result.removed, "live": result.live, **payload}
 
 
 # ── Jobs (analyze, scan) ──────────────────────────────────────────────────────

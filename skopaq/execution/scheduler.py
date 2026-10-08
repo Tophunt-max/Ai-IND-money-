@@ -58,7 +58,7 @@ import subprocess
 import sys
 import threading
 import time as _time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -645,6 +645,38 @@ def alert_invalid_config(
     )
 
 
+_RELOADED_FIELDS = ("enabled", "mode", "confirm_live", "start", "last_start", "deadline",
+                    "eod_exit", "settle_at", "preflight", "poll_seconds", "kill_after_seconds",
+                    "ping_url", "extra_holidays")
+
+
+def reload_settings(current: ScheduleSettings) -> Optional[ScheduleSettings]:
+    """New settings when the dashboard's saved settings (``skopaq/env_overrides.py``)
+    changed since the last call, else ``None``. ValueError when they are not usable (the
+    current settings stay). The state and log dirs and the heartbeat file never change in
+    a running scheduler (its lock and markers live there)."""
+    from skopaq import env_overrides
+    from skopaq.config import SkopaqConfig
+
+    if not env_overrides.apply():
+        return None
+    new = ScheduleSettings.from_config(SkopaqConfig())
+    return replace(new, state_dir=current.state_dir, log_dir=current.log_dir,
+                   heartbeat_file=current.heartbeat_file)
+
+
+def _settings_diff(old: ScheduleSettings, new: ScheduleSettings) -> list[str]:
+    def show(value) -> str:
+        if isinstance(value, time):
+            return f"{value:%H:%M}"
+        if value is None or value == "":
+            return "off"
+        return str(value).lower() if isinstance(value, bool) else str(value)
+
+    return [f"{name} {show(getattr(old, name))} → {show(getattr(new, name))}"
+            for name in _RELOADED_FIELDS if getattr(old, name) != getattr(new, name)]
+
+
 def run_forever(
     settings: ScheduleSettings,
     *,
@@ -654,6 +686,7 @@ def run_forever(
     ping: Callable[[str, bool], None] = _ping,
     sleep: Callable[[float], None] = _time.sleep,
     stop: Optional[threading.Event] = None,
+    reload: Optional[Callable[[ScheduleSettings], Optional[ScheduleSettings]]] = None,
 ) -> int:
     """Run the scheduler loop until SIGTERM/SIGINT (or *stop*); returns the exit code
     (1 when another scheduler already runs on the same state dir)."""
@@ -680,12 +713,38 @@ def run_forever(
         return 1
     try:
         return _loop(settings, clock=clock, runner=runner, alert=alert, ping=ping,
-                     sleep=sleep, stop=stop)
+                     sleep=sleep, stop=stop, reload=reload)
     finally:
         os.close(lock)
 
 
-def _loop(settings, *, clock, runner, alert, ping, sleep, stop) -> int:
+def _reload(settings, reload, alert, last_error: str) -> tuple[ScheduleSettings, str]:
+    """*settings*, or the reloaded ones; and the last reload error (alerted once each)."""
+    try:
+        new = reload(settings)
+    except ValueError as exc:
+        error = str(exc)
+        if error != last_error:
+            logger.error("Dashboard settings not used by the scheduler: %s", error)
+            alert(f"settings saved from the dashboard are not usable, keeping the previous "
+                  f"ones:\n{error}")
+        return settings, error
+    except Exception:
+        logger.exception("Could not reload the scheduler settings")
+        return settings, last_error
+    if new is None:
+        return settings, last_error
+    changes = _settings_diff(settings, new)
+    if changes:
+        logger.warning("Scheduler settings reloaded: %s", "; ".join(changes))
+        live = new.mode == "live" and new.confirm_live
+        alert(("🔴 LIVE (real money) from the next session. " if live and not (
+            settings.mode == "live" and settings.confirm_live) else "")
+              + "settings changed from the dashboard: " + "; ".join(changes))
+    return new, ""
+
+
+def _loop(settings, *, clock, runner, alert, ping, sleep, stop, reload=None) -> int:
     """``run_forever`` once it holds the lock."""
     if stop is None:
         stop = threading.Event()
@@ -712,7 +771,15 @@ def _loop(settings, *, clock, runner, alert, ping, sleep, stop) -> int:
     disabled_logged = False
     pruned_on: Optional[date] = None
     error_alerted_on: Optional[date] = None
+    reload_error = ""
     while not stop.is_set():
+        # Between ticks no job runs (the runner blocks until its child exits), so new
+        # settings never change a session that has started.
+        if reload is not None:
+            previous_enabled = settings.enabled
+            settings, reload_error = _reload(settings, reload, alert, reload_error)
+            if settings.enabled != previous_enabled:
+                disabled_logged = False
         _touch(settings.heartbeat_file)
         now = clock().astimezone(IST)
         day = now.date()
