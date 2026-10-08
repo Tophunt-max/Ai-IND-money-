@@ -13,6 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useApi } from "@/lib/hooks";
 
 import { useAuth } from "./AuthGate";
+import { useModeChanged } from "./ModeSwitch";
 import { Badge, cx } from "./ui";
 
 interface NavItem {
@@ -94,8 +95,11 @@ function Brand() {
 }
 
 function ModeBadge({ mode }: { mode?: string }) {
+  const { isAdmin } = useAuth();
   if (!mode) return null;
-  return mode === "live" ? <Badge tone="error" dot>LIVE</Badge> : <Badge tone="warning" dot>PAPER</Badge>;
+  const badge = mode === "live" ? <Badge tone="error" dot>LIVE</Badge> : <Badge tone="warning" dot>PAPER</Badge>;
+  // Admins switch paper / live on the Settings page
+  return isAdmin ? <Link href="/settings" title="Switch paper / live" className="transition hover:opacity-80">{badge}</Link> : badge;
 }
 
 function NavList({ path, isAdmin, onNavigate }: { path: string; isAdmin: boolean; onNavigate?: () => void }) {
@@ -158,6 +162,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const mode = me.data?.mode;
 
   useEffect(() => setDrawer(false), [path]);
+  useModeChanged(me.reload);
 
   if (path.startsWith("/reset-password")) return <>{children}</>;
 

@@ -7,6 +7,7 @@ import {
 import Link from "next/link";
 
 import Chart from "@/components/Chart";
+import ModeSwitch, { useModeChanged } from "@/components/ModeSwitch";
 import {
   Badge, Button, Card, Empty, ErrorBox, Notice, PageTitle, pnlClass, Skeleton, StatCard,
 } from "@/components/ui";
@@ -93,6 +94,7 @@ export default function Home() {
     pnl.reload();
     sched.reload();
   };
+  useModeChanged(ov.reload);
 
   return (
     <div className="space-y-6">
@@ -202,6 +204,8 @@ export default function Home() {
           )}
         </Link>
       </div>
+
+      <ModeSwitch compact />
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

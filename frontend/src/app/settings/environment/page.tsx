@@ -1,44 +1,17 @@
 "use client";
 
-import { History, Lock, Plus, Search, SlidersHorizontal, ToggleRight } from "lucide-react";
+import { History, Lock, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/AuthGate";
 import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, PageTitle } from "@/components/ui";
-import { api, ApiError, when } from "@/lib/api";
+import ModeSwitch from "@/components/ModeSwitch";
+import { when } from "@/lib/api";
+import { saveEnvAsking as send, type EnvData, type Setting } from "@/lib/env";
 import { useApi } from "@/lib/hooks";
 
-interface Setting {
-  key: string;
-  kind: "bool" | "int" | "float" | "choice" | "text";
-  secret: boolean;
-  choices: string[];
-  default: string;
-  group: string;
-  help: string;
-  locked: string;
-  source: "dashboard" | "server" | "default";
-  is_set: boolean;
-  value: string | null;
-  server_set: boolean;
-}
 
-interface HistoryEntry {
-  at: string;
-  by: string;
-  set: Record<string, string>;
-  removed: string[];
-  live: string[];
-}
 
-interface EnvData {
-  settings: Setting[];
-  file: string;
-  history: HistoryEntry[];
-  changed?: string[];
-  removed?: string[];
-  live?: string[];
-}
 
 const GROUP_ORDER = [
   "Trading mode", "Scheduler", "Broker (INDstocks)", "Telegram", "Daemon, scanner & monitor",
@@ -58,23 +31,6 @@ function shown(s: Setting): string {
   return s.value === "" || s.value === null ? "(empty)" : s.value;
 }
 
-/** POST a change; on 409 (turns live trading on) ask to type LIVE and send it again. */
-async function send(body: { set?: Record<string, string>; remove?: string[] }): Promise<EnvData | null> {
-  try {
-    return await api<EnvData>("/api/dashboard/settings/env", { method: "POST", json: body });
-  } catch (e) {
-    if (!(e instanceof ApiError) || e.status !== 409) throw e;
-    const typed = prompt(
-      `⚠️ REAL MONEY\n\n${e.message}\n\nThe scheduler will place real orders on INDstocks from ` +
-        "its next session, without supervision.\n\nType LIVE to confirm:",
-    );
-    if ((typed || "").trim() !== "LIVE") return null;
-    return await api<EnvData>("/api/dashboard/settings/env", {
-      method: "POST",
-      json: { ...body, confirm_live: true },
-    });
-  }
-}
 
 function Editor({ s, onSave, onCancel, busy }: {
   s: Setting;
@@ -155,54 +111,6 @@ function Row({ s, editing, setEditing, save, remove, busy }: {
   );
 }
 
-function ModeCard({ byKey, busy, run }: {
-  byKey: Record<string, Setting>;
-  busy: boolean;
-  run: (body: { set?: Record<string, string>; remove?: string[] }, ok: string) => void;
-}) {
-  const mode = byKey["SKOPAQ_TRADING_MODE"]?.value || "paper";
-  const sched = byKey["SKOPAQ_SCHEDULER_MODE"]?.value || "paper";
-  const confirmed = byKey["SKOPAQ_SCHEDULER_CONFIRM_LIVE"]?.value === "true";
-  const autoLive = sched === "live" && confirmed;
-  const token = byKey["SKOPAQ_INDSTOCKS_TOKEN"];
-  const live = mode === "live" || autoLive;
-
-  const goLive = () =>
-    run({ set: { SKOPAQ_TRADING_MODE: "live", SKOPAQ_SCHEDULER_MODE: "live", SKOPAQ_SCHEDULER_CONFIRM_LIVE: "true" } },
-      "Live trading is on: the scheduler trades real money from its next session.");
-  const goPaper = () => {
-    if (!confirm("Switch back to PAPER? The scheduler uses it from its next session; a session already running keeps its mode.")) return;
-    run({ set: { SKOPAQ_TRADING_MODE: "paper", SKOPAQ_SCHEDULER_MODE: "paper", SKOPAQ_SCHEDULER_CONFIRM_LIVE: "false" } },
-      "Back to paper trading.");
-  };
-
-  return (
-    <Card title="Trading mode" icon={ToggleRight} right={<Badge tone={live ? "error" : "ok"}>{live ? "LIVE" : "PAPER"}</Badge>}>
-      <dl className="text-sm space-y-2">
-        <div className="flex justify-between"><dt className="text-gray-500">Trading mode</dt><dd>{mode.toUpperCase()}</dd></div>
-        <div className="flex justify-between">
-          <dt className="text-gray-500">Auto-trading (scheduler)</dt>
-          <dd>{sched.toUpperCase()}{sched === "live" && !confirmed && <span className="text-amber-300"> (not confirmed: sessions skipped)</span>}</dd>
-        </div>
-        <div className="flex justify-between">
-          <dt className="text-gray-500">INDstocks token (env)</dt>
-          <dd>{token?.is_set ? "set" : "not set (or set with `skopaq token set`)"}</dd>
-        </div>
-      </dl>
-      <div className="mt-4">
-        {live ? (
-          <Button variant="ghost" onClick={goPaper} disabled={busy}>Switch to PAPER</Button>
-        ) : (
-          <Button variant="danger" onClick={goLive} disabled={busy}>Switch to LIVE (real money)</Button>
-        )}
-      </div>
-      <p className="text-xs text-gray-500 mt-3">
-        Before going live: paper-trade at least a week, set today&apos;s INDstocks token, and whitelist the
-        server&apos;s IP at INDstocks. The safety limits (position size, daily loss, …) always apply.
-      </p>
-    </Card>
-  );
-}
 
 export default function EnvSettingsPage() {
   const { isAdmin } = useAuth();
@@ -292,7 +200,7 @@ export default function EnvSettingsPage() {
 
       {env.loading && !env.data ? <Loading /> : env.data && (
         <>
-          <ModeCard byKey={byKey} busy={busy} run={run} />
+          <ModeSwitch env={env.data} onChange={env.setData} />
 
           <Card title={`Overridden from the dashboard (${overridden.length})`}>
             {overridden.length === 0 ? <Empty>None: every value comes from ENV_FILE or the defaults.</Empty> : (
