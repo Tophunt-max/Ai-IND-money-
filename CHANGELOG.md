@@ -221,6 +221,11 @@ below.
 
 ### Changed
 
+- **Equity orders may have up to 1000 shares** (was 5). A new
+  `SafetyRules.max_shares_per_position` (1000) caps equity orders; `max_lots_per_position`
+  (5) now caps only F&O lots. The order-value (₹5 lakh, ₹2 lakh in the daemon) and
+  position-size (15 %) rules still bound every BUY. With 5 shares, most scalps could not
+  pay their charges and were skipped.
 - **Brokerage is booked at ₹10 per executed order**, the INDstocks API fee
   (`INDSTOCKS_BROKERAGE_PER_ORDER_INR`). Live orders were booked at ₹20 and paper orders
   at ₹5.

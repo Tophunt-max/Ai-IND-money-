@@ -27,7 +27,13 @@ class SafetyRules:
 
     # Position rules
     max_open_positions: int = 5
+    # F&O: lots per order (an index lot is 65-75 units, so 5 lots is already large)
     max_lots_per_position: int = 5
+    # Equity: shares per order. A share count says little about risk (5 shares of a ₹100
+    # stock cannot pay a scalp's charges): the real equity limits are the order value
+    # (max_order_value_inr) and the position size (max_position_pct); this only stops a
+    # runaway quantity (raised from 5 shares on the owner's decision, Oct 2026)
+    max_shares_per_position: int = 1000
     max_order_value_inr: float = 500_000.0
     max_orders_per_minute: int = 20
 

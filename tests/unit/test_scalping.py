@@ -176,7 +176,7 @@ def test_backtest_counts_a_candle_touching_both_as_a_loss_and_caps_qty():
     result = simulate("TCS", [day + [whipsaw]], s, max_qty=200)
     [t] = result.trades
     assert "STOP" in t.reason and t.qty == 200 and t.pnl < 0
-    # 5 shares (the default max_lots_per_position) cannot pay the charges: skipped
+    # 5 shares (the old share cap) cannot pay the charges: skipped
     assert simulate("TCS", [day + [whipsaw]], s, max_qty=5).skipped_cost == 1
 
 

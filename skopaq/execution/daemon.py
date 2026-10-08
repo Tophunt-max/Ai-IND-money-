@@ -394,7 +394,7 @@ class TradingDaemon:
             Executor(self._router, self._safety),
             self._client, self._router, feed=self._scalp_feed,
             on_trade=self._record_exit, control=ControlChannel.from_config(self._config),
-            max_qty=getattr(self._rules, "max_lots_per_position", None),
+            max_qty=getattr(self._rules, "max_shares_per_position", None),
         )
         linker = asyncio.create_task(link())
 

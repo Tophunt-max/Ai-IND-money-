@@ -389,9 +389,9 @@ class Executor:
             if capped_qty < size.quantity:
                 logger.info(
                     "Position capped %s: %d → %d shares (safety limits: "
-                    "max_lots=%d, max_position=%.0f%%, max_order=₹%.0f)",
+                    "max_shares=%d, max_position=%.0f%%, max_order=₹%.0f)",
                     signal.symbol, size.quantity, capped_qty,
-                    self._safety._rules.max_lots_per_position,
+                    self._safety._rules.max_shares_per_position,
                     self._safety._rules.max_position_pct * 100,
                     self._safety._rules.max_order_value_inr,
                 )
@@ -500,7 +500,7 @@ class Executor:
         """Cap raw ATR-computed quantity to respect safety limits.
 
         Applies three caps (takes the minimum):
-        1. max_lots_per_position — absolute share limit per trade
+        1. max_shares_per_position — absolute share limit per trade
         2. max_position_pct — order value as % of portfolio
         3. max_order_value_inr — absolute order value cap
 
@@ -511,8 +511,8 @@ class Executor:
         rules = self._safety._rules
         qty = raw_qty
 
-        # Cap 1: max lots per position
-        qty = min(qty, rules.max_lots_per_position)
+        # Cap 1: max shares per position (equity)
+        qty = min(qty, rules.max_shares_per_position)
 
         # Cap 2: max position % of portfolio
         if price > 0 and equity > 0:

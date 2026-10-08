@@ -123,7 +123,7 @@ class ScalpEngine:
         halted: Optional[Callable[[], bool]] = None,
         max_qty: Optional[int] = None,
     ) -> None:
-        """``max_qty``: the safety rules' share cap (``max_lots_per_position``) — a bigger
+        """``max_qty``: the safety rules' share cap (``max_shares_per_position``) — a bigger
         order would only be refused, so scalps are sized within it."""
         self.config = config
         self.settings = settings or ScalpSettings.from_config(config)
