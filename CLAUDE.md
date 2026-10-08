@@ -81,6 +81,7 @@ skopaq scan                # Scanner cycle
 skopaq chat                # Interactive AI chatbot (Claude Code-style)
 skopaq daemon --once --paper  # Full autonomous session
 skopaq schedule --check    # Show the scheduler's plan (the compose service runs `skopaq schedule`)
+skopaq ticks RELIANCE      # Live INDstocks WebSocket ticks + 1-min candles/indicators (read only)
 skopaq monitor             # Monitor existing positions; live: exits 4 if it ends with positions open or orders unconfirmed
 skopaq settle              # Settle past decisions whose holding window has traded
 skopaq memory legacy       # Show pre-v0.5.1 agent memories (--export FILE, --delete)

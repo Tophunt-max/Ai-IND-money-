@@ -232,9 +232,35 @@ the quantities say nothing more:
 - The filled quantity is **unknown**, not 0, when a partial or working status comes without
   `traded_qty`. A protective exit then stops with a CRITICAL alert instead of re-selling.
 
-The order-updates WebSocket (`wss://ws-order-updates.indstocks.com/...`) uses short codes
-(`R`, `P`, `S`, `F`, `C`, `RJ`, `PF`, `PFC`) and a disputed payload shape. Skopaq does not
-use it; it polls REST.
+The order-updates WebSocket uses short codes (`R`, `P`, `S`, `F`, `C`, `RJ`, `PF`, `PFC`).
+Skopaq confirms fills by polling REST; the feed is only printed by `skopaq ticks --orders`
+(see WebSockets below).
+
+## WebSockets
+
+`skopaq/broker/websocket.py` (`PriceFeed`, `OrderUpdateFeed`):
+
+| Feed | URL | Subscribe | Frames |
+|------|-----|-----------|--------|
+| Prices | `wss://ws-prices.indstocks.com/api/v1/ws/prices` (`SKOPAQ_INDSTOCKS_WS_PRICE_URL`) | `{"action": "subscribe", "mode": "ltp", "instruments": ["NSE:2885"]}`, batches of 50 | `{"mode": "ltp", "instrument": "2885", "timestamp": <ms>, "data": {"ltp": 1426}}` |
+| Orders | `wss://ws-order-updates.indstocks.com/api/v1/ws/trades` (`SKOPAQ_INDSTOCKS_WS_ORDER_URL`) | `{"action": "subscribe", "mode": "order_update"}` | a JSON string holding the update (decoded twice): `order_id`, `order_type` (side), `order_status` (short code), `executed_price`, `lot`, `req_quantity` |
+
+- Auth: `Authorization: <token>` on the handshake, no `Bearer`. Without a valid token
+  the server refuses the handshake (seen: HTTP 513).
+- Instruments are `SEGMENT:TOKEN` (`NSE:`, `BSE:`, `NFO:`, `BFO:`, `NIDX:`, `BIDX:`):
+  REST scrip codes with `:` for `_`. A tick names the token without its segment, so it is
+  matched to the subscription with that token; a token subscribed on two segments is
+  dropped as ambiguous.
+- Heartbeats and frames Skopaq does not understand are ignored. Both feeds reconnect
+  with backoff (1 s doubling to 60 s) and re-subscribe.
+- Order updates are kept per order id, newest envelope `timestamp` first.
+
+The position monitor uses the price feed when `SKOPAQ_WS_PRICE_FEED_ENABLED` (default
+on): a tick younger than `SKOPAQ_WS_TICK_MAX_AGE_SECONDS` replaces a REST quote, and its
+rules run every `SKOPAQ_MONITOR_TICK_POLL_SECONDS`. Without a fresh tick it asks
+`GET /market/quotes/ltp`, at most once per `SKOPAQ_MONITOR_POLL_INTERVAL_SECONDS` per
+position. `skopaq ticks RELIANCE` prints the live ticks with 1-minute candles and
+indicators (`skopaq/market/candles.py`): check the feed with it before relying on it.
 
 ## Fills
 

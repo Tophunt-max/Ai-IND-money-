@@ -34,6 +34,10 @@ _LENIENT_FIELDS = (
     "monitor_target_pct",
     "monitor_target_inr",
     "monitor_partial_booking_pct",
+    "monitor_tick_poll_seconds",
+    "ws_price_feed_enabled",
+    "ws_order_feed_enabled",
+    "ws_tick_max_age_seconds",
 )
 
 
@@ -64,7 +68,14 @@ class SkopaqConfig(BaseSettings):
     indstocks_token: SecretStr = SecretStr("")
     indstocks_base_url: str = "https://api.indstocks.com"
     indstocks_ws_price_url: str = "wss://ws-prices.indstocks.com/api/v1/ws/prices"
-    indstocks_ws_order_url: str = "wss://ws-order-updates.indstocks.com"
+    indstocks_ws_order_url: str = "wss://ws-order-updates.indstocks.com/api/v1/ws/trades"
+    # Live prices over the price WebSocket for the position monitor (REST is the fallback)
+    ws_price_feed_enabled: bool = True
+    # Order updates WebSocket: only `skopaq ticks --orders` reads it (REST stays the
+    # source of truth for fills)
+    ws_order_feed_enabled: bool = False
+    # A tick older than this is not used (the monitor asks REST instead)
+    ws_tick_max_age_seconds: float = 5.0
 
     # ── Trading Mode ────────────────────────────────────────────────────
     trading_mode: Literal["paper", "live"] = "paper"
@@ -170,6 +181,10 @@ class SkopaqConfig(BaseSettings):
     monitor_trailing_stop_enabled: bool = False
     monitor_trailing_stop_pct: float = 0.02  # 2% trail from high-water
     monitor_resync_cycles: int = 3  # live: re-read broker book/positions every N polls [1, 60]
+    # With the price feed: check stops and targets this often (seconds). The AI tier and
+    # the broker resync keep their pace (in seconds) and REST quotes are never asked for
+    # more often than monitor_poll_interval_seconds
+    monitor_tick_poll_seconds: float = 1.0
     # Exit plan of each position (skopaq/execution/exit_plan.py): a target, the BUY's
     # stop-loss, partial booking at the target, then a trailing stop from breakeven.
     # rr: entry + rr × (entry − stop); pct: entry × (1 + pct); inr: profit per position

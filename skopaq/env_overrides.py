@@ -107,6 +107,9 @@ _HELP: dict[str, str] = {
     "monitor_hard_stop_pct": "Hard stop-loss (0.04 = 4%)",
     "monitor_trailing_stop_enabled": "Trailing stop on open positions",
     "monitor_trailing_stop_pct": "Trailing stop (0.02 = 2%); also the rest after a target",
+    "monitor_tick_poll_seconds": "With the price feed: check stops/targets every N seconds",
+    "ws_price_feed_enabled": "Live prices over the INDstocks WebSocket (REST fallback)",
+    "ws_tick_max_age_seconds": "Ticks older than this fall back to REST quotes",
     "monitor_target_mode": "Target per position: rr (risk:reward), pct, inr (₹ profit), off",
     "monitor_target_rr": "rr mode: target = entry + this × (entry − stop); 2 = 1:2",
     "monitor_target_pct": "pct mode: target this far above entry (0.03 = 3%)",
@@ -125,7 +128,7 @@ _HELP: dict[str, str] = {
 _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Trading mode", ("trading_mode", "initial_paper_capital", "asset_class")),
     ("Scheduler", ("scheduler_", "nse_holidays")),
-    ("Broker (INDstocks)", ("indstocks_", "order_")),
+    ("Broker (INDstocks)", ("indstocks_", "order_", "ws_")),
     ("Telegram", ("telegram_",)),
     ("Daemon, scanner & monitor", ("daemon_", "scanner_", "monitor_")),
     ("Risk & sizing", ("position_sizing", "risk_per_trade", "atr_", "min_confidence",
