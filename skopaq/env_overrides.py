@@ -64,6 +64,7 @@ LOCKED: dict[str, str] = {
     "order_lock_dir": "shared state directory",
     "order_journal_dir": "shared state directory",
     "exit_plan_dir": "shared state directory",
+    "control_dir": "shared state directory",
     "scheduler_state_dir": "shared state directory",
     "daemon_session_log_dir": "shared state directory",
     "heartbeat_file": "container health checks",

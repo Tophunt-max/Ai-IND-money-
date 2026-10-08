@@ -197,6 +197,8 @@ class SkopaqConfig(BaseSettings):
     monitor_partial_booking_pct: float = 0.5
     # Plans (with their high-water mark and what was booked) survive a monitor restart
     exit_plan_dir: str = "~/.skopaq/exit_plans"
+    # Dashboard control: status, stop/start requests and commands (shared home volume)
+    control_dir: str = "~/.skopaq/control"
 
     # ── Daemon (autonomous session) ──────────────────────────────────
     daemon_max_trades_per_session: int = 3  # Max BUY orders per day

@@ -65,6 +65,7 @@ POSITIONS_LEFT_EXIT_CODE = 4
 
 _CLOSING_PAUSE_S = 5.0     # before CLOSING's second pass: lets positions catch up
 _MONITOR_RESTARTS = 3      # live: MONITORING restarted when it ends early with positions held
+_STATUS_EVERY_S = 5.0      # dashboard: session status written this often
 _DEDUP_S = 600.0           # per-symbol CLOSING alerts: at most one per 10 minutes
 
 
@@ -157,6 +158,8 @@ class TradingDaemon:
         self._executor = None     # Executor
         self._exit_planner = None  # ExitPlanner (stop-loss, target per position)
         self._price_feed = None    # PriceFeed (live ticks) while MONITORING
+        self._control = None       # ControlChannel (dashboard status)
+        self._started_wall = _time.time()
         self._graph = None        # SkopaqTradingGraph
         self._llm_map = None      # Per-role LLM map
         self._memory_store = None # MemoryStore (optional)
@@ -219,6 +222,11 @@ class TradingDaemon:
         )
         # Live: a stop starts the shutdown deadline for all order work
         armer = asyncio.create_task(self._arm_on_stop())
+        # The dashboard reads the session's phase and counters from the control channel
+        from skopaq.execution.control import ControlChannel
+
+        self._control = ControlChannel.from_config(self._config)
+        publisher = asyncio.create_task(self._publish_status(report))
 
         try:
             # Phase 1: PRE_OPEN — validate token, build infra
@@ -307,6 +315,7 @@ class TradingDaemon:
                     logger.error("CLOSING after the failure failed too", exc_info=True)
         finally:
             armer.cancel()
+            publisher.cancel()
             # Phase 7: REPORTING — compile metrics
             self._phase = DaemonPhase.REPORTING
             report.phase_times = dict(self._phase_times)
@@ -328,10 +337,43 @@ class TradingDaemon:
             await self._drain_recordings()
             await self._drain_alerts()
             self._phase = DaemonPhase.SHUTDOWN
+            self._write_status(report, ended=True)
 
         msg = self._log_report(report)
         await self._notify_report(msg)
         return report
+
+    # ── Dashboard status ──────────────────────────────────────────────
+
+    def _write_status(self, report: DaemonSessionReport, *, ended: bool = False) -> None:
+        control = getattr(self, "_control", None)
+        if control is None:
+            return
+        control.write_status("session", {
+            "phase": getattr(self._phase, "value", str(self._phase)),
+            "mode": self._config.trading_mode,
+            "session_date": report.session_date,
+            "started_at": self._started_wall,
+            "stopping": self._stop.is_set(),
+            "ended": ended,
+            "halted": report.halted,
+            "candidates_scanned": report.candidates_scanned,
+            "candidates_analyzed": report.candidates_analyzed,
+            "trades_opened": report.trades_opened,
+            "trades_rejected": report.trades_rejected,
+            "sells_executed": report.sells_executed,
+            "orders_unconfirmed": report.orders_unconfirmed,
+            "errors": report.errors[-5:],
+        })
+
+    async def _publish_status(self, report: DaemonSessionReport) -> None:
+        """Every few seconds while the session runs (cancelled at its end)."""
+        while True:
+            try:
+                self._write_status(report)
+            except Exception:
+                logger.debug("Session status not published", exc_info=True)
+            await asyncio.sleep(_STATUS_EVERY_S)
 
     # ── Phase implementations ─────────────────────────────────────────
 

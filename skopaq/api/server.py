@@ -56,6 +56,10 @@ from skopaq.api.dashboard_tools import router as dashboard_tools_router  # noqa:
 
 app.include_router(dashboard_tools_router)
 
+from skopaq.api.dashboard_control import router as dashboard_control_router  # noqa: E402
+
+app.include_router(dashboard_control_router)
+
 
 @app.get("/health")
 async def health() -> dict:
