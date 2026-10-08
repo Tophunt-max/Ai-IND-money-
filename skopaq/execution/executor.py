@@ -433,7 +433,7 @@ class Executor:
             order_type=order_type,
             price=signal.entry_price if order_type == OrderType.LIMIT else None,
             trigger_price=signal.stop_loss if side == Side.BUY else None,
-            product=Product.CNC,
+            product=signal.product or Product.CNC,
             tag=f"skopaq-{signal.confidence}",
         )
 

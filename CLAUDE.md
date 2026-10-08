@@ -81,6 +81,8 @@ skopaq scan                # Scanner cycle
 skopaq chat                # Interactive AI chatbot (Claude Code-style)
 skopaq daemon --once --paper  # Full autonomous session
 skopaq schedule --check    # Show the scheduler's plan (the compose service runs `skopaq schedule`)
+skopaq scalp               # Intraday scalper now (paper; --live real INTRADAY orders), until 15:10
+skopaq scalp-backtest RELIANCE --days 5  # Scalping strategies on past 1-minute candles
 skopaq ticks RELIANCE      # Live INDstocks WebSocket ticks + 1-min candles/indicators (read only)
 skopaq monitor             # Monitor existing positions; live: exits 4 if it ends with positions open or orders unconfirmed
 skopaq settle              # Settle past decisions whose holding window has traded

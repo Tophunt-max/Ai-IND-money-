@@ -113,9 +113,12 @@ def _status() -> dict[str, Any]:
         pass
     session = channel.fresh_status("session", _ACTIVE_S) if channel else None
     monitor = channel.fresh_status("monitor", _ACTIVE_S) if channel else None
+    scalper = channel.fresh_status("scalper", _ACTIVE_S) if channel else None
     out["session"] = session
     out["monitor"] = monitor
-    out["active"] = bool(session or monitor)
+    out["scalper"] = scalper
+    out["scalp_enabled"] = config.scalp_enabled
+    out["active"] = bool(session or monitor or scalper)
     out["pending_commands"] = channel.pending() if channel else 0
     last = channel.read_status("session") if channel else None
     out["last_session"] = last if last and not session else None
@@ -255,34 +258,41 @@ async def _await_result(channel, cmd_id: str, wait_s: float) -> dict:
 
 
 async def _via_session(kind: str, payload: dict, user: DashboardUser,
-                       wait_s: float = _COMMAND_WAIT_S) -> Optional[dict]:
-    """Send a command to the running monitor; None when no monitor runs."""
+                       wait_s: float = _COMMAND_WAIT_S, target: str = "monitor"
+                       ) -> Optional[dict]:
+    """Send a command to the running monitor (or scalper); None when none runs."""
     status = await asyncio.to_thread(_status)
-    if not status["monitor"]:
+    if not status[target]:
         return None
     channel = _channel()
-    cmd_id = await asyncio.to_thread(channel.submit, kind, payload, f"dashboard:{user.email}")
+    cmd_id = await asyncio.to_thread(channel.submit, kind, payload, f"dashboard:{user.email}",
+                                     target=target)
     return {"via": "session", **(await _await_result(channel, cmd_id, wait_s))}
 
 
 class CloseBody(BaseModel):
     symbol: Optional[str] = None   # None: every position
+    scope: Literal["swing", "scalp"] = "swing"   # CNC positions, or the scalper's INTRADAY
 
 
 @router.post("/control/close")
 async def close(body: CloseBody, user: DashboardUser = Depends(require_admin)) -> dict:
     symbol = _symbol(body.symbol) if body.symbol else None
-    what = f"Close {symbol}" if symbol else "CLOSE ALL positions"
+    scalp = body.scope == "scalp"
+    what = (f"Close {symbol}" if symbol else "CLOSE ALL positions") + (" (scalps)" if scalp
+                                                                       else "")
     await _notify(_audit(user, f"🔻 {what}"))
     kind, payload = ("close", {"symbol": symbol}) if symbol else ("close_all", {})
-    res = await _via_session(kind, payload, user)
+    res = await _via_session(kind, payload, user,
+                             target="scalper" if scalp else "monitor")
     if res is not None:
         return res
     config = SkopaqConfig()
     if config.trading_mode != "live":
         raise HTTPException(409, "No session is running: paper positions exist only inside a "
                                  "session")
-    return {"via": "api", **(await _live_close(config, symbol, user))}
+    return {"via": "api", **(await _live_close(config, symbol, user,
+                                               product="INTRADAY" if scalp else "CNC"))}
 
 
 class PlanBody(BaseModel):
@@ -489,14 +499,21 @@ def _result_text(result, signal) -> str:
             f"{(result.fill_price or signal.entry_price or 0):.2f}")
 
 
-async def _live_close(config, symbol: Optional[str], user: DashboardUser) -> dict:
-    from skopaq.broker.models import OrderType, TradingSignal
+async def _live_close(config, symbol: Optional[str], user: DashboardUser, *,
+                      product: str = "CNC") -> dict:
+    """Sell the day's ``product`` positions (CNC: the swing book; INTRADAY: scalps)."""
+    from skopaq.broker.models import OrderType, Product, TradingSignal
     from skopaq.broker.order_status import is_non_cnc_product
+
+    def ours(p) -> bool:
+        if product == "CNC":
+            return not is_non_cnc_product(p.product)
+        return (p.product or "").upper() == product
 
     done = []
     async with _LiveDesk(config) as desk:
         rows = [p for p in await desk.router.get_positions()
-                if p.quantity > 0 and not is_non_cnc_product(p.product)
+                if p.quantity > 0 and ours(p)
                 and (symbol is None or p.symbol.upper() == symbol)]
         if not rows:
             return {"ok": False, "message": f"No open {symbol or 'position'} at the broker"}
@@ -506,7 +523,8 @@ async def _live_close(config, symbol: Optional[str], user: DashboardUser) -> dic
                 symbol=row.symbol, action="SELL", confidence=100, entry_price=ltp,
                 order_type=OrderType.MARKET, quantity=Decimal(row.quantity),
                 reasoning=f"MANUAL CLOSE from the dashboard ({user.email})",
-                position_only=True)
+                position_only=product == "CNC",
+                product=Product.INTRADAY if product == "INTRADAY" else None)
             result = await desk.run(signal)
             done.append({"symbol": row.symbol, "ok": result.success,
                          "message": _result_text(result, signal)})

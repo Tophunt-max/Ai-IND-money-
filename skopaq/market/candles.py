@@ -191,3 +191,19 @@ class LiveSeries:
     def add(self, price: float, ts: datetime, cum_volume: Optional[int] = None
             ) -> Optional[Candle]:
         return self.builder.add(price, ts, cum_volume)
+
+    def seed(self, candles: list[Candle]) -> None:
+        """Closed candles from history (oldest first), before any tick: the indicators are
+        ready at once. Only candles older than the current one are taken."""
+        for c in candles:
+            if self.builder.current is not None and c.start >= self.builder.current.start:
+                break
+            if self.builder.closed and c.start <= self.builder.closed[-1].start:
+                continue
+            self.builder.closed.append(c)
+            self.indicators.update(c)
+
+    @property
+    def candles(self) -> list[Candle]:
+        """The closed candles, oldest first."""
+        return list(self.builder.closed)

@@ -32,6 +32,7 @@ from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
+from skopaq.broker.order_status import is_non_cnc_product
 from skopaq.constants import (
     DAEMON_PAPER_SAFETY_RULES,
     DAEMON_SAFETY_RULES,
@@ -109,6 +110,8 @@ class DaemonSessionReport:
     orders_unconfirmed: int = 0
     positions_left: list[str] = field(default_factory=list)   # still held after CLOSING
     exits_blocked: list[str] = field(default_factory=list)    # exits refused or skipped
+    scalp_summary: str = ""        # the scalper's day, when it ran
+    scalp_pnl: float = 0.0
 
 
 class TradingDaemon:
@@ -159,6 +162,11 @@ class TradingDaemon:
         self._exit_planner = None  # ExitPlanner (stop-loss, target per position)
         self._price_feed = None    # PriceFeed (live ticks) while MONITORING
         self._control = None       # ControlChannel (dashboard status)
+        self._safety = None        # SafetyChecker (shared with the scalper)
+        self._rules = None
+        self._scalper: Optional[asyncio.Task] = None
+        self._scalp_stop: Optional[asyncio.Event] = None
+        self._scalp_feed = None
         self._started_wall = _time.time()
         self._graph = None        # SkopaqTradingGraph
         self._llm_map = None      # Per-role LLM map
@@ -233,6 +241,8 @@ class TradingDaemon:
             await self._timed_phase(DaemonPhase.PRE_OPEN, self._phase_pre_open)
             if self._stop.is_set():
                 self._arm_shutdown()  # the stop came before the router existed
+            if not dry_run and not self._stop.is_set():
+                await self._start_scalper()
 
             # Kill switch: no scanning or new trades while trading is halted
             halt = self._halt_status()
@@ -304,6 +314,8 @@ class TradingDaemon:
             # The CLOSING safety net also runs when the session fails after opening trades
             # (e.g. the monitor could not read positions), or after a BUY the broker did not
             # confirm: nothing else would sell them.
+            if self._scalp_stop is not None:
+                self._scalp_stop.set()        # the session failed: the scalper flattens
             opened = report.trades_opened > 0 or report.orders_unconfirmed > 0
             if opened and self._phase != DaemonPhase.CLOSING:
                 logger.warning("Session failed with %d trade(s) opened and %d unconfirmed: "
@@ -319,6 +331,7 @@ class TradingDaemon:
             # Phase 7: REPORTING — compile metrics
             self._phase = DaemonPhase.REPORTING
             report.phase_times = dict(self._phase_times)
+            await self._finish_scalper(report)
             # A dry run is scan-only: no LLM reflection calls or Supabase writes.
             if not dry_run:
                 report.decisions_settled = await self._settle_due_decisions()
@@ -342,6 +355,66 @@ class TradingDaemon:
         msg = self._log_report(report)
         await self._notify_report(msg)
         return report
+
+    # ── Scalper ───────────────────────────────────────────────────────
+
+    async def _start_scalper(self) -> None:
+        """The intraday scalper (``scalp_enabled``) beside the swing session, until its
+        flatten time or the session's stop."""
+        if getattr(self._config, "scalp_enabled", False) is not True:
+            return
+        from skopaq.broker.websocket import feeds_from_config
+        from skopaq.execution.control import ControlChannel
+        from skopaq.execution.executor import Executor
+        from skopaq.scalping.engine import ScalpEngine
+
+        self._scalp_stop = asyncio.Event()
+        stop = self._scalp_stop
+
+        async def link() -> None:
+            await self._stop.wait()
+            stop.set()
+
+        self._scalp_feed, _ = feeds_from_config(self._config)
+        if self._scalp_feed is not None:
+            await self._scalp_feed.start()
+        engine = ScalpEngine(
+            self._config,
+            # Its own executor: no exit plans or swing sizing; the same router and
+            # safety checker (the loss limits and the order rate count every order)
+            Executor(self._router, self._safety),
+            self._client, self._router, feed=self._scalp_feed,
+            on_trade=self._record_exit, control=ControlChannel.from_config(self._config),
+            max_qty=getattr(self._rules, "max_lots_per_position", None),
+        )
+        linker = asyncio.create_task(link())
+
+        async def run():
+            try:
+                return await engine.run(stop)
+            finally:
+                linker.cancel()
+
+        self._scalper = asyncio.create_task(run(), name="scalper")
+        logger.info("Scalper started beside the session")
+
+    async def _finish_scalper(self, report: DaemonSessionReport) -> None:
+        """Wait for the scalper (it ends at its flatten time, or on the stop)."""
+        if self._scalper is None:
+            return
+        try:
+            scalp = await self._scalper
+            report.scalp_summary = scalp.summary()
+            report.scalp_pnl = scalp.net_pnl
+            report.positions_left.extend(f"{s} (scalp)" for s in scalp.left_open)
+        except Exception as exc:
+            logger.error("Scalper failed", exc_info=True)
+            report.errors.append(f"scalper: {exc}")
+        finally:
+            self._scalper = None
+            if self._scalp_feed is not None:
+                await self._scalp_feed.stop()
+                self._scalp_feed = None
 
     # ── Dashboard status ──────────────────────────────────────────────
 
@@ -449,6 +522,7 @@ class TradingDaemon:
             rules=rules,
             max_sector_concentration_pct=config.max_sector_concentration_pct,
         )
+        self._safety, self._rules = safety, rules
         from skopaq.execution.pnl_history import seed_safety_checker
         seed_safety_checker(safety, config)
 
@@ -826,7 +900,9 @@ class TradingDaemon:
 
         try:
             positions = await self._router.get_positions()
-            open_positions = [p for p in positions if p.quantity > 0]
+            # CNC only: the scalper flattens its own INTRADAY positions
+            open_positions = [p for p in positions if p.quantity > 0
+                              and not is_non_cnc_product(getattr(p, "product", ""))]
         except Exception:
             logger.warning("Could not check positions for closing", exc_info=True)
             return
@@ -1199,6 +1275,8 @@ class TradingDaemon:
             msg += f"\nPositions left open: {', '.join(report.positions_left)}"
         if report.exits_blocked:
             msg += f"\nExits blocked: {', '.join(report.exits_blocked)}"
+        if report.scalp_summary:
+            msg += f"\n\n{report.scalp_summary}"
         if report.errors:
             msg += f"\nErrors: {len(report.errors)}"
         return msg

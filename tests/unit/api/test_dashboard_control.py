@@ -90,8 +90,11 @@ def test_close_goes_to_the_running_monitor(env, monkeypatch):
     env.channel.write_status("monitor", {"positions": []})
     real_submit = ControlChannel.submit
 
-    def submit_and_answer(self, kind, payload, by):
-        cmd_id = real_submit(self, kind, payload, by)
+    targets = []
+
+    def submit_and_answer(self, kind, payload, by, target="monitor"):
+        targets.append(target)
+        cmd_id = real_submit(self, kind, payload, by, target=target)
         self.complete(cmd_id, ok=True, message=f"{kind} {payload.get('symbol')}")
         return cmd_id
 
@@ -99,6 +102,16 @@ def test_close_goes_to_the_running_monitor(env, monkeypatch):
     r = env.client.post("/api/dashboard/control/close", headers=AUTH, json={"symbol": "tcs"})
     assert r.status_code == 200
     assert r.json() == {"via": "session", **r.json(), "ok": True, "message": "close TCS"}
+
+    # A scalp close needs the running scalper, not the monitor
+    r = env.client.post("/api/dashboard/control/close", headers=AUTH,
+                        json={"symbol": "tcs", "scope": "scalp"})
+    assert r.status_code == 409                                  # paper, no scalper
+    env.channel.write_status("scalper", {"positions": []})
+    r = env.client.post("/api/dashboard/control/close", headers=AUTH,
+                        json={"scope": "scalp"})
+    assert r.status_code == 200 and r.json()["message"] == "close_all None"
+    assert targets == ["monitor", "scalper"]
 
 
 def test_paper_actions_without_a_session_are_refused(env):

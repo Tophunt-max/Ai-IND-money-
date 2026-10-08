@@ -35,7 +35,8 @@ REQUEST_TTL_S = 300.0      # a stop/start request older than this is ignored
 COMMAND_TTL_S = 120.0      # a command nobody claimed within this is expired
 RESULT_KEEP_S = 3600.0
 COMMAND_KINDS = ("close", "close_all", "set_plan", "order")
-STATUS_NAMES = ("session", "monitor")
+STATUS_NAMES = ("session", "monitor", "scalper")
+COMMAND_TARGETS = ("monitor", "scalper")
 
 
 def _atomic_write(path: Path, data: Any) -> None:
@@ -146,20 +147,23 @@ class ControlChannel:
 
     # ── Commands ─────────────────────────────────────────────────────────
 
-    def submit(self, kind: str, payload: dict, by: str) -> str:
+    def submit(self, kind: str, payload: dict, by: str, *, target: str = "monitor") -> str:
+        """Queue a command for the running ``target`` (``monitor`` or ``scalper``)."""
         if kind not in COMMAND_KINDS:
             raise ValueError(f"unknown command {kind!r}")
+        if target not in COMMAND_TARGETS:
+            raise ValueError(f"unknown target {target!r}")
         cmd_id = uuid.uuid4().hex[:12]
-        _atomic_write(self.dir / "commands" / f"{cmd_id}.json",
+        _atomic_write(self.dir / "commands" / f"{target}-{cmd_id}.json",
                       {"id": cmd_id, "kind": kind, "payload": payload, "by": by,
-                       "at": self._clock()})
+                       "target": target, "at": self._clock()})
         return cmd_id
 
-    def claim(self) -> list[dict]:
-        """Commands for this process, oldest first; expired ones get an expired result."""
+    def claim(self, target: str = "monitor") -> list[dict]:
+        """``target``'s commands, oldest first; expired ones get an expired result."""
         inbox = self.dir / "commands"
         try:
-            names = sorted(p for p in inbox.glob("*.json"))
+            names = sorted(p for p in inbox.glob(f"{target}-*.json"))
         except OSError:
             return []
         claimed: list[dict] = []
@@ -176,9 +180,12 @@ class ControlChannel:
                     target.unlink()
                 continue
             at = cmd.get("at")
+            cmd_id = str(cmd.get("id") or path.stem)
             if not isinstance(at, (int, float)) or self._clock() - float(at) > COMMAND_TTL_S:
-                self.complete(cmd.get("id") or path.stem, ok=False,
+                self.complete(cmd_id, ok=False,
                               message="expired: no running session picked it up in time")
+                with contextlib.suppress(OSError):
+                    target.unlink()
                 continue
             claimed.append(cmd)
         claimed.sort(key=lambda c: c.get("at", 0))
@@ -191,8 +198,9 @@ class ControlChannel:
                            **extra})
         except OSError:
             logger.warning("Command result %s not written", cmd_id, exc_info=True)
-        with contextlib.suppress(OSError):
-            (self.dir / "claimed" / f"{cmd_id}.json").unlink()
+        for name in (f"{cmd_id}.json", *(f"{t}-{cmd_id}.json" for t in COMMAND_TARGETS)):
+            with contextlib.suppress(OSError):
+                (self.dir / "claimed" / name).unlink()
         self._prune()
 
     def result(self, cmd_id: str) -> Optional[dict]:
