@@ -217,9 +217,14 @@ class FnoEngine:
             except Exception as exc:
                 logger.warning("F&O: underlying %s not found (%s) — skipped", name, exc)
                 continue
+            code = underlying_code(und)
+            if und.is_index:
+                # The REST code that actually prices the index (NIDX_ first)
+                from skopaq.broker.fno import index_scrip_code
+
+                code = await index_scrip_code(self._client, und.exchange, und.security_id)
             self.unders[und.symbol] = _Underlying(
-                und.symbol, und.exchange, underlying_code(und),
-                LiveSeries(self.settings.candle_seconds))
+                und.symbol, und.exchange, code, LiveSeries(self.settings.candle_seconds))
             await self._seed(self.unders[und.symbol])
         if self._feed is not None:
             listen = getattr(self._feed, "add_listener", None)

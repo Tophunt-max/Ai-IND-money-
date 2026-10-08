@@ -84,18 +84,54 @@ def parse_index_csv(text: str) -> dict[tuple[str, str], str]:
     return out
 
 
-async def _index_security_id(client: INDstocksClient, symbol: str) -> tuple[str, str]:
+async def index_id(client: INDstocksClient, exchange: str, names: tuple[str, ...]) -> str:
+    """The SECURITY_ID of an index (any of ``names``) in the index instruments file."""
     global _index_ids, _index_ts
-    exchange, names = INDEX_UNDERLYINGS[symbol]
     if not _index_ids or time.time() - _index_ts > _CACHE_TTL:
         _index_ids = parse_index_csv(await client.get_instruments(source="index"))
         _index_ts = time.time()
         logger.info("Index instruments loaded: %d indices", len(_index_ids))
     for name in names:
-        sid = _index_ids.get((exchange, name))
+        sid = _index_ids.get((exchange.upper(), " ".join(name.upper().split())))
         if sid:
-            return exchange, sid
-    raise ValueError(f"Index {symbol} not found in the INDstocks index instruments file")
+            return sid
+    raise ValueError(f"Index {names[0]} not found in the INDstocks index instruments file")
+
+
+async def _index_security_id(client: INDstocksClient, symbol: str) -> tuple[str, str]:
+    exchange, names = INDEX_UNDERLYINGS[symbol]
+    return exchange, await index_id(client, exchange, names)
+
+
+# Market-data codes of an index, in the order they are tried. The docs give the
+# WebSocket prefix (NIDX:/BIDX:) but no REST example for an index, so the first code that
+# answers a price is remembered (per exchange) and used from then on.
+_index_prefix: dict[str, str] = {}
+
+
+def index_code_candidates(exchange: str, security_id: str) -> list[str]:
+    bse = exchange.upper() == "BSE"
+    found = _index_prefix.get(exchange.upper())
+    order = [found] if found else []
+    order += [p for p in (("BIDX", "BSE") if bse else ("NIDX", "NSE")) if p != found]
+    return [f"{p}_{security_id}" for p in order]
+
+
+async def index_scrip_code(client: INDstocksClient, exchange: str, security_id: str) -> str:
+    """The REST scrip code that prices this index (``NIDX_<id>`` first). Falls back to
+    the first candidate when none answers (e.g. outside a session)."""
+    candidates = index_code_candidates(exchange, security_id)
+    # One code per request: a code the broker does not know may fail the whole request
+    for code in candidates:
+        try:
+            quotes = await client.get_quotes([code], [code])
+        except Exception:
+            logger.debug("Index code %s did not answer", code, exc_info=True)
+            continue
+        if any(q.symbol == code and float(q.ltp or 0) > 0 for q in quotes):
+            _index_prefix[exchange.upper()] = code.split("_", 1)[0]
+            return code
+    return candidates[0]
 
 
 async def resolve_underlying(client: INDstocksClient, symbol: str) -> Underlying:
@@ -179,10 +215,11 @@ def clear_caches() -> None:
     _index_ids = {}
     _index_ts = 0.0
     _lot_cache.clear()
+    _index_prefix.clear()
 
 
 __all__ = [
     "INDEX_UNDERLYINGS", "Underlying", "canonical_underlying", "clear_caches", "expiry_at",
-    "find_option", "lot_size", "lots_to_quantity", "nearest_future", "parse_index_csv",
-    "resolve_underlying",
+    "find_option", "index_code_candidates", "index_id", "index_scrip_code", "lot_size",
+    "lots_to_quantity", "nearest_future", "parse_index_csv", "resolve_underlying",
 ]

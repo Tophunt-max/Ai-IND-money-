@@ -221,6 +221,16 @@ below.
 
 ### Changed
 
+- **The dashboard's market data comes from INDstocks.** Index quotes (NIFTY 50, Bank
+  NIFTY, India VIX, SENSEX) and every chart now come from INDstocks live, as stock quotes
+  already did.
+  - Index quotes use the index's id from the index instruments file, priced as
+    `NIDX_<id>` / `BIDX_<id>`. The working code is probed once and remembered.
+  - Charts use `/market/historical`, paged within the broker's window per call.
+  - Yahoo Finance is only the fallback.
+  - The Market page refreshes every 5 s while NSE is open, and shows the source on every
+    quote and chart.
+  - The F&O engine uses the same verified index code.
 - **Order size limits are set from the dashboard** (**Control → Exits & risk**).
   - Equity orders were capped at 5 shares, so most scalps could not pay their charges.
   - Equity now has `SKOPAQ_MAX_SHARES_PER_ORDER` (default 1000).
