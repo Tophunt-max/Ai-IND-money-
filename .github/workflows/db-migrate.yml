@@ -1,0 +1,55 @@
+name: Database migrations
+
+# Applies supabase/migrations/*.sql that the database has not seen yet
+# (scripts/db/migrate.py). Runs before every EC2 deploy (deploy.yml calls it) and by hand.
+# Does nothing until the SUPABASE_DB_URL secret is set.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only list the migrations that would be applied"
+        type: boolean
+        default: false
+  workflow_call:
+    secrets:
+      SUPABASE_DB_URL:
+        required: false
+
+concurrency:
+  group: db-migrate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Configured?
+        id: cfg
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::notice::SUPABASE_DB_URL secret not set: skipping database migrations"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.skip != 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.skip != 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Apply migrations
+        if: steps.cfg.outputs.skip != 'true'
+        env:
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          pip install --quiet "psycopg2-binary>=2.9.11"
+          # shellcheck disable=SC2086  # DRY_RUN is empty or one flag
+          python scripts/db/migrate.py $DRY_RUN

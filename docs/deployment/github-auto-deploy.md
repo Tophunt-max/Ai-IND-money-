@@ -35,6 +35,7 @@ it there. The host's `.env` can come from the `ENV_FILE` secret (below) or be ke
    | `EC2_SSH_KEY` | the whole `.pem` file, including the `BEGIN`/`END` lines |
    | `ENV_FILE` | optional: the whole `.env` for the host, one `KEY=value` per line |
    | `EC2_USER` | optional, default `ubuntu` |
+   | `SUPABASE_DB_URL` | optional: the database connection string, for [migrations](#database-migrations) |
 
    Until `EC2_HOST` is set the workflow only logs "skipping deploy". Without `ENV_FILE` the host
    must already have a `.env`.
@@ -55,6 +56,31 @@ To change a key: edit the `ENV_FILE` secret, then **Actions → Deploy (EC2) →
 outside market hours (or wait for the 16:15 IST run). A key added on the host by hand is
 overwritten by the next run while `ENV_FILE` is set, so keep the secret as the only copy you edit.
 Write `$$` for a literal `$` in a value.
+
+## Database migrations
+
+Every deploy first runs **Database migrations** (`.github/workflows/db-migrate.yml`), which
+applies the `supabase/migrations/*.sql` files the database has not seen yet
+(`scripts/db/migrate.py`). Applied files are recorded in `public.schema_migrations`. A file
+that fails is rolled back and **stops the deploy**, so the old code keeps running. Without the
+`SUPABASE_DB_URL` secret the step is skipped.
+
+`SUPABASE_DB_URL`: Supabase → your project → **Connect** (top bar) → **Session pooler** →
+copy the URI and put your database password in place of `[YOUR-PASSWORD]`, e.g.
+
+```
+postgresql://postgres.abcdxyz:PASSWORD@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+```
+
+Use the **Session pooler**, not the direct connection: the direct host is IPv6-only and GitHub's
+runners have no IPv6. If the password has `@ : / ? # %`, URL-encode it (`@` → `%40`), or reset it
+to letters and digits (Project Settings → Database).
+
+The migrations are safe to re-run, so the first run on a database set up by hand in the SQL
+Editor is harmless. To change the schema, add a new numbered file (`005_name.sql`) written the
+same way (`IF NOT EXISTS`, `DROP ... IF EXISTS` before `CREATE POLICY`/`TRIGGER`); never edit an
+applied file. CI checks every file on a real Postgres. To run them alone: **Actions → Database
+migrations → Run workflow** (tick *dry run* to only list them).
 
 ## Running it
 

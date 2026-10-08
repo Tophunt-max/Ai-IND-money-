@@ -1,7 +1,7 @@
 -- ============================================================================
 -- SkopaqTrader — Agent Memory Persistence + Trade Lifecycle
 -- ============================================================================
--- Applied via: supabase db push  (or Supabase dashboard SQL editor)
+-- Applied by: scripts/db/migrate.py (GitHub Actions, on deploy). Safe to re-run.
 -- Adds persistent storage for agent memories (self-evolution) and
 -- trade lifecycle tracking for automated reflection.
 -- ============================================================================
@@ -46,6 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_open_buys
 
 ALTER TABLE agent_memories ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "users_own_memories" ON agent_memories;
 CREATE POLICY "users_own_memories" ON agent_memories
     FOR ALL USING (auth.uid() = user_id);
 
@@ -54,6 +55,7 @@ CREATE POLICY "users_own_memories" ON agent_memories
 -- Updated-at trigger (reuses function from 001_initial.sql)
 -- ============================================================================
 
+DROP TRIGGER IF EXISTS agent_memories_updated_at ON agent_memories;
 CREATE TRIGGER agent_memories_updated_at
     BEFORE UPDATE ON agent_memories
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();

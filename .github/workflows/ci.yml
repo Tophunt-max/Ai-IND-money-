@@ -80,6 +80,46 @@ jobs:
         working-directory: ${{ runner.temp }}/harness
         run: python -m pytest tests -m "not integration" -q -p no:cacheprovider
 
+  # supabase/migrations on a real Postgres, twice (the second run must be a no-op), and once
+  # more over a database first set up by hand (every file run directly, as in the SQL Editor).
+  migrations:
+    name: Database migrations (Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply twice, then over a hand-made database
+        run: |
+          pip install --quiet "psycopg2-binary>=2.9.11"
+          # Supabase's auth schema, as far as the migrations use it
+          stub='CREATE SCHEMA auth; CREATE TABLE auth.users (id uuid PRIMARY KEY);
+                CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;'
+          for db in fresh byhand; do
+            psql -h localhost -U postgres -q -c "CREATE DATABASE $db"
+            psql -h localhost -U postgres -d "$db" -q -v ON_ERROR_STOP=1 -c "$stub"
+          done
+          for f in supabase/migrations/*.sql; do
+            psql -h localhost -U postgres -d byhand -q -v ON_ERROR_STOP=1 -f "$f"
+          done
+          base="postgresql://postgres:postgres@localhost:5432"
+          SUPABASE_DB_URL="$base/fresh?sslmode=disable" python scripts/db/migrate.py
+          SUPABASE_DB_URL="$base/fresh?sslmode=disable" python scripts/db/migrate.py | tee second.out
+          grep -q "Up to date" second.out
+          SUPABASE_DB_URL="$base/byhand?sslmode=disable" python scripts/db/migrate.py
+
   # The image and the compose stack as the Mac mini runs them (docs/deployment/mac-mini.md).
   docker:
     name: Docker image and compose stack
