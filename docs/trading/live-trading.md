@@ -213,13 +213,18 @@ Notification + trade row ─── Telegram, Supabase
 skopaq monitor
 ```
 
-Watches open positions and triggers alerts for:
+Follows each position's **exit plan** (`skopaq/execution/exit_plan.py`), made when its BUY filled (from the fill price and the position sizer's ATR stop), or from the broker's average price and the hard stop for a position without one:
 
-- New highs
-- Stop-loss warnings
-- Target proximity
-- Trailing stops
-- End-of-day exit reminders
+| Rule | Sells | When |
+|------|-------|------|
+| Stop-loss | everything | LTP ≤ the BUY's stop, or the hard stop (`SKOPAQ_MONITOR_HARD_STOP_PCT`) if that is higher |
+| Target | `SKOPAQ_MONITOR_PARTIAL_BOOKING_PCT` of the position (all at `1`) | LTP ≥ the target |
+| Trailing after target | the rest | LTP ≤ max(entry, high × (1 − `SKOPAQ_MONITOR_TRAILING_STOP_PCT`)) — never below breakeven |
+| Trailing stop | everything | `SKOPAQ_MONITOR_TRAILING_STOP_ENABLED`, before the target |
+| EOD exit | everything | 15:20 IST |
+| AI | everything | the sell analyst says SELL (min-profit gate) |
+
+The target (`SKOPAQ_MONITOR_TARGET_MODE`): `rr` = entry + `SKOPAQ_MONITOR_TARGET_RR` × (entry − stop), 1:2 by default; `pct` = entry × (1 + `SKOPAQ_MONITOR_TARGET_PCT`); `inr` = `SKOPAQ_MONITOR_TARGET_INR` of profit on the whole position; `off`. All are on the dashboard's Environment page. The BUY's stop and target are stored on its trade row (the dashboard shows them on open positions). Plans are saved per day in `SKOPAQ_EXIT_PLAN_DIR` with the high-water mark and what was booked, so a restarted or recovery monitor neither books the target twice nor forgets the high. Every exit is a MARKET SELL worked by the live order worker as before; nothing rests at the broker between polls (INDstocks smart orders are not used yet), so a stop or target is acted on at the next poll (`SKOPAQ_MONITOR_POLL_INTERVAL_SECONDS`) and only while a monitor runs.
 
 In live mode it also keeps in step with the broker: every `SKOPAQ_MONITOR_RESYNC_CYCLES` polls it re-reads the order book, positions and holdings, drops a position only when two successful reads agree it is gone (and takes it back when a later read shows it), resumes orders left open in the background and records their late fills. It exits 4 when positions remain open at the end (see [Shutdown and the close](#shutdown-and-the-close)).
 

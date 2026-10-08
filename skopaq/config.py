@@ -28,6 +28,12 @@ _LENIENT_FIELDS = (
     "allow_sell_without_order_book",
     "indstocks_order_remarks_enabled",
     "monitor_resync_cycles",
+    # Exit plans: a typo falls back to the default instead of stopping every service
+    "monitor_target_mode",
+    "monitor_target_rr",
+    "monitor_target_pct",
+    "monitor_target_inr",
+    "monitor_partial_booking_pct",
 )
 
 
@@ -164,6 +170,18 @@ class SkopaqConfig(BaseSettings):
     monitor_trailing_stop_enabled: bool = False
     monitor_trailing_stop_pct: float = 0.02  # 2% trail from high-water
     monitor_resync_cycles: int = 3  # live: re-read broker book/positions every N polls [1, 60]
+    # Exit plan of each position (skopaq/execution/exit_plan.py): a target, the BUY's
+    # stop-loss, partial booking at the target, then a trailing stop from breakeven.
+    # rr: entry + rr × (entry − stop); pct: entry × (1 + pct); inr: profit per position
+    monitor_target_mode: Literal["off", "rr", "pct", "inr"] = "rr"
+    monitor_target_rr: float = 2.0       # risk:reward 1:2
+    monitor_target_pct: float = 0.03     # 3 % above entry
+    monitor_target_inr: float = 1000.0   # ₹1,000 profit on the whole position
+    # Share of the position sold at the target (0.5 = half); 1 = all of it. The rest gets
+    # a stop at breakeven and trails monitor_trailing_stop_pct below the high
+    monitor_partial_booking_pct: float = 0.5
+    # Plans (with their high-water mark and what was booked) survive a monitor restart
+    exit_plan_dir: str = "~/.skopaq/exit_plans"
 
     # ── Daemon (autonomous session) ──────────────────────────────────
     daemon_max_trades_per_session: int = 3  # Max BUY orders per day

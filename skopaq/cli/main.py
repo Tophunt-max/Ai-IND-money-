@@ -375,7 +375,10 @@ async def _run_trade(symbol: str, trade_date: str):
             atr_period=config.atr_period,
         )
 
-    executor = Executor(router, safety, position_sizer=sizer)
+    from skopaq.execution.exit_plan import planner_from_config
+
+    executor = Executor(router, safety, position_sizer=sizer,
+                        exit_planner=planner_from_config(config))
 
     # For paper mode, inject a real-time quote so the fill simulation has a price.
     if config.trading_mode == "paper":
@@ -796,7 +799,11 @@ async def _run_monitor(config, ai_enabled: bool):
     )
     from skopaq.execution.pnl_history import seed_safety_checker
     seed_safety_checker(safety, config)
-    executor = Executor(router, safety)
+    from skopaq.execution.exit_plan import planner_from_config
+
+    # The plans the daemon's BUYs made (stop-loss, target, what was booked)
+    exit_planner = planner_from_config(config)
+    executor = Executor(router, safety, exit_planner=exit_planner)
 
     # Build LLM for sell analyst (if AI enabled)
     llm = None
@@ -841,6 +848,7 @@ async def _run_monitor(config, ai_enabled: bool):
             on_exit=lambda signal, execution: _record_exit(config, None, None, signal, execution),
             on_late_fill=lambda tracked, conf: _record_late_fill(config, None, None, tracked,
                                                                  conf),
+            exit_planner=exit_planner,
         )
         return await monitor_instance.run()
 
@@ -1448,6 +1456,17 @@ async def _run_lifecycle(config, graph, memory_store, result, *,
     return booked
 
 
+def _agent_decision(signal) -> dict:
+    """The decision stored on a trade row; a BUY's exit plan (stop-loss, target) too,
+    which the dashboard shows on open positions."""
+    decision = {"action": signal.action, "confidence": signal.confidence}
+    for key in ("stop_loss", "target"):
+        value = getattr(signal, key, None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            decision[key] = round(float(value), 2)
+    return decision
+
+
 def _build_trade_record(result, config):
     """Convert an AnalysisResult into a TradeRecord for Supabase persistence.
 
@@ -1537,10 +1556,7 @@ def _build_trade_record(result, config):
             result.signal.reasoning[:2000]
             if result.signal.reasoning else None
         ),
-        agent_decision={
-            "action": result.signal.action,
-            "confidence": result.signal.confidence,
-        },
+        agent_decision=_agent_decision(result.signal),
         model_signals=model_signals,
     )
 

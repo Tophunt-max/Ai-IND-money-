@@ -14,8 +14,10 @@ each closed position generates lessons that inform future decisions.
 A live SELL closes only the quantity the broker confirmed filled, across the open live
 BUY rows (newest first). A row sold in part is split: its remainder is saved as a new
 open row before the row is closed for the sold part. A paper SELL that succeeded closes
-the whole newest open paper BUY row as before; it never closes a live row, and a refused
-one closes nothing.
+the whole newest open paper BUY row as before, unless it sold less than that row holds
+(the monitor booking part of a position at its target): then it is booked by quantity
+like a live SELL, over paper rows. It never closes a live row, and a refused one closes
+nothing.
 """
 
 from __future__ import annotations
@@ -141,6 +143,11 @@ class TradeLifecycleManager:
             )
             return True
 
+        sold_qty = _decimal(getattr(result.signal, "quantity", None))
+        if 0 < sold_qty < open_buy.quantity:
+            # Part of the position (a target's booking): close that much only
+            return await self._handle_live_sell(result, sold_qty, is_paper=True)
+
         # Compute realized P&L
         sell_price = (
             result.execution.fill_price
@@ -219,8 +226,10 @@ class TradeLifecycleManager:
             )
         return True
 
-    async def _handle_live_sell(self, result: AnalysisResult, sold: Decimal) -> bool:
-        """Close the confirmed quantity of a live SELL against the open live BUY rows.
+    async def _handle_live_sell(self, result: AnalysisResult, sold: Decimal, *,
+                                is_paper: bool = False) -> bool:
+        """Close the confirmed quantity of a live SELL against the open live BUY rows
+        (``is_paper``: a paper SELL of part of a position, against the paper rows).
 
         Newest row first, until the sold quantity is booked or the open rows run out;
         paper rows are never closed by a live SELL. A row sold in part is split: the remainder
@@ -249,7 +258,7 @@ class TradeLifecycleManager:
         while remaining > 0 and len(lots) < _MAX_LOTS:
             try:
                 # Live rows only: a paper row's P&L would miss the live loss limits
-                open_buy = self._trade_repo.find_open_buy(symbol, is_paper=False)
+                open_buy = self._trade_repo.find_open_buy(symbol, is_paper=is_paper)
             except Exception:
                 logger.warning("Failed to look up open BUY for %s — skipping reflection",
                                symbol, exc_info=True)

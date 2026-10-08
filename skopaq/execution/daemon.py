@@ -155,6 +155,7 @@ class TradingDaemon:
         self._client = None       # INDstocksClient
         self._router = None       # OrderRouter
         self._executor = None     # Executor
+        self._exit_planner = None  # ExitPlanner (stop-loss, target per position)
         self._graph = None        # SkopaqTradingGraph
         self._llm_map = None      # Per-role LLM map
         self._memory_store = None # MemoryStore (optional)
@@ -416,7 +417,12 @@ class TradingDaemon:
                 atr_period=config.atr_period,
             )
 
-        self._executor = Executor(self._router, safety, position_sizer=sizer)
+        # Each filled BUY gets an exit plan (stop-loss, target) the monitor follows
+        from skopaq.execution.exit_plan import planner_from_config
+
+        self._exit_planner = planner_from_config(config)
+        self._executor = Executor(self._router, safety, position_sizer=sizer,
+                                  exit_planner=self._exit_planner)
 
         # 5. Build analysis graph
         upstream_config = _build_upstream_config(config)
@@ -657,6 +663,7 @@ class TradingDaemon:
             on_late_fill=self._record_late_fill,
             sleep=self._sleep,
             wall=self._wall,
+            exit_planner=self._exit_planner,
         )
 
         logger.info("Starting position monitor...")

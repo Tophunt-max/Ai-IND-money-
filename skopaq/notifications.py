@@ -179,7 +179,8 @@ async def notify_position_alert(
     """Send a position alert (new high, stop warning, etc.)."""
     emoji = {
         "NEW_HIGH": "📈", "STOP_WARNING": "⚠️", "TARGET_NEAR": "🎯",
-        "TRAILING_STOP": "📉", "EOD_EXIT": "⏰",
+        "TRAILING_STOP": "📉", "EOD_EXIT": "⏰", "TARGET_HIT": "🎯", "STOP_LOSS": "🛑",
+        "EXIT": "📤",
     }
 
     e = emoji.get(alert_type, "📋")

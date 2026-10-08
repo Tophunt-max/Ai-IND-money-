@@ -26,6 +26,24 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Target, stop-loss and partial profit booking for every position**
+  (`skopaq/execution/exit_plan.py`, paper and live). Each filled BUY gets an exit plan from
+  its fill price and the position sizer's stop. Positions without one get a plan from the
+  average price and the hard stop.
+  - **Stop-loss:** the monitor sells everything at the BUY's own stop when that is tighter
+    than the hard stop.
+  - **Target:** at the target it sells `SKOPAQ_MONITOR_PARTIAL_BOOKING_PCT` of the
+    position (default half; `1` = all). The rest gets a stop at breakeven that trails
+    `SKOPAQ_MONITOR_TRAILING_STOP_PCT` below the high.
+  - **Target modes** (`SKOPAQ_MONITOR_TARGET_MODE`): `rr` (default 1:2,
+    `SKOPAQ_MONITOR_TARGET_RR`), `pct`, `inr` (₹ profit on the position), `off`.
+  - **Restarts:** plans are saved per day in `SKOPAQ_EXIT_PLAN_DIR` with the high-water
+    mark and what was booked, so a restarted or recovery monitor does not book twice and
+    keeps the high.
+  - **Where they show:** the BUY's stop and target are stored on its trade row (the
+    dashboard's open positions show them), and every setting is on the Environment page.
+  - **Paper P&L:** a paper SELL of part of a position is now booked by quantity instead of
+    closing the whole BUY row.
 - **F&O groundwork on INDstocks.**
   - New `INDstocksClient` methods: `get_option_chain` (`/market/option-chain`, with IV and
     Greeks), `get_expiries`, `search_derivatives`, `get_margin` (`/margin`) and
