@@ -13,6 +13,7 @@ import {
 } from "@/components/ui";
 import { inr, pct, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { useMarketOpen } from "@/lib/market";
 import { planLine, rcLabel, type SchedulerStatus } from "@/lib/scheduler";
 
 interface SystemStatus {
@@ -78,7 +79,8 @@ function StatusRow({ icon: Icon, label, value, ok, detail }: {
 
 export default function Home() {
   const status = useApi<SystemStatus>("/api/status", 60000);
-  const ov = useApi<Overview>("/api/dashboard/overview", 30000);
+  const open = useMarketOpen();
+  const ov = useApi<Overview>("/api/dashboard/overview", open ? 15000 : 60000);
   const pnl = useApi<PnlHistory>("/api/dashboard/pnl-history?days=90", 120000);
   const sched = useApi<SchedulerStatus>("/api/dashboard/scheduler", 60000);
 

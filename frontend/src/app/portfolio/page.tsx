@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { inr, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { useMarketOpen } from "@/lib/market";
 
 type Row = Record<string, any>;
 
@@ -193,7 +194,8 @@ function KiteExtras() {
 }
 
 export default function PortfolioPage() {
-  const { data, error, loading, reload } = useApi<Portfolio>("/api/dashboard/portfolio", 60000);
+  const open = useMarketOpen();
+  const { data, error, loading, reload } = useApi<Portfolio>("/api/dashboard/portfolio", open ? 15000 : 60000);
   const [broker, setBroker] = useState<"indstocks" | "kite">("indstocks");
 
   return (

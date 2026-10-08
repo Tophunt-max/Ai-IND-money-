@@ -2,7 +2,7 @@
 
 import { ArrowDownRight, ArrowUpRight, Brain, LineChart, NotebookPen, Radar, Search } from "lucide-react";
 import Link from "next/link";
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/AuthGate";
@@ -10,6 +10,7 @@ import PriceChart from "@/components/PriceChart";
 import { Badge, Button, Card, ErrorBox, PageTitle, Skeleton, StatCard } from "@/components/ui";
 import { inr, pct, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { useAgo, useMarketOpen } from "@/lib/market";
 
 interface Quote {
   symbol: string;
@@ -38,6 +39,26 @@ function Change({ q, big = false }: { q: { change_pct: number | null; change?: n
   );
 }
 
+/** Briefly tints its children green / red when *value* goes up / down. */
+function Flash({ value, children }: { value: number | null | undefined; children: React.ReactNode }) {
+  const prev = useRef(value);
+  const [dir, setDir] = useState<"up" | "down" | null>(null);
+  useEffect(() => {
+    if (value != null && prev.current != null && value !== prev.current) {
+      setDir(value > prev.current ? "up" : "down");
+      const id = setTimeout(() => setDir(null), 900);
+      prev.current = value;
+      return () => clearTimeout(id);
+    }
+    prev.current = value;
+  }, [value]);
+  return (
+    <span className={`rounded-lg transition-colors duration-700 ${dir === "up" ? "bg-emerald-500/20" : dir === "down" ? "bg-rose-500/20" : "bg-transparent"}`}>
+      {children}
+    </span>
+  );
+}
+
 function Market() {
   const params = useSearchParams();
   const router = useRouter();
@@ -46,12 +67,16 @@ function Market() {
   const [input, setInput] = useState(symbol);
   useEffect(() => setInput(symbol), [symbol]);
 
-  const indices = useApi<{ indices: (Quote & { name: string })[] }>("/api/dashboard/market/indices", 60000);
+  const open = useMarketOpen();
+  const every = open ? 15000 : 60000;
+  const indices = useApi<{ indices: (Quote & { name: string })[] }>("/api/dashboard/market/indices", every);
   const watch = useApi<{ symbols: string[] }>("/api/dashboard/market/watchlist");
   const quote = useApi<{ quotes: Record<string, Quote>; errors: Record<string, string> }>(
     symbol ? `/api/dashboard/market/quotes?symbols=${encodeURIComponent(symbol)}` : null,
-    15000,
+    every,
   );
+  const quoteAgo = useAgo(quote.updatedAt);
+  const indicesAgo = useAgo(indices.updatedAt);
   const q = symbol ? quote.data?.quotes[symbol] : undefined;
   const qErr = symbol ? quote.data?.errors[symbol] : undefined;
   const isIndex = symbol.startsWith("^");
@@ -76,12 +101,16 @@ function Market() {
             className={`surface p-4 text-left transition hover:border-brand-500/30 ${symbol === i.symbol ? "ring-1 ring-brand-500/40" : ""}`}>
             <div className="text-xs font-medium text-gray-400">{i.name}</div>
             <div className="mt-1 flex items-end justify-between gap-2">
-              <div className="num text-xl font-semibold text-white">{i.ltp?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}</div>
+              <div className="num text-xl font-semibold text-white"><Flash value={i.ltp}>{i.ltp?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}</Flash></div>
               <Change q={i} />
             </div>
           </button>
         ))}
         {indices.loading && !indices.data && [0, 1, 2].map((i) => <Skeleton key={i} className="h-20" />)}
+      </div>
+      <div className="-mt-3 flex items-center gap-2 text-[11px] text-gray-500">
+        <span className={`h-1.5 w-1.5 rounded-full ${open ? "animate-pulse bg-emerald-400" : "bg-gray-600"}`} />
+        {open ? `NSE open · auto-refresh every ${every / 1000}s` : "NSE closed · refresh every minute"} · updated {indicesAgo}
       </div>
       <ErrorBox error={indices.error} />
 
@@ -116,7 +145,7 @@ function Market() {
                 <div>
                   <div className="text-sm font-medium text-gray-400">{symbol}</div>
                   <div className="num mt-1 text-4xl font-semibold tracking-tight text-white">
-                    {isIndex ? q.ltp?.toLocaleString("en-IN") : inr(q.ltp)}
+                    <Flash value={q.ltp}>{isIndex ? q.ltp?.toLocaleString("en-IN") : inr(q.ltp)}</Flash>
                   </div>
                   <div className="mt-2"><Change q={q} big /></div>
                 </div>
@@ -124,7 +153,8 @@ function Market() {
                   {q.source === "indstocks"
                     ? <Badge tone="ok" dot>LIVE · INDstocks</Badge>
                     : <Badge tone="warning" dot>Delayed · Yahoo Finance</Badge>}
-                  <span>As of {when(q.as_of)} · refreshes every 15 s</span>
+                  <span>As of {when(q.as_of)}</span>
+                  <span>Updated {quoteAgo} · every {every / 1000}s</span>
                 </div>
               </div>
             ) : null}
