@@ -262,6 +262,42 @@ async def market_history(symbol: str, range: str = "3mo") -> dict:  # noqa: A002
         raise HTTPException(502, f"Price history unavailable: {exc}") from exc
     if not data["candles"]:
         raise HTTPException(404, f"No price history for {symbol}")
+    return await _with_live_candle(data)
+
+
+async def _with_live_candle(data: dict[str, Any]) -> dict[str, Any]:
+    """Move today's last candle to the live INDstocks price (best effort), so the chart
+    follows the market between Yahoo refreshes. Yahoo-only quotes change nothing."""
+    from skopaq.broker import live_quotes
+
+    data = {**data, "candles": [dict(c) for c in data["candles"]], "live": False}
+    symbol = data.get("symbol", "")
+    if not symbol or symbol.startswith("^"):
+        return data
+    try:
+        quotes, _ = await live_quotes.get_quotes([symbol])
+    except Exception:
+        return data
+    q = quotes.get(symbol)
+    if not q or q.get("source") != "indstocks" or not q.get("ltp"):
+        return data
+    ltp = float(q["ltp"])
+    last = data["candles"][-1]
+    today = datetime.now(_IST).date()
+    if datetime.fromtimestamp(last["t"], _IST).date() == today:
+        last["c"] = ltp
+        last["h"] = max(v for v in (last.get("h"), ltp) if v is not None)
+        last["l"] = min(v for v in (last.get("l"), ltp) if v is not None)
+    elif data.get("interval") == "1d" and q.get("open"):
+        # Yahoo has no bar for today yet: add one from the live quote
+        start = datetime.combine(today, datetime.min.time(), tzinfo=_IST)
+        data["candles"].append({
+            "t": int(start.timestamp()), "o": q["open"], "h": q.get("high") or ltp,
+            "l": q.get("low") or ltp, "c": ltp, "v": q.get("volume") or 0})
+    else:
+        return data
+    data["live"] = True
+    data["ltp"] = ltp
     return data
 
 

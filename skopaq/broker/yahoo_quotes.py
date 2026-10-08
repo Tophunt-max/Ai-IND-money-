@@ -32,8 +32,10 @@ RANGES = {
     "5y": ("5y", "1wk"),
 }
 
-_QUOTE_TTL = 60.0
-_HISTORY_TTL = 300.0
+# The dashboard refreshes every 15 s while NSE is open
+_QUOTE_TTL = 15.0
+_HISTORY_TTL = 300.0  # daily / weekly bars
+_INTRADAY_TTL = 30.0  # 1d / 5d bars
 _cache: dict[tuple, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
 
@@ -147,7 +149,8 @@ def get_history(symbol: str, range_: str = "3mo") -> dict[str, Any]:
         return {"symbol": normalize(symbol), "ticker": ticker, "range": range_,
                 "interval": interval, "candles": candles}
 
-    return _cached(("h", ticker, range_), _HISTORY_TTL, fetch)
+    ttl = _INTRADAY_TTL if range_ in ("1d", "5d") else _HISTORY_TTL
+    return _cached(("h", ticker, range_), ttl, fetch)
 
 
 def paper_quote(symbol: str):

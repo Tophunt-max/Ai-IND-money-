@@ -9,16 +9,25 @@ export function useApi<T = any>(path: string | null, intervalMs?: number) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(!!path);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const inFlight = useRef<string | null>(null);  // the path being fetched
+  const current = useRef(path);
+  current.current = path;
 
   const reload = useCallback(async () => {
-    if (!path) return;
+    if (!path || inFlight.current === path) return;
+    inFlight.current = path;
     setLoading(true);
     try {
-      setData(await api<T>(path));
+      const result = await api<T>(path);
+      if (current.current !== path) return;  // an answer for a path we left
+      setData(result);
       setError(null);
+      setUpdatedAt(Date.now());
     } catch (e: any) {
-      setError(e.message || String(e));
+      if (current.current === path) setError(e.message || String(e));
     } finally {
+      if (inFlight.current === path) inFlight.current = null;
       setLoading(false);
     }
   }, [path]);
@@ -26,11 +35,20 @@ export function useApi<T = any>(path: string | null, intervalMs?: number) {
   useEffect(() => {
     reload();
     if (!intervalMs) return;
-    const id = setInterval(reload, intervalMs);
-    return () => clearInterval(id);
+    // Background refresh only while the tab is visible; catch up when it comes back
+    const tick = () => {
+      if (typeof document === "undefined" || !document.hidden) reload();
+    };
+    const id = setInterval(tick, intervalMs);
+    const onVisible = () => !document.hidden && reload();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [reload, intervalMs]);
 
-  return { data, error, loading, reload, setData };
+  return { data, error, loading, reload, setData, updatedAt };
 }
 
 export interface Job {
