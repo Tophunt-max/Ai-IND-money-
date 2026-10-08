@@ -897,6 +897,7 @@ async def _run_monitor(config, ai_enabled: bool):
     loop = asyncio.get_running_loop()
     for s in (sig.SIGINT, sig.SIGTERM):
         loop.add_signal_handler(s, _handle_sigint)
+    watcher = _watch_dashboard_stop(config, stop_event)
 
     # Live ticks over the INDstocks price WebSocket (REST quotes when it is down)
     from skopaq.broker.websocket import feeds_from_config
@@ -925,6 +926,7 @@ async def _run_monitor(config, ai_enabled: bool):
         try:
             return await monitor_instance.run()
         finally:
+            watcher.cancel()
             if price_feed is not None:
                 await price_feed.stop()
 
@@ -1017,16 +1019,30 @@ async def _run_daemon(config, *, once: bool = False, dry_run: bool = False):
         loop.add_signal_handler(s, _handle_signal, s)
 
     daemon_instance = TradingDaemon(config, stop_event=stop_event)
+    # A stop asked for from the dashboard works like a SIGTERM
+    watcher = _watch_dashboard_stop(config, stop_event)
+    try:
+        # Wait for market open (unless --once or --dry-run)
+        if not once and not dry_run:
+            await daemon_instance.wait_for_market_open()
 
-    # Wait for market open (unless --once or --dry-run)
-    if not once and not dry_run:
-        await daemon_instance.wait_for_market_open()
+        if stop_event.is_set():
+            from skopaq.execution.daemon import DaemonSessionReport
+            return DaemonSessionReport(session_date="cancelled")
 
-    if stop_event.is_set():
-        from skopaq.execution.daemon import DaemonSessionReport
-        return DaemonSessionReport(session_date="cancelled")
+        return await daemon_instance.run_session(dry_run=dry_run)
+    finally:
+        watcher.cancel()
 
-    return await daemon_instance.run_session(dry_run=dry_run)
+
+def _watch_dashboard_stop(config, stop_event: asyncio.Event) -> asyncio.Task:
+    """A task that sets ``stop_event`` on a dashboard stop request made from now on."""
+    import time as _time
+
+    from skopaq.execution.control import ControlChannel, watch_stop
+
+    return asyncio.get_running_loop().create_task(
+        watch_stop(ControlChannel.from_config(config), stop_event, started_at=_time.time()))
 
 
 # ── Schedule ─────────────────────────────────────────────────────────────────

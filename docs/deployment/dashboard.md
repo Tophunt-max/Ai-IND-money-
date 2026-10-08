@@ -8,6 +8,7 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 |---|---|---|
 | Dashboard | Total P&L with the 90-day chart, kill-switch and token banners, today's auto-trading session, open positions, system health | `/api/dashboard/overview`, `/pnl-history`, `/scheduler`, `/api/status` |
 | Portfolio | INDstocks equity positions, F&O positions, holdings, funds (incl. option-buy and futures balances) and today's order book. Read only | `/api/dashboard/portfolio` |
+| **Control** | Run the engine: pause/resume new BUYs, auto sessions on/off, **start a session now** (or, live, a monitor), **stop** the running session, live positions (LTP, P&L, stop, target, high) with **Close** / **Close all** and stop/target edits, **manual orders** (live: type LIVE), today's order book with **Cancel**, exit & risk settings. Streams every 2 s (admin actions only; each is logged and sent to Telegram) | `/api/dashboard/control*` |
 | Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y) | `/api/dashboard/market/*` |
 | Analyze | Full multi-agent analysis (`skopaq analyze`), or analysis + **paper** trade (`skopaq trade`, refused unless the server is in paper mode), 2–5 min | `/api/dashboard/jobs` |
 | Scanner | One scan of the watchlist (`skopaq scan`), and the background scanner's status and candidates | `/api/dashboard/jobs`, `/scanner/status` |
@@ -23,8 +24,26 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 | Settings | Kill switch, account, login history, links | `/api/dashboard/kill-switch*` |
 | Environment (admin) | View and change `SKOPAQ_*` settings: trading mode, live switch, scheduler, keys (see below) | `/api/dashboard/settings/env` |
 
-The dashboard never places, changes or cancels a broker order itself. `skopaq monitor` is not
-a button either: the scheduler runs it, and a second monitor beside it would sell the same positions.
+## Control (admin)
+
+The Control page talks to the trading processes through files in `SKOPAQ_CONTROL_DIR`
+(`~/.skopaq/control` on the shared home volume, `skopaq/execution/control.py`):
+
+| Action | How it reaches the engine |
+|---|---|
+| Pause / Resume | the kill switch (no new BUYs; exits keep running) |
+| Auto sessions on/off | `SKOPAQ_SCHEDULER_ENABLED` (a dashboard override); a running session is not stopped |
+| Start session now | `start.request`: the scheduler runs today's session at its next poll, 09:00–15:00 IST on a trading day, once its earlier session has ended; refusals go to Telegram. **Start monitor** (live) runs `skopaq monitor` instead, to guard positions without opening new ones |
+| Stop | `stop.request`: the daemon (or monitor) sets its stop as on a SIGTERM; the daemon then sells everything it holds (CLOSING) |
+| Close / Close all, stop & target edits, manual orders | with a session running, a command its monitor runs at its next check (so exits go through its exit plans and booking); without one, live closes and orders are placed by the API through the same Executor → SafetyChecker → live order worker (SELL locks and the order journal are shared on the host); paper positions exist only inside a session |
+| Cancel | live only: `POST /order/cancel` at INDstocks; the running session's own orders are refused (stop it or close the position instead) |
+
+The daemon and the monitor publish `session.json` / `monitor.json` every few seconds; the
+page streams them (`GET /api/dashboard/control/stream`, Server-Sent Events over `fetch`
+with the bearer token, polling when the stream is down). A live manual BUY made while no
+monitor runs has no automatic stop or target until one does: the page says so — use
+**Start monitor**. The reverse proxy must not buffer the stream (the API sends
+`X-Accel-Buffering: no`; Caddy streams `text/event-stream` as is).
 
 Prices, charts and unrealized P&L come from Yahoo Finance (`skopaq/broker/yahoo_quotes.py`)
 and can lag NSE by a few minutes. Paper fills use the same price when INDstocks has no

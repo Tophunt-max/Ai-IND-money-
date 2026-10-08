@@ -2,9 +2,9 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
-  BarChart3, Brain, CalendarClock, FlaskConical, Grid2x2, Layers, LayoutDashboard, LineChart,
-  ListChecks, LogOut, MessagesSquare, PlugZap, Radar, ScrollText, Settings, SlidersHorizontal,
-  Sparkles, Wallet, X,
+  BarChart3, Brain, CalendarClock, FlaskConical, Gauge, Grid2x2, Layers, LayoutDashboard,
+  LineChart, ListChecks, LogOut, MessagesSquare, PlugZap, Radar, ScrollText, Settings,
+  SlidersHorizontal, Sparkles, Wallet, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -35,6 +35,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
   {
     group: "Trading",
     items: [
+      { href: "/control", label: "Control", icon: Gauge },
       { href: "/analyze", label: "Analyze", icon: Brain },
       { href: "/scanner", label: "Scanner", icon: Radar },
       { href: "/options", label: "Options", icon: Layers },
@@ -70,7 +71,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
 const TABS: NavItem[] = [
   { href: "/", label: "Home", icon: LayoutDashboard },
   { href: "/portfolio", label: "Portfolio", icon: Wallet },
-  { href: "/analyze", label: "Analyze", icon: Brain },
+  { href: "/control", label: "Control", icon: Gauge },
   { href: "/chat", label: "Chat", icon: MessagesSquare },
 ];
 

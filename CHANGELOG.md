@@ -26,6 +26,27 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Control center in the dashboard** (new **Control** page, admin actions). From the page
+  you can:
+  - pause or resume new BUYs;
+  - turn auto sessions on or off;
+  - start today's session now (live: or a monitor);
+  - stop the running session, which then sells what it holds;
+  - see live positions (LTP, P&L, stop, target, high), close one or all, and edit a stop or
+    target;
+  - place a manual BUY or SELL through the safety checks (live: type LIVE);
+  - see today's INDstocks order book and cancel open orders;
+  - change the main exit and risk settings.
+
+  **How it works:**
+  - The API, the scheduler and the session talk through files in `SKOPAQ_CONTROL_DIR`
+    (`skopaq/execution/control.py`: status, stop/start requests, claimed commands).
+  - The daemon and the monitor publish their status every few seconds, and the page streams
+    it with Server-Sent Events (`/api/dashboard/control/stream`).
+  - With a session running, actions go to its monitor. Without one, live closes and orders
+    are placed by the API through the same Executor and SafetyChecker.
+  - Every action is logged and sent to Telegram.
+  - API: `skopaq/api/dashboard_control.py`.
 - **Live prices over the INDstocks WebSocket.**
   - `skopaq/broker/websocket.py` is rewritten from the official docs:
     - `PriceFeed` subscribes with `SEGMENT:TOKEN`, keeps the newest tick per instrument,

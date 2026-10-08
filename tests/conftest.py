@@ -41,6 +41,7 @@ os.environ.pop("SKOPAQ_TRADING_HALTED", None)
 import tempfile as _tempfile  # noqa: E402
 
 os.environ["SKOPAQ_EXIT_PLAN_DIR"] = _tempfile.mkdtemp(prefix="skopaq-exit-plans-")
+os.environ["SKOPAQ_CONTROL_DIR"] = _tempfile.mkdtemp(prefix="skopaq-control-")
 os.environ["SKOPAQ_ENV_OVERRIDES_FILE"] = os.path.join(
     os.path.dirname(__file__), ".no-such-dir", "env-overrides-for-tests.json"
 )

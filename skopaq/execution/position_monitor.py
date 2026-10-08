@@ -49,6 +49,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -69,6 +70,7 @@ from skopaq.broker.order_status import (
     to_decimal,
 )
 from skopaq.broker.websocket import PriceFeed
+from skopaq.execution.control import ControlChannel
 from skopaq.execution.exit_plan import ExitPlan, ExitPlanner
 from skopaq.execution.live_orders import (
     Confirmation,
@@ -152,6 +154,7 @@ class MonitoredPosition:
     ai_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
     # Stop-loss, target and booking state (attached by the monitor)
     plan: Optional[ExitPlan] = field(default=None, repr=False, compare=False)
+    last_ltp: float = 0.0
 
     def __post_init__(self):
         if self.high_water_mark <= 0:
@@ -768,6 +771,7 @@ class PositionMonitor:
         wall: Optional[Callable[[], datetime]] = None,
         exit_planner: Optional[ExitPlanner] = None,
         price_feed: Optional[PriceFeed] = None,
+        control: Optional[ControlChannel] = None,
     ):
         """``on_exit(signal, execution)`` is awaited after each successful sell,
         e.g. to persist it; its failures are logged, never raised.
@@ -780,7 +784,8 @@ class PositionMonitor:
         ``exit_planner`` finds each position's exit plan (and saves its progress);
         without one, plans are made from the settings and kept in memory.
         ``price_feed`` (started and stopped by the caller) supplies live ticks; the
-        monitor subscribes every position it tracks.
+        monitor subscribes every position it tracks. ``control`` (default: from
+        ``control_dir``) is where it publishes its positions and takes dashboard commands.
         """
         self._executor = executor
         self._on_exit = on_exit
@@ -815,6 +820,11 @@ class PositionMonitor:
         self._planner = exit_planner or ExitPlanner(config)
         self._plan_mode = "live" if config.trading_mode == "live" else "paper"
 
+        self._control = control if control is not None else ControlChannel.from_config(config)
+        self._status_at = 0.0
+        self._result: Optional[MonitorResult] = None
+        self._order_tasks: set[asyncio.Task] = set()
+
         # Live ticks: a faster loop; cycle counts for the AI tier and the resync are
         # scaled so they keep their pace in seconds
         self._feed = price_feed
@@ -845,9 +855,15 @@ class PositionMonitor:
     async def run(self) -> MonitorResult:
         """Main monitoring loop.  Returns when all positions are closed,
         the stop event is set (Ctrl+C), or the market closes."""
-        if self._live:
-            return await self._run_live()
-        return await self._run_paper()
+        try:
+            if self._live:
+                return await self._run_live()
+            return await self._run_paper()
+        finally:
+            if self._order_tasks:
+                # A dashboard order being confirmed: the worker ends it by its deadline
+                await asyncio.wait(set(self._order_tasks), timeout=120)
+            self._publish([], ended=True)
 
     async def _run_paper(self) -> MonitorResult:
         """Paper (and live without a live worker): the loop as it always was."""
@@ -869,6 +885,7 @@ class PositionMonitor:
         while not self._stop.is_set() and positions:
             cycle += 1
             result.cycles = cycle
+            await self._service_control(positions, result)
 
             for pos in list(positions):  # copy — may mutate
                 # Fetch current price
@@ -889,11 +906,12 @@ class PositionMonitor:
                 if pos.plan is None:
                     self._attach_plan(pos)
                 self._note_high(pos, ltp)
+                pos.last_ltp = ltp
 
                 pnl_pct = ((ltp - pos.entry_price) / pos.entry_price) * 100
 
-                # ── SAFETY TIER (always runs) ──
-                safety_reason = self._check_safety(pos, ltp)
+                # ── SAFETY TIER (always runs); a dashboard close comes first ──
+                safety_reason = pos.exit_intent or self._check_safety(pos, ltp)
                 if safety_reason:
                     ok = await self._execute_sell(pos, ltp, safety_reason, result)
                     if ok:
@@ -1008,6 +1026,7 @@ class PositionMonitor:
                 result.cycles = cycle
                 if self._resync_due(cycle, positions):
                     await self._resync(positions, result)
+                await self._service_control(positions, result)
                 await self._check_positions(positions, cycle, result)
                 if await self._pause(self._loop_interval):
                     break  # stop_event was set — graceful shutdown
@@ -1111,6 +1130,7 @@ class PositionMonitor:
             if pos.plan is None:
                 self._attach_plan(pos)   # adopted while nothing was sellable
             self._note_high(pos, ltp)
+            pos.last_ltp = ltp
             pnl_pct = ((ltp - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price else 0.0
 
             # The rest of a partial exit goes first, without asking the AI again
@@ -1829,6 +1849,195 @@ class PositionMonitor:
                     f"selling all {pos.quantity}"), pos.quantity
         return (f"TARGET HIT: LTP ₹{ltp:.2f} >= target ₹{plan.target:.2f} — booking "
                 f"{qty} of {pos.quantity}, the rest trails from breakeven"), qty
+
+    # ── Dashboard control ────────────────────────────────────────────────
+
+    async def _service_control(self, positions: list[MonitoredPosition],
+                               result: MonitorResult) -> None:
+        """Run the dashboard's commands, then publish the positions (never raises)."""
+        if self._control is None:
+            return
+        self._result = result
+        try:
+            for cmd in self._control.claim():
+                if cmd.get("kind") == "order" and self._live:
+                    # Its fill may take a while to confirm: the stops keep their pace
+                    task = asyncio.create_task(self._order_task(cmd, positions, result))
+                    self._order_tasks.add(task)
+                    task.add_done_callback(self._order_tasks.discard)
+                    continue
+                try:
+                    ok, message = await self._command(cmd, positions, result)
+                except Exception as exc:
+                    logger.warning("Dashboard command %s failed", cmd.get("kind"),
+                                   exc_info=True)
+                    ok, message = False, f"failed: {exc}"
+                logger.warning("Dashboard %s by %s: %s", cmd.get("kind"), cmd.get("by"),
+                               message)
+                self._control.complete(str(cmd.get("id")), ok=ok, message=message)
+        except Exception:
+            logger.warning("Dashboard commands not read", exc_info=True)
+        self._publish(positions)
+
+    async def _order_task(self, cmd: dict, positions: list[MonitoredPosition],
+                          result: MonitorResult) -> None:
+        try:
+            ok, message = await self._command(cmd, positions, result)
+        except Exception as exc:
+            logger.warning("Dashboard order failed", exc_info=True)
+            ok, message = False, f"failed: {exc}"
+        logger.warning("Dashboard order by %s: %s", cmd.get("by"), message)
+        if self._control is not None:
+            self._control.complete(str(cmd.get("id")), ok=ok, message=message)
+
+    async def _command(self, cmd: dict, positions: list[MonitoredPosition],
+                       result: MonitorResult) -> tuple[bool, str]:
+        kind = cmd.get("kind")
+        p = cmd.get("payload") or {}
+        by = str(cmd.get("by") or "dashboard")
+        symbol = str(p.get("symbol") or "").strip().upper()
+        pos = next((x for x in positions if x.symbol.upper() == symbol), None)
+
+        if kind == "close_all":
+            sell = [x for x in positions if x.quantity > 0]
+            for x in sell:
+                x.exit_intent = f"MANUAL CLOSE ALL from the dashboard ({by})"
+            return True, (f"closing {len(sell)} position(s) at the next check"
+                          if sell else "no positions to close")
+        if kind == "close":
+            if pos is None:
+                return False, f"{symbol} is not monitored by this session"
+            if pos.quantity <= 0:
+                return False, f"{symbol}: nothing sellable now (an exit may be working)"
+            pos.exit_intent = f"MANUAL CLOSE from the dashboard ({by})"
+            return True, f"closing {pos.quantity} {symbol} at the next check"
+        if kind == "set_plan":
+            if pos is not None and not pos.last_ltp:
+                pos.last_ltp = await self._price(pos, any_age=True)   # validate on a price
+            return self._set_plan(pos, symbol, p)
+        if kind == "order":
+            return await self._manual_order(p, by, positions, result)
+        return False, f"unknown command {kind!r}"
+
+    def _set_plan(self, pos: Optional[MonitoredPosition], symbol: str,
+                  p: dict) -> tuple[bool, str]:
+        if pos is None or pos.plan is None:
+            return False, f"{symbol} is not monitored (or has no exit plan)"
+        stop, target = p.get("stop_loss"), p.get("target")
+        ltp = pos.last_ltp
+        changes = []
+        if stop is not None:
+            stop = float(stop)
+            if stop <= 0 or (ltp and stop >= ltp):
+                return False, (f"stop {stop:g} must be above 0 and below the LTP {ltp:g} "
+                               "(use Close to sell now)")
+            pos.plan.stop_loss = round(stop, 2)
+            changes.append(f"stop {stop:.2f}")
+        if target is not None:
+            if target in ("", 0, "off"):
+                pos.plan.target = None
+                changes.append("target off")
+            else:
+                target = float(target)
+                if ltp and target <= ltp:
+                    return False, f"target {target:g} must be above the LTP {ltp:g}"
+                pos.plan.target = round(target, 2)
+                changes.append(f"target {target:.2f}")
+        if not changes:
+            return False, "nothing to change"
+        self._save_plan(pos.plan)
+        note = ""
+        hard = pos.entry_price * (1 - self._hard_stop_pct)
+        if stop is not None and pos.plan.stop_loss <= hard:
+            note = f" (the hard stop {hard:.2f} is higher and still applies)"
+        return True, f"{symbol}: " + ", ".join(changes) + note
+
+    async def _manual_order(self, p: dict, by: str, positions: list[MonitoredPosition],
+                            result: MonitorResult) -> tuple[bool, str]:
+        """A BUY or SELL from the dashboard through the Executor (safety checks, and live
+        the SELL lock and the order journal). A paper BUY is monitored at once; live, the
+        next resync adopts it."""
+        from skopaq.broker.models import OrderType as _OT
+        from skopaq.broker.scrip_resolver import resolve_scrip_code
+
+        symbol = str(p.get("symbol") or "").strip().upper()
+        side = str(p.get("side") or "").upper()
+        qty = int(p.get("quantity") or 0)
+        if side not in ("BUY", "SELL") or qty <= 0 or not symbol:
+            return False, "an order needs a symbol, BUY or SELL and a quantity"
+        order_type = _OT.LIMIT if str(p.get("order_type") or "").upper() == "LIMIT" \
+            else _OT.MARKET
+        price = p.get("price")
+        scrip = await resolve_scrip_code(self._client, symbol)
+        ltp = await self._client.get_ltp(scrip)
+        ref = float(price) if order_type == _OT.LIMIT and price else float(ltp or 0)
+        if ref <= 0:
+            return False, f"no price for {symbol}"
+        if not self._live and self._config.trading_mode == "paper":
+            from skopaq.broker.models import Quote
+            self._router._paper.update_quote(Quote(  # noqa: SLF001
+                symbol=symbol, ltp=float(ltp or ref), bid=ref * 0.999, ask=ref * 1.001))
+        signal = TradingSignal(
+            symbol=symbol, action=side, confidence=100, entry_price=ref,
+            order_type=order_type, quantity=Decimal(qty),
+            stop_loss=float(p["stop_loss"]) if p.get("stop_loss") else None,
+            reasoning=f"Manual {side} from the dashboard ({by})",
+        )
+        execution = await self._executor.execute_signal(signal)
+        if not execution.success:
+            return False, f"{side} {qty} {symbol} not done: {execution.rejection_reason}"
+        await self._record_exit(signal, execution)   # persists BUYs and SELLs alike
+        filled = int(filled_quantity_of(execution, qty))
+        if side == "BUY" and not self._live and not any(
+                x.symbol.upper() == symbol for x in positions):
+            tracked = MonitoredPosition(symbol=symbol, scrip_code=scrip,
+                                        entry_price=float(execution.fill_price or ref),
+                                        quantity=filled)
+            self._attach_plan(tracked)
+            await self._watch(tracked)
+            positions.append(tracked)
+            result.positions_monitored += 1
+        return True, (f"{side} {filled} {symbol} filled at "
+                      f"{float(execution.fill_price or ref):.2f}")
+
+    def _publish(self, positions: list[MonitoredPosition], *, ended: bool = False) -> None:
+        """The positions for the dashboard, at most every 2 s (and at the end)."""
+        if self._control is None:
+            return
+        now = _time.monotonic()
+        if not ended and now - self._status_at < 2.0:
+            return
+        self._status_at = now
+        rows = []
+        for pos in positions:
+            ltp = pos.last_ltp
+            plan = pos.plan
+            rows.append({
+                "symbol": pos.symbol, "quantity": pos.quantity, "product": pos.product,
+                "entry_price": round(pos.entry_price, 2), "ltp": ltp or None,
+                "pnl": round((ltp - pos.entry_price) * pos.quantity, 2) if ltp else None,
+                "pnl_pct": round((ltp / pos.entry_price - 1) * 100, 2)
+                if ltp and pos.entry_price else None,
+                "stop_loss": plan.stop_loss if plan else None,
+                "target": plan.target if plan else None,
+                "target_hit": bool(plan and plan.target_hit),
+                "booked_qty": plan.booked_qty if plan else 0,
+                "high_water_mark": round(pos.high_water_mark, 2),
+                "exiting": pos.exit_task is not None or bool(pos.exit_intent),
+                "pending_exit": pos.pending_exit,
+            })
+        result = self._result
+        feed = self._feed
+        self._control.write_status("monitor", {
+            "mode": self._plan_mode, "live": self._live, "ended": ended,
+            "positions": rows,
+            "sells_executed": result.sells_executed if result else 0,
+            "total_pnl": round(result.total_pnl, 2) if result else 0.0,
+            "exit_reasons": (result.exit_reasons[-10:] if result else []),
+            "feed": ({"connected": feed.connected, "ticks": feed.ticks}
+                     if feed is not None else None),
+            "check_every_s": self._loop_interval,
+        })
 
     # ── Prices ───────────────────────────────────────────────────────────
 

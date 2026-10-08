@@ -140,6 +140,7 @@ class ScheduleSettings:
     heartbeat_file: Optional[Path]
     extra_holidays: str
     confirm_live_invalid: str = ""  # an unparseable SKOPAQ_SCHEDULER_CONFIRM_LIVE: not confirmed
+    control_dir: Optional[Path] = None  # dashboard requests (skopaq/execution/control.py)
 
     @classmethod
     def from_config(cls, config) -> "ScheduleSettings":
@@ -238,6 +239,7 @@ class ScheduleSettings:
             extra_holidays=config.nse_holidays or "",
             confirm_live_invalid="" if confirm_live is not None else str(
                 config.scheduler_confirm_live),
+            control_dir=_control_dir(config),
         )
 
 
@@ -371,6 +373,18 @@ def due_job(now: datetime, settings: ScheduleSettings, state: SchedulerState) ->
     if settle_at is not None and t >= settle_at and not state.started("settle", day):
         return "settle"
     return None
+
+
+# Dashboard "start now" window (IST)
+_START_FROM = time(9, 0)
+_START_UNTIL = time(15, 0)
+
+
+def _control_dir(config) -> Optional[Path]:
+    value = getattr(config, "control_dir", None)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return Path(value).expanduser().absolute()
 
 
 def _daemon_may_start(now: datetime, state: SchedulerState) -> bool:
@@ -826,6 +840,11 @@ def _tick(now, settings, state, *, runner, alert, ping, stop, clock) -> None:
         _recover_interrupted(past, now, settings, state, runner=runner, alert=alert,
                              stop=stop, clock=clock)
 
+    # Asked for from the dashboard: before the "missed" alerts, which it answers
+    if _start_requested(now, settings, state, runner=runner, alert=alert, ping=ping,
+                        stop=stop, clock=clock):
+        return
+
     if (
         trading
         and settings.preflight is not None
@@ -865,77 +884,8 @@ def _tick(now, settings, state, *, runner, alert, ping, stop, clock) -> None:
 
     job = due_job(now, settings, state)
     if job == "daemon":
-        argv = daemon_argv(settings)
-        if argv is None:
-            state.mark_started("daemon", day, note="skipped: live not confirmed")
-            got = (f" (got {settings.confirm_live_invalid!r}, which is not true or false)"
-                   if settings.confirm_live_invalid else "")
-            alert(
-                f"SKOPAQ_SCHEDULER_MODE=live but SKOPAQ_SCHEDULER_CONFIRM_LIVE is not true{got}: "
-                f"no session on {day}"
-            )
-            return
-        # Before launch: at most one session per day. The launch time is the note (a retry
-        # after a PRE_OPEN failure waits PRE_OPEN_RETRY from it); clearing that failure's
-        # exit code makes this attempt count as interrupted if the host dies during it.
-        state.mark_started("daemon", day, note=now.isoformat(timespec="seconds"))
-        state.clear_exit("daemon", day)
-        result = runner(
-            _cli(*argv),
-            deadline=datetime.combine(day, settings.deadline, tzinfo=IST),
-            settings=settings,
-            log_path=settings.log_dir / f"daemon-{day.isoformat()}.log",
-            stop=stop,
-            clock=clock,
-            alert=alert,
-        )
-        live = settings.mode == "live" and settings.confirm_live
-        if result.killed and result.stopped and not result.deadline_hit and live:
-            # A scheduler stop had to SIGKILL the session: CLOSING may not have finished (a
-            # SIGTERM during a synchronous analysis is only seen when it returns). No exit
-            # code, as if this process had died with it: the next scheduler process runs
-            # the recovery monitor before the deadline, or says to check the broker.
-            ping(settings.ping_url, ok=False)
-            alert(
-                f"daemon session of {day} did not stop within {settings.kill_after_seconds}s "
-                f"of the scheduler's SIGTERM and was killed (rc={result.rc}): CLOSING may not "
-                f"have finished. {_CHECK_THE_BROKER} A scheduler restarted before "
-                f"{settings.deadline:%H:%M} IST runs `skopaq monitor` {_MONITOR_UNTIL}."
-            )
-            return
-        state.record_exit("daemon", day, result.rc)
-        if result.rc not in (0, PRE_OPEN_FAILED_EXIT_CODE) and not (
-            result.deadline_hit or result.stopped
-        ):
-            # Ended on its own before the deadline: positions it opened may still be open.
-            ping(settings.ping_url, ok=False)
-            _recover_failed(day, result.rc, settings, state, runner=runner, alert=alert,
+        _run_daemon_session(day, now, settings, state, runner=runner, alert=alert, ping=ping,
                             stop=stop, clock=clock)
-            return
-        if result.rc == PRE_OPEN_FAILED_EXIT_CODE and not (result.deadline_hit or result.stopped):
-            if state.flag_once("preopen-failed", day):
-                alert(
-                    f"daemon PRE_OPEN failed on {day} (rc={result.rc}: nothing was traded; "
-                    f"see logs/daemon/daemon-{day.isoformat()}.log). Retrying every "
-                    f"{PRE_OPEN_RETRY.seconds // 60} min until {settings.last_start:%H:%M} IST: "
-                    "fix the cause (e.g. skopaq token set <TOKEN>)"
-                )
-            ping(settings.ping_url, ok=False)
-            return
-        if result.rc != 0:
-            msg = f"daemon exited rc={result.rc} on {day}"
-            if result.deadline_hit:
-                msg += f" (stopped at the {settings.deadline:%H:%M} deadline)"
-            if result.killed:
-                msg += (f": killed {settings.kill_after_seconds}s after SIGTERM, so CLOSING may "
-                        "not have finished")
-                if live:
-                    msg += f". {_CHECK_THE_BROKER}"
-            alert(msg)
-        elif result.deadline_hit:  # a clean exit, but the session overran
-            alert(f"daemon was still running at the {settings.deadline:%H:%M} deadline on {day} "
-                  "and was stopped (rc=0)")
-        ping(settings.ping_url, ok=result.rc == 0)
     elif job == "settle":
         state.mark_started("settle", day)
         result = runner(
@@ -1035,6 +985,126 @@ def _resume_recovery_monitor(day, now, settings, state, *, runner, alert, stop, 
               "their stop-loss and the EOD exit.")
     _run_recovery_monitor(day, now, settings, state, runner=runner, alert=alert, stop=stop,
                           clock=clock)
+
+
+def _run_daemon_session(day, now, settings, state, *, runner, alert, ping, stop,
+                        clock) -> None:
+    """Launch today's daemon session (due by the schedule, or asked for from the
+    dashboard) and handle how it ended."""
+    argv = daemon_argv(settings)
+    if argv is None:
+        state.mark_started("daemon", day, note="skipped: live not confirmed")
+        got = (f" (got {settings.confirm_live_invalid!r}, which is not true or false)"
+               if settings.confirm_live_invalid else "")
+        alert(
+            f"SKOPAQ_SCHEDULER_MODE=live but SKOPAQ_SCHEDULER_CONFIRM_LIVE is not true{got}: "
+            f"no session on {day}"
+        )
+        return
+    # Before launch: at most one session per day. The launch time is the note (a retry
+    # after a PRE_OPEN failure waits PRE_OPEN_RETRY from it); clearing that failure's
+    # exit code makes this attempt count as interrupted if the host dies during it.
+    state.mark_started("daemon", day, note=now.isoformat(timespec="seconds"))
+    state.clear_exit("daemon", day)
+    result = runner(
+        _cli(*argv),
+        deadline=datetime.combine(day, settings.deadline, tzinfo=IST),
+        settings=settings,
+        log_path=settings.log_dir / f"daemon-{day.isoformat()}.log",
+        stop=stop,
+        clock=clock,
+        alert=alert,
+    )
+    live = settings.mode == "live" and settings.confirm_live
+    if result.killed and result.stopped and not result.deadline_hit and live:
+        # A scheduler stop had to SIGKILL the session: CLOSING may not have finished (a
+        # SIGTERM during a synchronous analysis is only seen when it returns). No exit
+        # code, as if this process had died with it: the next scheduler process runs
+        # the recovery monitor before the deadline, or says to check the broker.
+        ping(settings.ping_url, ok=False)
+        alert(
+            f"daemon session of {day} did not stop within {settings.kill_after_seconds}s "
+            f"of the scheduler's SIGTERM and was killed (rc={result.rc}): CLOSING may not "
+            f"have finished. {_CHECK_THE_BROKER} A scheduler restarted before "
+            f"{settings.deadline:%H:%M} IST runs `skopaq monitor` {_MONITOR_UNTIL}."
+        )
+        return
+    state.record_exit("daemon", day, result.rc)
+    if result.rc not in (0, PRE_OPEN_FAILED_EXIT_CODE) and not (
+        result.deadline_hit or result.stopped
+    ):
+        # Ended on its own before the deadline: positions it opened may still be open.
+        ping(settings.ping_url, ok=False)
+        _recover_failed(day, result.rc, settings, state, runner=runner, alert=alert,
+                        stop=stop, clock=clock)
+        return
+    if result.rc == PRE_OPEN_FAILED_EXIT_CODE and not (result.deadline_hit or result.stopped):
+        if state.flag_once("preopen-failed", day):
+            alert(
+                f"daemon PRE_OPEN failed on {day} (rc={result.rc}: nothing was traded; "
+                f"see logs/daemon/daemon-{day.isoformat()}.log). Retrying every "
+                f"{PRE_OPEN_RETRY.seconds // 60} min until {settings.last_start:%H:%M} IST: "
+                "fix the cause (e.g. skopaq token set <TOKEN>)"
+            )
+        ping(settings.ping_url, ok=False)
+        return
+    if result.rc != 0:
+        msg = f"daemon exited rc={result.rc} on {day}"
+        if result.deadline_hit:
+            msg += f" (stopped at the {settings.deadline:%H:%M} deadline)"
+        if result.killed:
+            msg += (f": killed {settings.kill_after_seconds}s after SIGTERM, so CLOSING may "
+                    "not have finished")
+            if live:
+                msg += f". {_CHECK_THE_BROKER}"
+        alert(msg)
+    elif result.deadline_hit:  # a clean exit, but the session overran
+        alert(f"daemon was still running at the {settings.deadline:%H:%M} deadline on {day} "
+              "and was stopped (rc=0)")
+    ping(settings.ping_url, ok=result.rc == 0)
+
+
+def _start_requested(now, settings, state, *, runner, alert, ping, stop, clock) -> bool:
+    """A dashboard start request (``control.start.request``): run today's session — or,
+    live, ``skopaq monitor`` for the positions held — now. True when a job ran.
+
+    Only on a trading day, from 09:00 IST until 15:00 (a session needs time to trade and
+    close before the deadline), and only once today's earlier session has ended (this
+    process runs one job at a time, so nothing of ours is running).
+    """
+    from skopaq.execution.control import ControlChannel
+
+    if settings.control_dir is None:
+        return False
+    channel = ControlChannel(settings.control_dir)
+    req = channel.start_requested()
+    if req is None:
+        return False
+    channel.clear_start()
+    job = req.get("job") if req.get("job") in ("daemon", "monitor") else "daemon"
+    day, t = now.date(), now.time()
+    trading, why = trading_day_status(day, settings.extra_holidays)
+    who = req.get("by") or "the dashboard"
+    refuse = None
+    if not trading:
+        refuse = why
+    elif not (_START_FROM <= t < _START_UNTIL):
+        refuse = f"only between {_START_FROM:%H:%M} and {_START_UNTIL:%H:%M} IST"
+    elif job == "monitor" and not (settings.mode == "live" and settings.confirm_live):
+        refuse = "a standalone monitor runs in live mode only (paper positions live in a session)"
+    elif job == "daemon" and daemon_argv(settings) is None:
+        refuse = "SKOPAQ_SCHEDULER_MODE=live but SKOPAQ_SCHEDULER_CONFIRM_LIVE is not true"
+    if refuse:
+        alert(f"start request from {who} ignored: {refuse}")
+        return False
+    logger.warning("Start request from %s: running %s now", who, job)
+    if job == "monitor":
+        _run_recovery_monitor(day, now, settings, state, runner=runner, alert=alert,
+                              stop=stop, clock=clock)
+    else:
+        _run_daemon_session(day, now, settings, state, runner=runner, alert=alert, ping=ping,
+                            stop=stop, clock=clock)
+    return True
 
 
 def _run_recovery_monitor(day, now, settings, state, *, runner, alert, stop, clock) -> None:
