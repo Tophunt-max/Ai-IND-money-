@@ -90,7 +90,16 @@ def _indstocks_status() -> dict[str, Any]:
         "source": source,
         "stored": stored,
         "env_token": env_token,
+        "auto": _auto_status(),
     }
+
+
+def _auto_status() -> dict[str, Any]:
+    """Automatic (TOTP) token: set up or not, and the last generation (no secrets)."""
+    from skopaq.broker import auto_token
+
+    config = SkopaqConfig()
+    return {"configured": auto_token.configured(config), **auto_token.generation_state()}
 
 
 @router.get("/broker")
@@ -122,6 +131,40 @@ async def set_indstocks_token(body: TokenRequest,
         raise HTTPException(500, f"Could not store the token: {exc}") from exc
     logger.warning("INDstocks token stored from the dashboard by %s", user.email)
     return await broker_status()
+
+
+class AutoTokenRequest(BaseModel):
+    force: bool = False      # a new token even if the stored one looks good (revoked?)
+
+
+@router.post("/broker/indstocks-token/auto")
+async def auto_indstocks_token(body: AutoTokenRequest,
+                               user: DashboardUser = Depends(require_admin)) -> dict:
+    """Make today's token from TOTP now (like ``skopaq token auto``)."""
+    from datetime import datetime, timezone
+
+    from skopaq.broker import auto_token
+    from skopaq.execution.readiness import session_end
+
+    config = SkopaqConfig()
+    if not auto_token.configured(config):
+        raise HTTPException(409, "Automatic token is off: set SKOPAQ_INDSTOCKS_CLIENT_ID, "
+                                 "SKOPAQ_INDSTOCKS_MPIN and SKOPAQ_INDSTOCKS_TOTP_SECRET in "
+                                 "the server's .env")
+    if body.force:
+        try:
+            await auto_token.generate_token(config)
+            message = "A new token was generated with TOTP"
+        except auto_token.AutoTokenError as exc:
+            raise HTTPException(502, f"Token not made: {exc}") from exc
+    else:
+        result = await auto_token.ensure_token(config, session_end(datetime.now(timezone.utc)))
+        if not result.ok:
+            raise HTTPException(502, result.message)
+        message = result.message
+    logger.warning("INDstocks token (TOTP) requested from the dashboard by %s: %s",
+                   user.email, message)
+    return {**(await broker_status()), "message": message}
 
 
 @router.delete("/broker/indstocks-token")

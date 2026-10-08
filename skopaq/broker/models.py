@@ -123,7 +123,8 @@ class OrderRequest(BaseModel):
 
     # INDstocks-specific fields
     security_id: str = ""               # e.g. "3045" from instruments CSV
-    algo_id: str = "99999"              # REQUIRED — "99999" for regular orders
+    # The exchange algo id; "" sends the configured one (NSE 99999, BSE sixteen 9s)
+    algo_id: str = ""
 
     # Derivatives: ``quantity`` is in units (shares), and must be a whole number of
     # lots. Not sent to the API; checked here so a wrong size never reaches the broker.

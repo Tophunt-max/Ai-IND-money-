@@ -18,8 +18,12 @@ interface BrokerStatus {
     source: "stored" | "env" | "none";
     stored: boolean;
     env_token: boolean;
+    auto: { configured: boolean; last_attempt: number | null; last_ok: number | null; last_error: string; recent_failures: number; paused_until: number | null };
   };
+  message?: string;
 }
+
+const epoch = (t: number | null | undefined) => (t ? new Date(t * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
 
 function remaining(sec: number | null): string {
   if (sec == null) return "—";
@@ -74,6 +78,22 @@ export default function BrokerPage() {
     }
   };
 
+  const generate = async (force: boolean) => {
+    if (force && !confirm("Make a NEW token now? The previous TOTP token stops working at once (a running session switches to the new one on its next request).")) return;
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await api<BrokerStatus>("/api/dashboard/broker/indstocks-token/auto", { method: "POST", json: { force } });
+      st.setData(res);
+      setMsg(res.message || "Done");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const s = st.data;
   const ind = s?.indstocks;
 
@@ -108,6 +128,38 @@ export default function BrokerPage() {
               ]} />
               {ind.warning && ind.valid && <Notice tone="warning">{ind.warning}</Notice>}
 
+              <div className="space-y-3 border-t border-white/[0.06] pt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-white">Automatic daily token (TOTP)</div>
+                    <div className="text-xs text-gray-500">{ind.auto?.configured
+                      ? "On: the scheduler makes the day's token before each session"
+                      : "Off: set SKOPAQ_INDSTOCKS_CLIENT_ID, _MPIN and _TOTP_SECRET in the server's .env"}</div>
+                  </div>
+                  <Badge tone={ind.auto?.configured ? (ind.auto.paused_until ? "error" : "ok") : "neutral"} dot>
+                    {ind.auto?.configured ? (ind.auto.paused_until ? "Paused" : "On") : "Off"}
+                  </Badge>
+                </div>
+                {ind.auto?.configured && (
+                  <>
+                    <KV items={[
+                      ["Last made", epoch(ind.auto.last_ok)],
+                      ["Last attempt", epoch(ind.auto.last_attempt)],
+                      ["Failures (15 min)", String(ind.auto.recent_failures)],
+                    ]} />
+                    {ind.auto.last_error && <Notice tone={ind.auto.paused_until ? "error" : "warning"}>
+                      {ind.auto.paused_until ? `Paused until ${epoch(ind.auto.paused_until)} after failures: ` : "Last error: "}{ind.auto.last_error}
+                    </Notice>}
+                    {isAdmin && (
+                      <div className="flex flex-wrap gap-2">
+                        <Button icon={KeyRound} loading={busy} onClick={() => generate(false)}>Make today&apos;s token</Button>
+                        <Button variant="ghost" loading={busy} onClick={() => generate(true)}>Force a new one</Button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
               {isAdmin ? (
                 <form onSubmit={save} className="space-y-3 border-t border-white/[0.06] pt-5">
                   <Field label="New token" hint="INDstocks app/web → API → generate today's token. Stored encrypted, never shown again.">
@@ -136,10 +188,13 @@ export default function BrokerPage() {
               ["F&O", "MARGIN (carry forward) and INTRADAY; quantity in whole lots"],
               ["Option chain", "INDstocks, with IV and Greeks (Options page)"],
               ["Brokerage", "₹10 per executed order + GST"],
+              ["Algo id", "99999 on NSE, sixteen 9s on BSE (sent on every order)"],
+              ["Rate limits", "orders 10/s, data and quotes 5/s, other reads 15/s"],
             ]} />
             <Notice tone="info" title="Static IP">
-              INDstocks accepts orders only from the server&apos;s whitelisted IPv4 (an Elastic IP on AWS).
-              Quotes and the option chain work from anywhere.
+              INDstocks accepts orders only from the server&apos;s whitelisted IP (an Elastic IP on AWS; two slots, IPv4 or IPv6,
+              each changeable once a week). Set the same IPs in SKOPAQ_INDSTOCKS_STATIC_IPS: a live session then refuses to start
+              from any other IP. Quotes and the option chain work from anywhere. Check it all under Control → Live readiness.
             </Notice>
           </div>
         </Card>

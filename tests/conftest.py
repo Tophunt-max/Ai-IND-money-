@@ -26,6 +26,10 @@ for _var in (
     "DATABASE_URL",
     "SKOPAQ_API_TOKEN",
     "SKOPAQ_INDSTOCKS_TOKEN",
+    "SKOPAQ_INDSTOCKS_CLIENT_ID",
+    "SKOPAQ_INDSTOCKS_MPIN",
+    "SKOPAQ_INDSTOCKS_TOTP_SECRET",
+    "SKOPAQ_INDSTOCKS_STATIC_IPS",
 ):
     os.environ[_var] = ""
 
@@ -45,6 +49,18 @@ os.environ["SKOPAQ_CONTROL_DIR"] = _tempfile.mkdtemp(prefix="skopaq-control-")
 os.environ["SKOPAQ_ENV_OVERRIDES_FILE"] = os.path.join(
     os.path.dirname(__file__), ".no-such-dir", "env-overrides-for-tests.json"
 )
+
+@pytest.fixture(autouse=True)
+def _roomy_market_limiters(monkeypatch):
+    """The broker's data and quote limits (4/s here) would make tests sleep; tests of the
+    limits themselves set their own."""
+    from skopaq.broker import client as client_mod
+    from skopaq.broker.rate_limiter import RateLimiter
+
+    monkeypatch.setattr(client_mod, "_data_limiter", RateLimiter(max_calls=10_000))
+    monkeypatch.setattr(client_mod, "_quote_limiter", RateLimiter(max_calls=10_000))
+    monkeypatch.setattr(client_mod, "_order_limiter", RateLimiter(max_calls=10_000))
+
 
 @pytest.fixture(autouse=True)
 def _fresh_kill_switch():

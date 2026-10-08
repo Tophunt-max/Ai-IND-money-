@@ -26,6 +26,29 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Going live on AWS** (`docs/deployment/go-live.md`).
+  - **Automatic daily token from TOTP** (`skopaq/broker/auto_token.py`, `skopaq token
+    auto`, and **Broker → Automatic daily token** on the dashboard).
+    - It needs `SKOPAQ_INDSTOCKS_CLIENT_ID`, `_MPIN` and `_TOTP_SECRET` in `.env` only.
+      The scheduler then makes the day's token at the pre-flight, and before a session
+      that has none.
+    - It works under a file lock, at most once a minute, and only when the stored token
+      would not last the session.
+    - After 2 failures it pauses for 15 minutes, which stays below the broker's lockout.
+    - Secrets are never logged.
+  - **Live readiness check** (`skopaq/execution/readiness.py`, `skopaq preflight
+    [--live]`, `GET /api/dashboard/readiness`, and **Control → Live readiness**). It
+    checks:
+    - the token and whether it lasts the session;
+    - the account: NSE and F&O onboarded, DDPI;
+    - the host clock against the broker's;
+    - the egress IP against `SKOPAQ_INDSTOCKS_STATIC_IPS`;
+    - funds, the kill switch, the WebSocket budget, the control dir and the database.
+
+    A live scheduler sends what fails to Telegram at the pre-flight.
+  - **Static-IP gate:** with `SKOPAQ_INDSTOCKS_STATIC_IPS` set, a live session refuses to
+    start (PRE_OPEN) from an egress IP that is not whitelisted.
+
 - **F&O trading: index options buying** (`skopaq/scalping/fno_engine.py`,
   `fno_rules.py`, `docs/trading/fno.md`). It runs beside the daily session
   (`SKOPAQ_FNO_ENABLED`, off by default) or alone (`skopaq fno`).
@@ -182,6 +205,17 @@ below.
 
 ### Fixed
 
+- **BSE orders sent the NSE algo id.** INDstocks wants `99999` on NSE and
+  `9999999999999999` on BSE. The id is now chosen per exchange, and
+  `SKOPAQ_INDSTOCKS_ALGO_ID_NSE` / `_BSE` take registered ids.
+- **Quotes and data calls could exceed the broker's limits.** The broker allows 5 a
+  second; they were allowed 100. They now have their own limiters at 4 a second. Order
+  calls use a rolling window of 8 a second, under the broker's 10 and SEBI's 10 orders a
+  second for unregistered retail algos. A 429 on a GET is retried twice after a pause; an
+  order is never re-sent.
+- **The daemon could open more WebSocket connections than INDstocks allows** (3 per
+  account). The monitor now shares the scalper's or F&O engine's price feed.
+- The token file is written atomically, so a container never reads a half-written token.
 - Trade rows wrote product `INTRADAY`, which the `trades` table's CHECK refuses (CNC, MIS,
   NRML). INTRADAY is now written `MIS`, and MARGIN is written `NRML`.
 

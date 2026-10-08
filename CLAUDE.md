@@ -75,6 +75,8 @@ python3 -m pytest tests/integration/ -v -m integration
 
 # CLI commands
 skopaq status              # Health check
+skopaq preflight --live    # Live readiness: token, account, clock, static IP, funds (exit 1 on a failure)
+skopaq token auto          # Today's INDstocks token from TOTP (the scheduler does it at 08:45)
 skopaq analyze RELIANCE    # Analysis only
 skopaq trade RELIANCE      # Analysis + execution (paper default)
 skopaq scan                # Scanner cycle

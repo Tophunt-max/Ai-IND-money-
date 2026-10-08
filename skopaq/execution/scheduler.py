@@ -407,8 +407,45 @@ def _session_end(day: date, settings: ScheduleSettings) -> datetime:
     return datetime.combine(day, max(NSE_MARKET_CLOSE, settings.deadline), tzinfo=IST)
 
 
+def _auto_token(day: date, settings: ScheduleSettings) -> str:
+    """With TOTP set up, make the day's token when the stored one cannot carry today's
+    session. Returns a problem to alert ("" when there is none, or TOTP is not set up)."""
+    try:
+        from skopaq.broker import auto_token
+        from skopaq.config import SkopaqConfig
+
+        config = SkopaqConfig()
+        if not auto_token.configured(config):
+            return ""
+        result = auto_token.ensure_token_sync(config, _session_end(day, settings))
+        if result.generated:
+            logger.info("Today's INDstocks token was generated with TOTP")
+        return "" if result.ok else result.message
+    except Exception as exc:
+        return f"automatic token failed: {type(exc).__name__}"
+
+
+def _readiness_problems(settings: ScheduleSettings) -> str:
+    """The live readiness check's failures ("" when none, or when not live)."""
+    if not (settings.mode == "live" and settings.confirm_live):
+        return ""
+    try:
+        import asyncio
+
+        from skopaq.config import SkopaqConfig
+        from skopaq.execution.readiness import check_readiness
+
+        result = asyncio.run(check_readiness(SkopaqConfig(), live=True))
+    except Exception as exc:
+        return f"readiness check failed: {type(exc).__name__}: {exc}"
+    return "; ".join(f"{c.name}: {c.detail}" for c in result.failures())
+
+
 def _token_problem(day: date, settings: ScheduleSettings) -> str:
     """Why the stored INDstocks token cannot carry today's session ("" if it can)."""
+    auto = _auto_token(day, settings)
+    if auto:
+        logger.warning("Automatic token: %s", auto)
     try:
         from skopaq.broker.token_manager import TokenManager, session_token_problem
 
@@ -854,6 +891,12 @@ def _tick(now, settings, state, *, runner, alert, ping, stop, clock) -> None:
         problem = _token_problem(day, settings)
         if problem:
             alert(f"pre-flight for today's {settings.start:%H:%M} IST session: {problem}")
+        else:
+            # Live: the rest of the readiness check (static IP, account, clock, funds)
+            not_ready = _readiness_problems(settings)
+            if not_ready:
+                alert(f"pre-flight for today's LIVE {settings.start:%H:%M} IST session — not "
+                      f"ready: {not_ready} (skopaq preflight --live)")
 
     if (
         trading
@@ -1006,6 +1049,10 @@ def _run_daemon_session(day, now, settings, state, *, runner, alert, ping, stop,
     # exit code makes this attempt count as interrupted if the host dies during it.
     state.mark_started("daemon", day, note=now.isoformat(timespec="seconds"))
     state.clear_exit("daemon", day)
+    # No pre-flight ran (the scheduler started late, or it is off): make the day's token now
+    auto = _auto_token(day, settings)
+    if auto:
+        alert(f"daemon session of {day}: {auto}")
     result = runner(
         _cli(*argv),
         deadline=datetime.combine(day, settings.deadline, tzinfo=IST),

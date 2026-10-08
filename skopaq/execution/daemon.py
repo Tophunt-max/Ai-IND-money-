@@ -558,6 +558,14 @@ class TradingDaemon:
 
         config = self._config
 
+        # 0. The day's token from TOTP when it is set up and the stored one cannot carry
+        # the session (normally the scheduler made it already at its pre-flight)
+        from skopaq.broker import auto_token
+
+        if auto_token.configured(config):
+            made = await auto_token.ensure_token(config, self._session_end())
+            (logger.info if made.ok else logger.error)("Automatic token: %s", made.message)
+
         # 1. Validate INDstocks token: valid now, and still valid when the session ends
         token_mgr = TokenManager()
         health = token_mgr.get_health()
@@ -570,6 +578,16 @@ class TradingDaemon:
         if problem:
             raise RuntimeError(problem)
         logger.info("Token valid — expires in %s", health.remaining)
+
+        # 1b. Live: orders only go out from a whitelisted static IP (SEBI / NSE). With
+        # SKOPAQ_INDSTOCKS_STATIC_IPS set, another egress IP stops the session here
+        # instead of every BUY and every protective SELL being refused later
+        if config.trading_mode == "live":
+            from skopaq.execution.readiness import live_egress_problem
+
+            ip_problem = await live_egress_problem(config)
+            if ip_problem:
+                raise RuntimeError(ip_problem)
 
         # 2. Open broker client session
         self._client = INDstocksClient(config, token_mgr)
@@ -825,12 +843,19 @@ class TradingDaemon:
         still held (its last reads were wrong about them) is started again, a few times
         at most: CLOSING would sell them at MARKET in the middle of the day.
         """
-        # Live ticks for the monitor (one connection across its restarts)
+        # Live ticks for the monitor (one connection across its restarts). INDstocks allows
+        # 3 WebSocket connections per account: the scalper's / F&O engine's feed is shared
+        # when one runs (they stop it when they end, after MONITORING and CLOSING)
         from skopaq.broker.websocket import feeds_from_config
 
-        self._price_feed, _ = feeds_from_config(self._config)
-        if self._price_feed is not None:
-            await self._price_feed.start()
+        shared = self._scalp_feed or self._fno_feed
+        own_feed = shared is None
+        if own_feed:
+            self._price_feed, _ = feeds_from_config(self._config)
+            if self._price_feed is not None:
+                await self._price_feed.start()
+        else:
+            self._price_feed = shared
         try:
             result = await self._run_monitor()
             for _ in range(_MONITOR_RESTARTS):
@@ -841,9 +866,9 @@ class TradingDaemon:
                 result = _merged(result, await self._run_monitor())
             return result
         finally:
-            if self._price_feed is not None:
+            if self._price_feed is not None and own_feed:
                 await self._price_feed.stop()
-                self._price_feed = None
+            self._price_feed = None
 
     async def _run_monitor(self) -> MonitorResult:
         from skopaq.execution.position_monitor import PositionMonitor

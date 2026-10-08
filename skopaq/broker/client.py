@@ -6,7 +6,10 @@ live API testing — do NOT modify without testing against real API first.
 Key differences from typical broker APIs:
     - Auth header: ``Authorization: TOKEN`` (NO "Bearer " prefix)
     - No ``/api/v1/`` path prefix — paths start at root
-    - Orders require ``algo_id="99999"`` for regular orders
+    - Orders require an ``algo_id``: ``99999`` on NSE, ``9999999999999999`` on BSE
+      (``SKOPAQ_INDSTOCKS_ALGO_ID_NSE`` / ``_BSE`` once your algo is registered)
+    - Rate limits (per second, per account): orders 10, data (instruments, history,
+      option chain) 5, quotes 5, non-trading reads 15 — each has its own limiter here
     - ALL market data endpoints use ``scrip-codes=NSE_2885`` param format
       (exchange underscore security_id from instruments CSV)
     - Historical candles are objects: ``{"ts": epoch_sec, "o":, "h":, ...}``
@@ -23,6 +26,7 @@ Key differences from typical broker APIs:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -54,9 +58,16 @@ from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
 
-# Separate limiters matching INDstocks rate limits
-_api_limiter = RateLimiter(max_calls=100, period=1.0)
-_order_limiter = RateLimiter(max_calls=10, period=1.0)
+# Separate limiters matching INDstocks rate limits (https://api-docs.indstocks.com/conventions/),
+# kept a little under them: a rolling window, so a burst never exceeds the broker's count
+_api_limiter = RateLimiter(max_calls=100, period=1.0)      # anything not listed below
+# Order APIs (place, modify, cancel): 10 a second at the broker. 8 also stays under SEBI's
+# 10 orders a second, above which a retail algo must be registered with the exchange
+_order_limiter = SlidingWindowLimiter(8, 1.0)
+_data_limiter = SlidingWindowLimiter(4, 1.0)    # instruments, historical, option chain: 5/s
+_quote_limiter = SlidingWindowLimiter(4, 1.0)   # /market/quotes/*: 5/s
+_RETRY_429 = 2                                  # GET reads only: orders are never re-sent
+_sleep = asyncio.sleep                          # tests replace it
 # Non-Trading APIs (order history, trades, portfolio, funds, profile) allow 15 requests a
 # second: each client stays at 12 in any rolling second, so a burst of live SELLs (each
 # reads the book, positions, holdings and funds before it is placed) is not refused
@@ -66,9 +77,43 @@ _NON_TRADING_PATHS = frozenset({"/order-book", "/order", "/order/trades", "/trad
 _NON_TRADING_PREFIXES = ("/trades/", "/portfolio/")
 
 
+def _market_limiter(path: str):
+    """The data or quote limiter of a market-data path (None: another category)."""
+    if path.startswith("/market/quotes"):
+        return _quote_limiter
+    if path.startswith(("/market/historical", "/market/instruments", "/market/option-chain")):
+        return _data_limiter
+    return None
+
+
+def algo_id_for(exchange: str, config: Any = None) -> str:
+    """The algo id an order on ``exchange`` must carry (NSE: 99999, BSE: sixteen 9s). A
+    configured id is used only when it is all digits (an exchange algo id)."""
+    bse = str(exchange).upper() in ("BSE", "BFO")
+    name, default = (("indstocks_algo_id_bse", "9999999999999999") if bse
+                     else ("indstocks_algo_id_nse", "99999"))
+    value = getattr(config, name, "") if config is not None else ""
+    value = value.strip() if isinstance(value, str) else ""
+    if value and not value.isdigit():
+        logger.warning("SKOPAQ_%s=%r is not an algo id (digits only); using %s",
+                       name.upper(), value, default)
+        value = ""
+    return value or default
+
+
 def _is_non_trading(method: str, path: str) -> bool:
     return method == "GET" and (path in _NON_TRADING_PATHS
                                 or path.startswith(_NON_TRADING_PREFIXES))
+
+
+def _retry_after(resp: httpx.Response, attempt: int) -> float:
+    try:
+        value = float(resp.headers.get("Retry-After", ""))
+        if 0 < value <= 10:
+            return value
+    except ValueError:
+        pass
+    return 1.0 * (attempt + 1)
 
 
 class BrokerError(Exception):
@@ -200,6 +245,10 @@ class INDstocksClient:
         # (/trades/{id}); set only after a path returned at least one fill.
         self._trades_path: Optional[str] = None
         self._read_limiter = SlidingWindowLimiter(_NON_TRADING_PER_S, 1.0)
+        # The broker's clock (its last Date header): skopaq preflight compares the host's
+        self.server_date: Optional[datetime] = None
+        self._algo_nse = algo_id_for("NSE", config)
+        self._algo_bse = algo_id_for("BSE", config)
 
     async def __aenter__(self) -> INDstocksClient:
         self._client = httpx.AsyncClient(
@@ -250,25 +299,35 @@ class INDstocksClient:
                 "Client not initialised. Use `async with` context manager.", kind="not_sent",
             )
 
-        if is_order:
-            await _order_limiter.acquire()
-        elif _is_non_trading(method, path):
-            await self._read_limiter.acquire()
-        else:
-            await _api_limiter.acquire()
+        for attempt in range(_RETRY_429 + 1):
+            if is_order:
+                await _order_limiter.acquire()
+            elif _is_non_trading(method, path):
+                await self._read_limiter.acquire()
+            else:
+                await (_market_limiter(path) or _api_limiter).acquire()
 
-        try:
-            resp = await self._client.request(
-                method,
-                path,
-                headers=self._headers(),
-                params=params,
-                json=json_body,
-            )
-        except _NOT_SENT_ERRORS as exc:
-            raise BrokerError(f"HTTP error (not sent): {exc!r}", kind="not_sent") from exc
-        except httpx.HTTPError as exc:
-            raise BrokerError(f"HTTP error: {exc!r}", kind="transport") from exc
+            try:
+                resp = await self._client.request(
+                    method,
+                    path,
+                    headers=self._headers(),
+                    params=params,
+                    json=json_body,
+                )
+            except _NOT_SENT_ERRORS as exc:
+                raise BrokerError(f"HTTP error (not sent): {exc!r}", kind="not_sent") from exc
+            except httpx.HTTPError as exc:
+                raise BrokerError(f"HTTP error: {exc!r}", kind="transport") from exc
+            self._note_date(resp)
+            # Rate limited: a read is asked again after a pause; an order never is (a 429
+            # on POST /order is a definite rejection, and the caller decides)
+            if resp.status_code != 429 or is_order or method != "GET" or attempt == _RETRY_429:
+                break
+            wait = _retry_after(resp, attempt)
+            logger.warning("INDstocks rate limit on %s %s — retrying in %.1fs", method, path,
+                           wait)
+            await _sleep(wait)
 
         if resp.status_code >= 400:
             try:
@@ -282,6 +341,19 @@ class INDstocksClient:
                 kind="http",
             )
         return resp
+
+    def _note_date(self, resp: httpx.Response) -> None:
+        value = resp.headers.get("date")
+        if not value:
+            return
+        try:
+            from email.utils import parsedate_to_datetime
+
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return
+        if when.tzinfo is not None:
+            self.server_date = when
 
     @staticmethod
     def _json(resp: httpx.Response, path: str) -> Any:
@@ -625,7 +697,9 @@ class INDstocksClient:
             "security_id": order.security_id,
             "qty": int(order.quantity),               # quantity → qty (int for JSON)
             "is_amo": order.is_amo,
-            "algo_id": order.algo_id,
+            # The exchange's algo id unless the order names one
+            "algo_id": order.algo_id or (
+                self._algo_bse if order.exchange.value == "BSE" else self._algo_nse),
         }
         if order.price is not None:
             payload["limit_price"] = order.price     # price → limit_price
