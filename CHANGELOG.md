@@ -8,6 +8,14 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Dashboard redesign and every backend feature in the web UI.** A new design (sidebar,
+  mobile tab bar, cards, charts, `lucide-react` icons) on every page, and new pages:
+  Portfolio (INDstocks and Kite positions, holdings, funds, orders, mutual funds, GTT),
+  Broker (set today's INDstocks token, Kite login and status), Options (chain and selling
+  ideas), AI learning (tracker insights, symbol record, memory search), Backtest (backtest and
+  Monte Carlo), Jobs. Scheduler gains **Settle now**, Scanner the background scanner status.
+  New read-only API in `skopaq/api/dashboard_tools.py`; new job kinds `backtest`,
+  `montecarlo`, `settle`. Nothing in the dashboard places a broker order.
 - **Environment settings in the dashboard** (Settings → ⚙️ Environment, admins only). Set,
   change or reset `SKOPAQ_*` settings (mode, scheduler, INDstocks token, Telegram, LLM
   keys, risk and daemon limits) without editing `ENV_FILE` and redeploying. They are saved in

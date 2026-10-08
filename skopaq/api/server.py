@@ -52,6 +52,10 @@ from skopaq.api.dashboard import router as dashboard_router
 
 app.include_router(dashboard_router)
 
+from skopaq.api.dashboard_tools import router as dashboard_tools_router  # noqa: E402
+
+app.include_router(dashboard_tools_router)
+
 
 # ── Kite Connect OAuth ───────────────────────────────────────────────────────
 

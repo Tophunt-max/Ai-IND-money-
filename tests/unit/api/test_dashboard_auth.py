@@ -125,7 +125,10 @@ def test_viewer_can_read_but_not_act(env):
                        ("/api/dashboard/kill-switch/resume", None),
                        ("/api/dashboard/chat", {"message": "hi"}),
                        ("/api/dashboard/settings/env",
-                        {"set": {"SKOPAQ_TRADING_MODE": "live"}, "confirm_live": True})]:
+                        {"set": {"SKOPAQ_TRADING_MODE": "live"}, "confirm_live": True}),
+                       ("/api/dashboard/broker/indstocks-token", {"token": "x" * 20}),
+                       ("/api/dashboard/jobs", {"kind": "settle"}),
+                       ("/api/dashboard/jobs", {"kind": "backtest", "symbol": "TCS"})]:
         r = env.client.post(path, json=body, headers=h)
         assert r.status_code == 403, path
         assert "View-only" in r.json()["detail"]

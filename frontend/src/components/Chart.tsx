@@ -27,7 +27,7 @@ export default function Chart({
   const [hover, setHover] = useState<number | null>(null);
   const W = 600;
   const H = height;
-  const pad = { l: 8, r: 8, t: 12, b: 22 };
+  const pad = { l: 4, r: 4, t: 10, b: 6 };
 
   const geo = useMemo(() => {
     if (points.length < 2) return null;
@@ -56,7 +56,7 @@ export default function Chart({
   const base = baseline ?? points[0].v;
   const last = points[points.length - 1].v;
   const up = last >= base;
-  const stroke = up ? "#4ade80" : "#f87171";
+  const stroke = up ? "#34d399" : "#fb7185";
   const gid = up ? "chart-up" : "chart-down";
 
   const move = (clientX: number) => {
@@ -72,11 +72,11 @@ export default function Chart({
 
   return (
     <div>
-      <div className="flex items-baseline justify-between text-xs text-gray-400 mb-1 h-5">
+      <div className="num mb-2 flex h-5 items-baseline justify-between text-xs text-gray-500">
         {h ? (
           <>
             <span>{h.label || timeLabel(h.t)}</span>
-            <span className="text-gray-100 font-medium">{format(h.v)}</span>
+            <span className="font-semibold text-white">{format(h.v)}</span>
           </>
         ) : (
           <>
@@ -99,40 +99,35 @@ export default function Chart({
       >
         <defs>
           <linearGradient id={gid} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor={stroke} stopOpacity="0.35" />
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.28" />
             <stop offset="100%" stopColor={stroke} stopOpacity="0" />
           </linearGradient>
         </defs>
+        {[0.25, 0.5, 0.75].map((f) => (
+          <line key={f} x1={pad.l} x2={W - pad.r} y1={pad.t + f * (H - pad.t - pad.b)} y2={pad.t + f * (H - pad.t - pad.b)}
+            stroke="rgba(255,255,255,0.04)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        ))}
         {baseline !== undefined && (
           <line
             x1={pad.l} x2={W - pad.r} y1={geo.y(baseline)} y2={geo.y(baseline)}
-            stroke="#4b5563" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke"
+            stroke="rgba(255,255,255,0.18)" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke"
           />
         )}
         <path d={geo.area} fill={`url(#${gid})`} />
-        <path d={geo.line} fill="none" stroke={stroke} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        <path d={geo.line} fill="none" stroke={stroke} strokeWidth="2.25" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         {h && hover !== null && (
           <>
             <line
               x1={geo.x(hover)} x2={geo.x(hover)} y1={pad.t} y2={H - pad.b}
-              stroke="#9ca3af" strokeWidth="1" vectorEffect="non-scaling-stroke"
+              stroke="rgba(255,255,255,0.25)" strokeWidth="1" vectorEffect="non-scaling-stroke"
             />
-            <circle cx={geo.x(hover)} cy={geo.y(h.v)} r="4" fill={stroke} />
+            <circle cx={geo.x(hover)} cy={geo.y(h.v)} r="4.5" fill={stroke} stroke="#05070d" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </>
         )}
-        {ticks.map((i, k) => (
-          <text
-            key={k}
-            x={geo.x(i)}
-            y={H - 6}
-            fontSize="11"
-            fill="#6b7280"
-            textAnchor={k === 0 ? "start" : k === 2 ? "end" : "middle"}
-          >
-            {points[i].label || timeLabel(points[i].t)}
-          </text>
-        ))}
       </svg>
+      <div className="num mt-1 flex justify-between text-[11px] text-gray-500">
+        {ticks.map((i, k) => <span key={k}>{points[i].label || timeLabel(points[i].t)}</span>)}
+      </div>
     </div>
   );
 }

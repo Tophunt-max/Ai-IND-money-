@@ -1,8 +1,10 @@
 "use client";
 
+import { CheckCircle2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
-import { Button, ErrorBox } from "@/components/ui";
+import { AuthFrame } from "@/components/AuthGate";
+import { Button, ErrorBox, Loading } from "@/components/ui";
 import { supabase } from "@/lib/supabase";
 
 /** Opened from the password-reset email: Supabase signs the user in from the link. */
@@ -39,29 +41,35 @@ export default function ResetPasswordPage() {
     setTimeout(() => (window.location.href = "/"), 1500);
   };
 
-  const input = "w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm";
   return (
-    <div className="max-w-sm mx-auto mt-10 px-4">
-      <h2 className="text-2xl font-bold mb-4">Set a new password</h2>
+    <AuthFrame>
+      <h2 className="text-2xl font-semibold tracking-tight text-white">Set a new password</h2>
+      <p className="mt-1 mb-6 text-sm text-gray-400">Choose at least 8 characters.</p>
       <ErrorBox error={error} />
       {done ? (
-        <p className="text-green-400 text-sm">Password changed. Opening the dashboard...</p>
+        <div className="flex items-center gap-2 text-sm text-emerald-300">
+          <CheckCircle2 className="h-4 w-4" /> Password changed. Opening the dashboard...
+        </div>
       ) : !ready ? (
-        <p className="text-sm text-gray-400">
-          Checking the reset link... If nothing happens, the link has expired: request a new one
-          from the login screen.
-        </p>
+        <>
+          <Loading text="Checking the reset link..." />
+          <p className="text-xs text-gray-500">If nothing happens, the link has expired: request a new one from the sign-in screen.</p>
+        </>
       ) : (
         <form onSubmit={save} className="space-y-3">
-          <input type="password" autoComplete="new-password" value={password}
-            onChange={(e) => setPassword(e.target.value)} placeholder="New password" className={input} />
-          <input type="password" autoComplete="new-password" value={again}
-            onChange={(e) => setAgain(e.target.value)} placeholder="New password again" className={input} />
-          <Button type="submit" disabled={busy || !password} className="w-full">
-            {busy ? "Saving..." : "Save password"}
-          </Button>
+          <div>
+            <label className="label">New password</label>
+            <input type="password" autoComplete="new-password" value={password}
+              onChange={(e) => setPassword(e.target.value)} className="field" />
+          </div>
+          <div>
+            <label className="label">Repeat it</label>
+            <input type="password" autoComplete="new-password" value={again}
+              onChange={(e) => setAgain(e.target.value)} className="field" />
+          </div>
+          <Button type="submit" size="lg" loading={busy} disabled={!password} className="w-full">Save password</Button>
         </form>
       )}
-    </div>
+    </AuthFrame>
   );
 }

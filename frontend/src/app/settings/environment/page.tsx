@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
+import { History, Lock, Plus, Search, SlidersHorizontal, ToggleRight } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/AuthGate";
-import { Badge, Button, Card, Empty, ErrorBox, Loading, PageTitle } from "@/components/ui";
+import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, PageTitle } from "@/components/ui";
 import { api, ApiError, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 
@@ -45,7 +45,7 @@ const GROUP_ORDER = [
   "Risk & sizing", "AI models & keys", "Kite (Zerodha)", "Other",
 ];
 
-const INPUT = "w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm";
+const INPUT = "field";
 
 const SOURCE_LABEL: Record<Setting["source"], string> = {
   dashboard: "DASHBOARD",
@@ -124,10 +124,10 @@ function Row({ s, editing, setEditing, save, remove, busy }: {
     <div className="py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="font-mono text-xs break-all text-gray-200">{s.key}</div>
+          <div className="font-mono text-xs break-all text-gray-100">{s.key}</div>
           {s.help && <div className="text-xs text-gray-500 mt-0.5">{s.help}</div>}
           <div className={`text-sm mt-1 break-all ${s.secret ? "text-gray-400" : ""}`}>{shown(s)}</div>
-          {s.locked && <div className="text-xs text-yellow-500 mt-1">🔒 {s.locked}: ENV_FILE only</div>}
+          {s.locked && <div className="mt-1 flex items-center gap-1 text-xs text-amber-300/80"><Lock className="h-3 w-3" /> {s.locked}: ENV_FILE only</div>}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <Badge tone={s.source === "dashboard" ? "warning" : s.source === "server" ? "ok" : "neutral"}>
@@ -135,12 +135,12 @@ function Row({ s, editing, setEditing, save, remove, busy }: {
           </Badge>
           {!s.locked && !editing && (
             <div className="flex gap-1">
-              <button onClick={() => setEditing(s.key)} className="text-xs text-blue-400 hover:underline">
+              <button onClick={() => setEditing(s.key)} className="link text-xs font-medium">
                 Edit
               </button>
               {s.source === "dashboard" && (
                 <button onClick={() => remove(s.key)} disabled={busy}
-                  className="text-xs text-red-400 hover:underline ml-2">
+                  className="ml-2 text-xs font-medium text-rose-300 hover:text-rose-200">
                   Reset
                 </button>
               )}
@@ -177,12 +177,12 @@ function ModeCard({ byKey, busy, run }: {
   };
 
   return (
-    <Card title="Trading mode" right={<Badge tone={live ? "error" : "ok"}>{live ? "LIVE" : "PAPER"}</Badge>}>
+    <Card title="Trading mode" icon={ToggleRight} right={<Badge tone={live ? "error" : "ok"}>{live ? "LIVE" : "PAPER"}</Badge>}>
       <dl className="text-sm space-y-2">
         <div className="flex justify-between"><dt className="text-gray-500">Trading mode</dt><dd>{mode.toUpperCase()}</dd></div>
         <div className="flex justify-between">
           <dt className="text-gray-500">Auto-trading (scheduler)</dt>
-          <dd>{sched.toUpperCase()}{sched === "live" && !confirmed && <span className="text-yellow-400"> (not confirmed: sessions skipped)</span>}</dd>
+          <dd>{sched.toUpperCase()}{sched === "live" && !confirmed && <span className="text-amber-300"> (not confirmed: sessions skipped)</span>}</dd>
         </div>
         <div className="flex justify-between">
           <dt className="text-gray-500">INDstocks token (env)</dt>
@@ -193,7 +193,7 @@ function ModeCard({ byKey, busy, run }: {
         {live ? (
           <Button variant="ghost" onClick={goPaper} disabled={busy}>Switch to PAPER</Button>
         ) : (
-          <Button variant="danger" onClick={goLive} disabled={busy}>🔴 Switch to LIVE (real money)</Button>
+          <Button variant="danger" onClick={goLive} disabled={busy}>Switch to LIVE (real money)</Button>
         )}
       </div>
       <p className="text-xs text-gray-500 mt-3">
@@ -268,18 +268,18 @@ export default function EnvSettingsPage() {
   if (!isAdmin) {
     return (
       <div className="space-y-5">
-        <PageTitle title="Environment" />
-        <Card><p className="text-sm text-gray-400">Only an admin can see and change the server settings.</p></Card>
+        <PageTitle title="Environment" icon={SlidersHorizontal} />
+        <Notice tone="neutral">Only an admin can see and change the server settings.</Notice>
       </div>
     );
   }
 
   return (
     <div className="space-y-5">
-      <PageTitle title="Environment" right={<Link href="/settings" className="text-sm text-blue-400">← Settings</Link>} />
+      <PageTitle title="Environment" icon={SlidersHorizontal} subtitle="Server settings: mode, keys and limits, without a redeploy" />
 
       <Card>
-        <ul className="text-xs text-gray-400 space-y-1 list-disc pl-4">
+        <ul className="list-disc space-y-1.5 pl-4 text-xs text-gray-400">
           <li>Values saved here <b>override ENV_FILE</b> and survive deploys. <b>Reset</b> brings the ENV_FILE value back.</li>
           <li>They apply to the dashboard at once, to the scheduler before its next session (never a running one), to
             each new daemon/monitor run, and to the Telegram bot after its restart.</li>
@@ -288,7 +288,7 @@ export default function EnvSettingsPage() {
       </Card>
 
       <ErrorBox error={env.error || error} />
-      {msg && <div className="text-sm text-blue-300">{msg}</div>}
+      {msg && <Notice tone="info">{msg}</Notice>}
 
       {env.loading && !env.data ? <Loading /> : env.data && (
         <>
@@ -299,7 +299,7 @@ export default function EnvSettingsPage() {
               <div className="flex flex-wrap gap-2">
                 {overridden.map((s) => (
                   <button key={s.key} onClick={() => setFilter(s.key)}
-                    className="font-mono text-xs border border-yellow-800 bg-yellow-900/10 rounded px-2 py-1">
+                    className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-1 font-mono text-xs text-amber-200 transition hover:bg-amber-500/10">
                     {s.key}
                   </button>
                 ))}
@@ -307,7 +307,7 @@ export default function EnvSettingsPage() {
             )}
           </Card>
 
-          <Card title="Add or change a variable">
+          <Card title="Add or change a variable" icon={Plus}>
             <div className="flex gap-2">
               <input list="env-keys" value={newKey} onChange={(e) => setNewKey(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && addKey()}
@@ -319,12 +319,15 @@ export default function EnvSettingsPage() {
             </div>
           </Card>
 
-          <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="🔍 Search settings"
-            className={INPUT} />
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search settings"
+              className="field pl-10" />
+          </div>
 
           {groups.length === 0 ? <Empty>No setting matches “{filter}”.</Empty> : groups.map(([group, items]) => (
             <Card key={group} title={`${group} (${items.length})`}>
-              <div className="divide-y divide-gray-800">
+              <div className="divide-y divide-white/[0.04]">
                 {items.map((s) => (
                   <Row key={s.key} s={s} busy={busy} editing={editing === s.key} setEditing={setEditing}
                     save={(key, value) => run({ set: { [key]: value } })} remove={remove} />
@@ -333,16 +336,16 @@ export default function EnvSettingsPage() {
             </Card>
           ))}
 
-          <Card title="🕒 Change history">
+          <Card title="Change history" icon={History}>
             {env.data.history.length === 0 ? <Empty>No changes yet.</Empty> : (
-              <div className="divide-y divide-gray-800">
+              <div className="divide-y divide-white/[0.04]">
                 {env.data.history.map((h, i) => (
                   <div key={i} className="py-2 text-sm">
                     <div className="flex justify-between gap-3">
                       <span className="break-all">{h.by.replace(/^dashboard:/, "")}</span>
                       <span className="text-xs text-gray-500 shrink-0">{when(h.at)}</span>
                     </div>
-                    {h.live?.length > 0 && <div className="text-xs text-red-400">🔴 LIVE on: {h.live.join(", ")}</div>}
+                    {h.live?.length > 0 && <div className="text-xs text-rose-300">LIVE on: {h.live.join(", ")}</div>}
                     {Object.entries(h.set || {}).map(([k, v]) => (
                       <div key={k} className="font-mono text-xs text-gray-400 break-all">{k}={v}</div>
                     ))}
