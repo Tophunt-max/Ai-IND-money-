@@ -102,9 +102,9 @@ def build_infrastructure(config: SkopaqConfig) -> Infrastructure:
             if health.valid:
                 live_client = INDstocksClient(config, token_mgr)
             else:
-                logger.info("INDstocks token unavailable — using Kite/paper fallback")
+                logger.info("INDstocks token unavailable — using the paper fallback")
         except Exception:
-            logger.info("INDstocks client init skipped — using Kite/paper fallback")
+            logger.info("INDstocks client init skipped — using the paper fallback")
 
     router = OrderRouter(config, paper, live_client=live_client)
     safety = SafetyChecker(

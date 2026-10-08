@@ -90,11 +90,31 @@ were not there before the placement, and never sends it again blind.
 | `GET /market/quotes/full` | `get_quote`, `get_quotes` | `scrip-codes=NSE_2885,NSE_11536` | dict keyed by scrip code: `live_price`, `day_open`, `day_high`, `day_low`, `prev_close`, `day_change`, `day_change_percentage`, `volume`, `best_bid_price`, `best_ask_price` |
 | `GET /market/quotes/ltp` | `get_ltp` | `scrip-codes=NSE_2885` | `{"NSE_2885": {"live_price": 1362}}` |
 | `GET /market/historical/{interval}` | `get_historical` | `scrip-codes`, `start_time` and `end_time` in epoch ms; `interval` such as `1minute`, `5minute`, `1day` | `{"NSE_2885": {"candles": [{"ts", "o", "h", "l", "c", "v"}]}}`, `ts` in epoch seconds |
-| `GET /market/instruments` | `get_instruments` | `source=equity` | CSV (not JSON): `SECURITY_ID`, `TRADING_SYMBOL`, `CUSTOM_SYMBOL`, `EXCH`, `SEGMENT`, `INSTRUMENT_NAME`, `LOT_UNITS`, `EXPIRY_DATE`, `STRIKE_PRICE`, `OPTION_TYPE`, `TICK_SIZE`, `SYMBOL_NAME` |
-| `GET /option-chain` | `get_option_chain` | `symbol` | `calls`, `puts` |
+| `GET /market/instruments` | `get_instruments` | `source=equity`, `fno` or `index` | CSV (not JSON): `SECURITY_ID`, `TRADING_SYMBOL`, `CUSTOM_SYMBOL`, `EXCH`, `SEGMENT`, `INSTRUMENT_NAME`, `LOT_UNITS`, `EXPIRY_DATE`, `STRIKE_PRICE`, `OPTION_TYPE`, `TICK_SIZE`, `SYMBOL_NAME`; `index` is three columns, `EXCH,SEGMENT,SECURITY_ID`, the second holding the index name |
 
 `skopaq/broker/scrip_resolver.py` caches the instruments CSV for an hour:
 `resolve_scrip_code` gives the scrip code, `resolve_tick_size` the `TICK_SIZE`.
+
+### Derivatives (F&O)
+
+| Endpoint | Client method | Request | Response (`data`) |
+|----------|---------------|---------|-------------------|
+| `GET /market/option-chain` | `get_option_chain` | `exchange` (NSE/BSE), `segment` of the **underlying** (`INDEX`/`EQUITY`), `underlying-scrip` (the underlying's SECURITY_ID, never a contract's), `expiry` (`YYYY-MM-DD`), `strike_count` (per side; 2n + 1 strikes) | `underlying_ltp`, `expiry`, `strikes`: an object keyed by strike (sorted by Skopaq), each with `ce` / `pe` legs: `security_id`, `trading_symbol`, `last_price`, `oi`, `previous_oi`, `volume`, top bid/ask, `iv` (percent), `greeks` (`delta`, `gamma`, `theta`, `vega`). No lot size or other expiries |
+| `GET /market/instruments/expiries` | `get_expiries` | `underlying`, `segment=DERIVATIVE` | ascending list of upcoming `YYYY-MM-DD` |
+| `GET /market/instruments/search` | `search_derivatives` | `underlying`, `segment=DERIVATIVE`; optional `instrument_type` (`OPTIDX`, `OPTSTK`, `FUTIDX`, `FUTSTK`), `expiry`, `option_type`, `strike_from`, `strike_to`, `page`, `page_size` (≤ 100) | `count`, `instruments`: `security_id`, `trading_symbol`, `expiry`, `strike_price` / `option_type` (null for futures), `lot_size` |
+| `GET /margin` | `get_margin` | JSON body on the GET, all strings: `segment`, `exchange`, `securityID`, `txnType`, `quantity`, `price`, `product` | `total_margin`, `span_margin`, `exposure_margin`, `insufficient_balance`, …, `charges` (`stt`, `brokerage`, `gst`, `total_charges`, …) |
+| `GET /portfolio/positions` | `get_derivative_positions` | `segment=derivative`, `product=margin` / `intraday` | as the equity rows; kept apart from `get_positions` because derivative security ids are another numbering |
+
+`skopaq/broker/fno.py` maps names to ids: `resolve_underlying` (NIFTY → NSE `INDEX`
+40000001 from the index file; RELIANCE → its cash-market id), `expiry_at`, `lot_size`
+(cached an hour), `find_option`, `nearest_future`. `skopaq/options/chain.py` builds the
+chain (`fetch_option_chain`) from these.
+
+Derivative orders: `segment=DERIVATIVE`, `product` `MARGIN` (carry forward, "NRML") or
+`INTRADAY`, `qty` **in units** (a whole number of lots: `OrderRequest` refuses anything
+else, and CNC on a derivative), the contract's `security_id`. Order ids start `DRV-`. The
+derivatives endpoints answer a malformed date with the same 400 as an unknown underlying,
+so the client checks `YYYY-MM-DD` first.
 
 ### Orders
 
@@ -134,7 +154,7 @@ Notes:
 |----------|---------------|---------|-------------------|
 | `GET /portfolio/positions` | `get_positions` | `segment=equity` and `product=cnc` / `product=intraday`, **both required, lowercase** | flat list: `position_id`, `security_id`, `symbol`, `segment`, `product`, `exchange`, `isin`, `net_qty`, `avg_price`, `buy_qty`, `buy_avg`, `sell_qty`, `sell_avg`, `realized_profit`, `day_buy_qty`, `day_buy_val`, `day_sell_qty`, `day_sell_val`, `cf_*` (the `day_*` and `cf_*` values can be null) |
 | `GET /portfolio/holdings` | `get_holdings` | — | `security_id`, `symbol`, `isin`, `total_qty` (T1 + DP), `used_qty`, `avg_price`, `t1_qty`, `t1_avg_price`, `dp_qty`, `dp_avg_price`; no product, LTP or P&L |
-| `GET /funds` | `get_funds` | — | `detailed_avl_balance.eq_cnc` (CNC buying power), `pledge_received`, … |
+| `GET /funds` | `get_funds` | — | `detailed_avl_balance`: `eq_cnc` (CNC buying power, `Funds.available_cash`), `eq_mis`, `option_buy`, `option_sell`, `future` (the `*_available` fields); `pledge_received`, … |
 | `GET /user/profile` | `get_profile` | — | profile |
 
 - Positions: seeing CNC and intraday rows takes two calls. Each row's `product` echoes
@@ -225,7 +245,9 @@ use it; it polls REST.
   `traded_price`; the trade book's fills joined on `exch_order_id`; the average of
   whatever trades were found; else Skopaq's reference price
   (`fill_price_source="estimate"`, with a WARNING).
-- Skopaq books ₹20 brokerage per order that filled (INDstocks' flat fee).
+- Skopaq books ₹10 brokerage per order that filled (INDstocks' flat API fee,
+  `INDSTOCKS_BROKERAGE_PER_ORDER_INR`; GST comes on top). `get_margin` gives the exact
+  charges of one order.
 
 ## MARKET orders and tick size
 

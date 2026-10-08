@@ -1,6 +1,6 @@
 # MCP Server Architecture
 
-The MCP (Model Context Protocol) server is how SkopaqTrader integrates with Claude Code and other AI assistants. It exposes 23 tools via the FastMCP framework over stdio transport.
+The MCP (Model Context Protocol) server is how SkopaqTrader integrates with Claude Code and other AI assistants. It exposes 29 tools via the FastMCP framework over stdio transport.
 
 ## What Is MCP?
 
@@ -13,7 +13,7 @@ AI Assistant (Claude Code)
        ▼
   skopaq/mcp_server.py
        │
-       ├── Broker APIs (Kite Connect, INDstocks)
+       ├── Broker API (INDstocks)
        ├── LLM Providers (Gemini, Claude, Grok)
        ├── Analysis Pipeline (LangGraph agents)
        └── Memory Store (Supabase)
@@ -83,43 +83,38 @@ The first tool call triggers initialization of:
 
 1. `SkopaqConfig` -- Loads `.env` and validates all settings
 2. `bridge_env_vars()` -- Copies `SKOPAQ_*` to standard env vars for upstream compatibility
-3. `OrderRouter` + `PaperEngine` -- Paper trading infrastructure
-4. `KiteClient` -- Kite Connect client (if credentials available)
+3. `OrderRouter` + `PaperEngine` -- Paper trading infrastructure (on first use)
 
 Subsequent calls reuse cached objects.
 
-## Broker Fallback
+## Data Sources
 
-Market data tools try Kite Connect first, then fall back to INDstocks:
+INDstocks is the only broker. Market data tools open an INDstocks client per call; portfolio and order tools go through the cached `OrderRouter` (paper engine):
 
 ```python
 @mcp.tool()
 async def get_quote(symbol: str) -> str:
-    kite = _get_kite()
-    if kite:
-        q = await kite.get_quote(f"NSE:{symbol}", symbol=symbol)
-    else:
-        # Fall back to INDstocks
-        async with INDstocksClient(config, token_mgr) as client:
-            q = await client.get_quote(scrip_code, symbol=symbol)
+    async with INDstocksClient(config, TokenManager()) as client:
+        scrip_code = await resolve_scrip_code(client, symbol)
+        q = await client.get_quote(scrip_code, symbol=symbol)
     return json.dumps({...})
 ```
 
-This means the tools work whether or not Kite is connected.
-
 ## Tool Categories
 
-The 23 tools are organized into categories:
+The 29 tools are organized into categories:
 
 | Category | Tools | Source |
 |----------|-------|--------|
-| Market Data | `get_quote`, `get_historical` | Kite / INDstocks |
-| Portfolio | `get_positions`, `get_holdings`, `get_funds`, `get_orders` | Kite / Paper |
-| Analysis | `analyze_stock`, `scan_market`, `check_safety` | LLM pipeline |
+| Market Data | `get_quote`, `get_historical` | INDstocks |
+| Portfolio | `get_positions`, `get_holdings`, `get_funds`, `get_orders` | Order router (paper engine) |
+| Analysis | `analyze_stock`, `scan_market`, `check_safety`, `quick_decision` | LLM pipeline |
 | Data Gathering | `gather_*` (5 tools), `recall_agent_memories`, `save_trade_reflection` | Dataflows / Supabase |
-| Execution | `place_order`, `system_status` | Order router |
-| Options | `get_option_chain`, `suggest_option_trade` | Kite Connect |
-| GTT | `place_gtt_order`, `list_gtt_orders`, `setup_swing_trade` | Kite Connect |
+| Execution | `place_order`, `system_status`, `halt_trading`, `resume_trading` | Order router / kill switch |
+| Options | `get_option_chain`, `suggest_option_trade` | INDstocks |
+| Learning | `performance_report`, `backtest_strategy`, `run_monte_carlo_test`, `get_learning_insights`, `get_symbol_stats`, `evolve_strategy` | Trade history / backtester |
+
+`place_order` is the only order tool. GTT, bracket, cover, basket, AMO, F&O order and mutual fund tools were removed with Kite Connect.
 
 ## Error Handling
 
@@ -127,7 +122,7 @@ All tools catch exceptions and return structured error JSON:
 
 ```python
 try:
-    chain = await fetch_option_chain(kite, symbol, expiry_index)
+    chain = await load_option_chain(symbol, expiry_index, config=_get_config())
     return json.dumps({...})
 except Exception as exc:
     logger.exception("Option chain fetch failed")
@@ -154,10 +149,10 @@ docker run -it --env-file .env samuelvinay91/skopaq:latest mcp
 
 | File | Purpose |
 |------|---------|
-| `skopaq/mcp_server.py` | MCP server with all 23 tool definitions |
+| `skopaq/mcp_server.py` | MCP server with all 29 tool definitions |
 | `.claude/.mcp.json` | Claude Code MCP server configuration |
 | `skopaq/config.py` | Configuration loaded by `_get_config()` |
 | `skopaq/llm/env_bridge.py` | Environment variable bridging |
-| `skopaq/broker/kite_client.py` | Kite Connect broker client |
-| `skopaq/options/chain.py` | Option chain fetcher |
-| `skopaq/options/gtt.py` | GTT order management |
+| `skopaq/broker/client.py` | INDstocks broker client |
+| `skopaq/broker/fno.py` | F&O underlyings, expiries, lot sizes, contracts |
+| `skopaq/options/chain.py` | Option chain fetcher (INDstocks) |

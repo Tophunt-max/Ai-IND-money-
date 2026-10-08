@@ -123,10 +123,18 @@ VALID_ORDER_TYPES = frozenset({ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, ORDER_TYPE_S
 
 # ── Product Types ───────────────────────────────────────────────────────────
 
-PRODUCT_CNC = "CNC"  # Cash & Carry (delivery)
-PRODUCT_MIS = "MIS"  # Margin Intraday Settlement
-PRODUCT_NRML = "NRML"  # Normal (F&O carry forward)
-VALID_PRODUCTS = frozenset({PRODUCT_CNC, PRODUCT_MIS, PRODUCT_NRML})
+# INDstocks values (``skopaq.broker.models.Product``); MIS / NRML are spelt INTRADAY / MARGIN
+PRODUCT_CNC = "CNC"  # Cash & Carry (equity delivery)
+PRODUCT_INTRADAY = "INTRADAY"  # Intraday (equity or derivatives), "MIS"
+PRODUCT_MARGIN = "MARGIN"  # Carry-forward derivatives, "NRML"
+VALID_PRODUCTS = frozenset({PRODUCT_CNC, PRODUCT_INTRADAY, PRODUCT_MARGIN})
+
+# ── INDstocks charges ───────────────────────────────────────────────────────
+
+# Flat brokerage per executed API order (https://api-docs.indstocks.com/api-overview/);
+# GST is charged on top. Exact charges for one order: ``INDstocksClient.get_margin``.
+INDSTOCKS_BROKERAGE_PER_ORDER_INR = 10.0
+GST_RATE = 0.18
 
 # ── Sides ───────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 # Railway API service. Builds the shared root Dockerfile: the image runs as uid 1000 with
-# WORKDIR /home/skopaq, and it includes kiteconnect, so /api/kite/* work on Railway.
+# WORKDIR /home/skopaq.
 # The entrypoint execs `python ...` start commands directly.
 
 [build]

@@ -17,7 +17,7 @@ as they are (zsh treats `#` as text unless `setopt interactivecomments` is on).
 
 | Service | What it does | Health check |
 |---------|--------------|--------------|
-| `api` | FastAPI on `127.0.0.1:8000` only (Kite OAuth, dashboard, `/health`) | `GET /health` |
+| `api` | FastAPI on `127.0.0.1:8000` only (dashboard, `/health`) | `GET /health` |
 | `telegram` | Telegram bot (long polling, commands, weekday jobs) | heartbeat file younger than 3 min |
 | `scheduler` | One daemon session per NSE trading day | heartbeat file younger than 3 min |
 
@@ -105,10 +105,10 @@ State lives in two named volumes, shared by every container:
 | `skopaq-home` | `/home/skopaq/results/`, `/home/skopaq/.cache/` | analysis reports, data cache |
 | `skopaq-home` | `/home/skopaq/scheduler/` | scheduler markers (`daemon-YYYY-MM-DD.started`, `.rc`, `monitor-…` for the recovery monitor) and `scheduler.lock` |
 | `skopaq-home` | `/home/skopaq/logs/daemon/` | one log per session (`daemon-YYYY-MM-DD.log`, kept 60 days) |
-| `skopaq-data` | `/data/skopaq_kite_token.json` | Kite access token (written by `api`, read by `telegram`) |
+| `skopaq-data` | `/data/` | spare data volume (kept for existing installs; nothing needs it now) |
 
 Native on the Mac (not in Docker): Ollama (optional, uses the Metal GPU),
-`cloudflared` (optional, for Kite), and the Claude Code MCP server (optional).
+`cloudflared` (optional, for HTTPS to the dashboard API), and the Claude Code MCP server (optional).
 
 ## 2. Cutover (do this first)
 
@@ -116,8 +116,7 @@ Only one daemon may trade the account and only one process may poll the Telegram
 
 1. Disable the Railway daemon cron service (`railway-daemon.toml`).
 2. Stop the Fly Telegram bot: `fly scale count 0 -a skopaq-telegram`.
-3. Decide whether the Fly/Railway API stays up. If it does, keep its Kite redirect URL
-   until your tunnel (section 12) works.
+3. Decide whether the Fly/Railway API stays up (the dashboard needs one API URL).
 4. Apply `supabase/migrations/001`–`003` in the Supabase SQL editor. `003_system_flags.sql`
    makes the kill switch reach every container and the native MCP server.
 
@@ -131,7 +130,7 @@ INDstocks only accepts API calls from a whitelisted IPv4. A Cloudflare Tunnel is
 - an egress proxy: set `HTTPS_PROXY`, `HTTP_PROXY` and
   `NO_PROXY=localhost,127.0.0.1,host.docker.internal` in `.env`.
 
-Register the IP with INDstocks (and with Kite, for orders), put it in
+Register the IP with INDstocks, put it in
 `SKOPAQ_EXPECTED_EGRESS_IP`, and let `verify.sh` confirm the containers use it.
 
 ## 4. Mac host setup
@@ -221,9 +220,7 @@ Manual checks:
   it, and a session refuses one that expires before 15:45, so yesterday's token is not
   enough: set a fresh one every morning. Set late, the session still starts within
   5 minutes, until 11:30.
-- **Kite login:** open the link the bot sends at 09:00 (`/login`), served through your
-  tunnel (section 12). A Kite token expires at 06:00 IST the next day; after that the
-  bot, the API and the MCP server stop using it and ask for a new login.
+- **Token check:** the bot reports the INDstocks token at 09:00; `/token` shows it any time.
 - **Kill switch:** `docker compose exec api skopaq halt "reason"`, Telegram `/halt`, or
   the native MCP `halt_trading`. With Supabase migration 003 applied, all of them reach
   every process; `skopaq resume` (or `/resume`) lifts it.
@@ -271,17 +268,13 @@ in `SKOPAQ_NSE_HOLIDAYS` too. Special sessions (Muhurat trading) are not traded.
 - If containers get "connection refused", run Ollama with `OLLAMA_HOST=0.0.0.0` and
   block port 11434 from the LAN in the macOS firewall.
 
-## 12. Kite and Cloudflare Tunnel (optional)
+## 12. Cloudflare Tunnel (optional)
 
 - `brew install cloudflared`, then `sudo cloudflared service install <token>` (a
   LaunchDaemon, so it runs without a login), with the tunnel pointing at
-  `http://localhost:8000`.
-- Put Cloudflare Access in front of every path except `/api/kite/callback` and
-  `/api/kite/postback`.
-- Set the Kite app's redirect URL to `https://<host>/api/kite/callback`.
-- Set `SKOPAQ_PUBLIC_BASE_URL=https://<host>` (login links in Telegram) and
-  `SKOPAQ_API_TOKEN` (guards `/api/chat/*` and `/api/kite/token`).
-- Rotate the current Kite session: `/api/kite/token` was publicly reachable on Fly.
+  `http://localhost:8000`, to give the dashboard an HTTPS API URL.
+- Set `SKOPAQ_API_TOKEN` (guards `/api/chat/*`) and `SKOPAQ_CORS_ORIGINS` to the
+  dashboard's origin.
 
 ## 13. Claude Code MCP on the Mac (optional)
 
@@ -292,29 +285,10 @@ in `SKOPAQ_NSE_HOLIDAYS` too. Special sessions (Muhurat trading) are not traded.
 /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m pip install -e ".[deploy]"
 ```
 
-The native server has no `/data` volume, so it cannot read the Kite session that `api`
-stores there. Without the step below, `get_quote` and the other Kite-first tools quietly
-fall back to INDstocks, which works only from the whitelisted egress IP. Give the server
-`SKOPAQ_API_BASE_URL` in the `env` block of its entry in `.claude/.mcp.json`, so it asks
-the local API for the token:
-
-```json
-{
-  "mcpServers": {
-    "skopaq": {
-      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
-      "args": ["-m", "skopaq.mcp_server"],
-      "env": { "SKOPAQ_API_BASE_URL": "http://127.0.0.1:8000" }
-    }
-  }
-}
-```
-
-Set it there, never in `.env`: every container reads `.env`, and `api` would then call
-itself. `SKOPAQ_API_TOKEN`, if you set one, is read from `.env` like the other keys (the
-server runs from the repo); pick one without `$`, because compose turns `$$` into `$` but
-the native server reads `.env` literally. The container server below mounts `/data` and
-needs none of this.
+`SKOPAQ_API_TOKEN`, if you set one, is read from `.env` like the other keys (the server
+runs from the repo); pick one without `$`, because compose turns `$$` into `$` but the
+native server reads `.env` literally. Market data comes from INDstocks, which answers
+quotes from any IP; orders need the whitelisted one.
 
 **Container** alternative, in your MCP config:
 
@@ -333,15 +307,8 @@ Each has its own paper-engine state; the kill switch is shared through Supabase.
 MCP server (native or container) has a live INDstocks client: its `place_order` goes to
 the paper engine, so it takes no SELL lock and reads no INDstocks order book.
 
-**Kite orders are real.** Once a Kite session exists (the container reads it from `/data`;
-the native server fetches it through `SKOPAQ_API_BASE_URL`, above), the MCP tools
-`place_amo_order`, `place_bracket`, `place_cover`, `place_basket`, `buy_option_contract`,
-`trade_future`, `invest_mutual_fund`, `place_gtt_order` and `setup_swing_trade` place real
-orders on that Zerodha account, whatever `SKOPAQ_TRADING_MODE` says, outside the
-`SafetyChecker`, the kill switch, the no-short-sale check and the SELL locks. The repo's
-`.claude/settings.json` does not auto-allow them (Claude Code asks first); leave Kite
-unconnected on this host if they should not trade. See
-[Live Trading](../trading/live-trading.md#residual-limits).
+The only MCP tool that places an order is `place_order` (paper engine, through the
+`SafetyChecker`).
 
 ## 14. Backups
 
@@ -386,14 +353,12 @@ run `docker system prune -f && docker builder prune -f` monthly.
 | Alert "not running: Invalid scheduler configuration" | Fix the named `SKOPAQ_SCHEDULER_*` value in `.env`, then `docker compose up -d scheduler`. `api` and `telegram` are not affected |
 | Log "SKOPAQ_ORDER_... is not a valid value; using the default" (or `SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK`, `SKOPAQ_INDSTOCKS_ORDER_REMARKS_ENABLED`, `SKOPAQ_MONITOR_RESYNC_CYCLES`) | A live order setting in `.env` does not parse (e.g. `30s`). Every service keeps running with that setting's default (the two switches off); fix the value and `docker compose up -d` |
 | Alert "the session log failed" | Usually a full disk: free space (Docker Desktop's disk image, `docker system prune`). The session keeps running; its output is in `docker compose logs scheduler` |
-| Native MCP quotes come from INDstocks, not Kite | Section 13: `SKOPAQ_API_BASE_URL` in the MCP server's `env` block |
 
 ## 16. Services and host requirements
 
 | Service | Needed for | Notes |
 |---------|------------|-------|
-| INDstocks | market data, orders | daily token; static egress IPv4 whitelisted |
-| Kite Connect (Zerodha) | optional broker, Telegram scans | public HTTPS callback (tunnel); daily login |
+| INDstocks | the only broker: market data, equity and F&O orders | daily token; static egress IPv4 whitelisted |
 | Supabase | kill switch across processes, P&L history, memory | apply migrations 001–003 |
 | Upstash / LangCache | optional semantic LLM cache | |
 | Telegram | bot, scheduler alerts | one poller per token |

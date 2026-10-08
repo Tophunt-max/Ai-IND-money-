@@ -1,6 +1,6 @@
 # Claude Code Setup
 
-SkopaqTrader integrates directly with Claude Code via a Model Context Protocol (MCP) server. Once connected, all 23 trading tools are available inside your Claude Code session.
+SkopaqTrader integrates directly with Claude Code via a Model Context Protocol (MCP) server. Once connected, all 29 trading tools are available inside your Claude Code session.
 
 ## Prerequisites
 
@@ -59,7 +59,7 @@ The MCP server (`skopaq/mcp_server.py`) runs as a child process using **stdio tr
 ```
 Claude Code  ──stdin/stdout──  python -m skopaq.mcp_server
                                    │
-                                   ├── INDstocks / Kite Connect (broker)
+                                   ├── INDstocks (broker)
                                    ├── LLM providers (Gemini, Claude, Grok)
                                    └── Supabase (memory)
 ```
@@ -70,7 +70,7 @@ Claude Code  ──stdin/stdout──  python -m skopaq.mcp_server
 |---------|----------|
 | Tools not appearing | Restart Claude Code after editing `.mcp.json` |
 | `ModuleNotFoundError` | Run `pip install -e .` in the project root |
-| Broker errors | Ensure `.env` has valid `SKOPAQ_INDSTOCKS_*` or `SKOPAQ_KITE_*` keys |
+| Broker errors | Ensure a valid INDstocks token (`skopaq token status`, or `SKOPAQ_INDSTOCKS_TOKEN` in `.env`) |
 | LLM failures | Check that at least `SKOPAQ_GOOGLE_API_KEY` is set |
 | MCP server crashes | Run `python -m skopaq.mcp_server` standalone to see errors |
 
@@ -84,8 +84,8 @@ Read-only tools (quotes, positions, status) are auto-allowed. Tools that modify 
 | Auto-Allowed | Requires Permission |
 |---|---|
 | `get_quote`, `get_historical` | `place_order` |
-| `get_positions`, `get_holdings`, `get_funds` | `place_gtt_order` |
-| `get_orders`, `system_status` | `setup_swing_trade` |
+| `get_positions`, `get_holdings`, `get_funds` | `resume_trading` |
+| `get_orders`, `system_status` | `get_option_chain` |
 | `analyze_stock`, `scan_market`, `check_safety` | `suggest_option_trade` |
 | `gather_*` data tools, `recall_agent_memories`, `quick_decision` | `save_trade_reflection` |
 

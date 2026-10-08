@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-SkopaqTrader exposes 23 MCP tools through `skopaq/mcp_server.py`. All tools are async and return JSON strings.
+SkopaqTrader exposes 29 MCP tools through `skopaq/mcp_server.py`. All tools are async and return JSON strings.
 
 ## Market Data
 
@@ -43,7 +43,7 @@ mcp__skopaq__get_historical(symbol="TCS", days=3, resolution=15)
 | `get_funds` | Available cash, margin, collateral | none |
 | `get_orders` | Today's orders with status | none |
 
-These tools try Kite Connect first. If Kite is not connected, they fall back to the paper engine.
+These tools read the MCP server's order router (paper engine). Quotes and candles come from INDstocks.
 
 ## AI Analysis
 
@@ -75,8 +75,10 @@ These tools fetch raw data for Claude to reason over directly, bypassing the mul
 
 | Tool | Description | Key Args |
 |------|-------------|----------|
-| `place_order` | Execute order through safety checker | `symbol`, `side="BUY"`, `quantity=1`, `price=0`, `order_type="MARKET"` |
+| `place_order` | Execute order through safety checker (paper engine); the only order tool | `symbol`, `side="BUY"`, `quantity=1`, `price=0`, `order_type="MARKET"` |
 | `system_status` | Version, mode, token health, active LLMs | none |
+| `halt_trading` | Kill switch: reject every BUY everywhere (SELLs stay allowed) | `reason` |
+| `resume_trading` | Lift the kill switch | none |
 
 !!! warning "Safety First"
     Every order passes through the `SafetyChecker` before execution. Orders that violate position limits, daily loss caps, or other safety rules are rejected automatically.
@@ -85,7 +87,7 @@ These tools fetch raw data for Claude to reason over directly, bypassing the mul
 
 | Tool | Description | Key Args |
 |------|-------------|----------|
-| `get_option_chain` | Full chain with calls/puts, OI, volume, distance% | `symbol="NIFTY"`, `expiry_index=0` |
+| `get_option_chain` | INDstocks chain with calls/puts, OI, volume, distance% | `symbol="NIFTY"`, `expiry_index=0` |
 | `suggest_option_trade` | AI strike selection with risk metrics | `symbol="NIFTY"`, `strategy="SHORT_PUT"`, `expiry_index=0` |
 
 **Supported strategies:**
@@ -94,16 +96,20 @@ These tools fetch raw data for Claude to reason over directly, bypassing the mul
 - `SHORT_CALL` -- Sell OTM call (bearish view)
 - `SHORT_STRANGLE` -- Sell OTM put + call (neutral view)
 
-## GTT Orders
+Option tools need a valid INDstocks token and are advisory: they place nothing.
+
+## Learning & Backtesting
 
 | Tool | Description | Key Args |
 |------|-------------|----------|
-| `place_gtt_order` | GTT buy trigger or OCO sell (target + stop-loss) | `symbol`, `action`, `trigger_price`, `target_price`, `stop_loss_price`, `quantity` |
-| `list_gtt_orders` | List all active GTT orders | none |
-| `setup_swing_trade` | Complete CNC swing: GTT buy + planned OCO sell | `symbol`, `entry_price`, `target_price`, `stop_loss_price`, `quantity` |
+| `performance_report` | AI calls vs NIFTY, closed trades, calibration | `days=90` |
+| `backtest_strategy` | Backtest on OHLCV history (Sharpe, drawdown, win rate) | `symbol`, `days=365`, `stop_loss_pct=3.0`, `target_pct=6.0` |
+| `run_monte_carlo_test` | Monte Carlo over the backtest's trades | `symbol`, `days=365`, `simulations=1000` |
+| `get_learning_insights` | Insights from past trades (calibration, sectors, stops, timing) | none |
+| `get_symbol_stats` | Past performance for one symbol | `symbol` |
+| `evolve_strategy` | Backtest, validate, adapt and persist strategy parameters | `symbol`, `days=180` |
 
-!!! tip "GTT orders require Kite Connect"
-    GTT (Good Till Triggered) orders are a Zerodha feature. You must be logged into Kite via `/api/kite/login` before using these tools.
+GTT, AMO, bracket, cover, basket, option/future order and mutual fund tools were removed with Kite Connect; INDstocks smart orders are planned (see [GTT Orders](../trading/gtt-orders.md)).
 
 ## Tool Count by Category
 
@@ -112,8 +118,8 @@ These tools fetch raw data for Claude to reason over directly, bypassing the mul
 | Market Data | 2 |
 | Portfolio | 4 |
 | AI Analysis | 3 |
-| Data Gathering | 7 |
-| Execution | 2 |
+| Data Gathering | 8 |
+| Execution | 4 |
 | Options | 2 |
-| GTT / Swing | 3 |
-| **Total** | **23** |
+| Learning & Backtesting | 6 |
+| **Total** | **29** |

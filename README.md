@@ -34,7 +34,7 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 **Key capabilities:**
 
-- **Claude Code Integration** — Native MCP server with 40 tools + custom slash commands (`/analyze`, `/quote`, `/scan`, `/portfolio`, `/trade`). Run the full 15-agent analysis pipeline using Claude's own reasoning at zero extra LLM cost.
+- **Claude Code Integration** — Native MCP server with 29 tools + custom slash commands (`/analyze`, `/quote`, `/scan`, `/portfolio`, `/trade`). Run the full 15-agent analysis pipeline using Claude's own reasoning at zero extra LLM cost.
 - **Interactive AI Chat** — Claude Code-style REPL (`skopaq chat`) with streaming responses, tool panels, human-in-the-loop trade confirmation, and LangGraph checkpointing.
 - **Ollama Local Fallback** — Run analyst roles on local models via Ollama/MLX for offline operation and zero API cost.
 - **Post-Trade Reflection Loop** — Reflection node analyzes past trades and injects history into the analyst context, enabling the system to incorporate lessons from wins and losses over time.
@@ -444,7 +444,7 @@ Add to your `~/.claude.json` (or run `/mcp add` in Claude Code):
 
 **Step 3: Restart Claude Code**
 
-Open Claude Code in the `Ai-IND-money-` directory. The MCP server starts automatically. You'll see 40 trading tools available.
+Open Claude Code in the `Ai-IND-money-` directory. The MCP server starts automatically. You'll see 29 trading tools available.
 
 ### Custom Slash Commands (Skills)
 
@@ -458,7 +458,7 @@ These are pre-built in `.claude/skills/` and available immediately:
 | `/portfolio` | Shows positions, holdings, funds, P&L |
 | `/trade INFY` | Analysis + safety check + paper execution (with confirmation) |
 
-### MCP Tools (40 available — core ones listed below)
+### MCP Tools (29 available — core ones listed below)
 
 All tools are callable by Claude Code natively. Read-only tools are auto-approved via `.claude/settings.json`:
 
@@ -467,10 +467,12 @@ All tools are callable by Claude Code natively. Read-only tools are auto-approve
 | **Market Data** | `get_quote`, `get_historical` |
 | **Portfolio** | `get_positions`, `get_holdings`, `get_funds`, `get_orders` |
 | **Analysis** | `analyze_stock`, `scan_market`, `check_safety`, `quick_decision` (Jev) |
-| **Execution** | `place_order` (paper/live, safety-checked) |
+| **Execution** | `place_order` (paper engine, safety-checked; the only order tool) |
+| **Options** | `get_option_chain`, `suggest_option_trade` (INDstocks chain, advisory) |
 | **Data Pipeline** | `gather_market_data`, `gather_news_data`, `gather_fundamentals_data`, `gather_social_data`, `gather_all_analysis_data` |
 | **Memory** | `recall_agent_memories`, `save_trade_reflection` |
-| **System** | `system_status` |
+| **System** | `system_status`, `halt_trading`, `resume_trading` |
+| **Learning** | `performance_report`, `backtest_strategy`, `run_monte_carlo_test`, `get_learning_insights`, `get_symbol_stats`, `evolve_strategy` |
 
 ### Dual-Mode Architecture
 
@@ -576,7 +578,7 @@ Ai-IND-money-/
 │   ├── memory/                 # BM25-indexed agent memory + trade reflection loop
 │   ├── risk/                   # ATR sizing, regime detection, drawdown, calendar
 │   ├── scanner/                # Multi-model market scanner engine
-│   ├── mcp_server.py           # MCP server (40 tools for Claude Code integration)
+│   ├── mcp_server.py           # MCP server (29 tools for Claude Code integration)
 │   ├── config.py               # Pydantic Settings (env_prefix="SKOPAQ_")
 │   └── constants.py            # Immutable safety rules + daemon variants
 │
@@ -696,7 +698,7 @@ Running 24/7 on a Mac mini: see [docs/deployment/mac-mini.md](docs/deployment/ma
 | **Vercel** | `frontend/` | Next.js dashboard |
 | **Supabase** | `supabase/` | PostgreSQL + Auth + agent memory |
 | **Upstash** | — | Serverless Redis (semantic LLM cache) |
-| **Cloudflare Tunnel** | — | Inbound HTTPS to the API (Kite OAuth callback/postback). Not a static outbound IP: INDstocks needs your static egress IPv4 whitelisted |
+| **Cloudflare Tunnel** | — | Inbound HTTPS to the API and dashboard. Not a static outbound IP: INDstocks needs your static egress IPv4 whitelisted |
 
 ## Upstream Modifications
 

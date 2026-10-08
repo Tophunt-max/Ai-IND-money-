@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from skopaq import __version__
-from skopaq.api.auth import cors_origins, require_api_token
+from skopaq.api.auth import cors_origins
 from skopaq.broker.token_manager import TokenManager
 from skopaq.config import SkopaqConfig
 
@@ -55,120 +55,6 @@ app.include_router(dashboard_router)
 from skopaq.api.dashboard_tools import router as dashboard_tools_router  # noqa: E402
 
 app.include_router(dashboard_tools_router)
-
-
-# ── Kite Connect OAuth ───────────────────────────────────────────────────────
-
-@app.get("/api/kite/login")
-async def kite_login():
-    """Redirect to Zerodha Kite login page."""
-    from skopaq.broker.kite_client import KiteClient
-
-    config = SkopaqConfig()
-    if not config.kite_api_key:
-        raise HTTPException(400, "SKOPAQ_KITE_API_KEY not configured")
-
-    client = KiteClient(api_key=config.kite_api_key)
-    from fastapi.responses import RedirectResponse
-
-    return RedirectResponse(client.login_url)
-
-
-@app.get("/api/kite/callback")
-async def kite_callback(request_token: str = "", status: str = ""):
-    """Handle Kite OAuth callback — exchange request_token for access_token."""
-    from skopaq.broker.kite_client import KiteClient, set_access_token
-
-    config = SkopaqConfig()
-    if not request_token or status != "success":
-        raise HTTPException(400, f"Login failed: status={status}")
-
-    client = KiteClient(
-        api_key=config.kite_api_key,
-        api_secret=config.kite_api_secret.get_secret_value(),
-    )
-    try:
-        session = client.generate_session(request_token)
-        return {
-            "status": "success",
-            "user_id": session.get("user_id"),
-            "access_token_set": True,
-            "message": "Kite login successful. Bot is now connected to Zerodha.",
-        }
-    except Exception as exc:
-        raise HTTPException(500, f"Session generation failed: {exc}")
-
-
-@app.get("/api/kite/status")
-async def kite_status():
-    """Check if Kite access token is set."""
-    from skopaq.broker.kite_client import get_access_token
-
-    token = get_access_token()
-    return {
-        "connected": bool(token),
-        "token_length": len(token) if token else 0,
-    }
-
-
-@app.get("/api/kite/token", dependencies=[Depends(require_api_token)])
-async def kite_token():
-    """Return the Kite access token (for internal service-to-service use).
-
-    The Telegram bot fetches this to share the Kite session established
-    via the API app's OAuth login flow. Needs ``Authorization: Bearer
-    <SKOPAQ_API_TOKEN>`` when that is set.
-    """
-    from skopaq.broker.kite_client import get_access_token
-
-    token = get_access_token()
-    if not token:
-        raise HTTPException(404, "No Kite token available. Login first.")
-    return {"access_token": token}
-
-
-@app.post("/api/kite/postback")
-async def kite_postback(request: Request):
-    """Receive real-time order updates from Zerodha.
-
-    Zerodha POSTs order status changes (fill, rejection, cancellation)
-    to this endpoint. We log them and can trigger alerts via Telegram.
-    """
-    import json
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = dict(await request.form())
-
-    order_id = body.get("order_id", "?")
-    status = body.get("status", "?")
-    symbol = body.get("tradingsymbol", "?")
-    txn = body.get("transaction_type", "?")
-    qty = body.get("filled_quantity", body.get("quantity", 0))
-    price = body.get("average_price", 0)
-
-    logger.info(
-        "Kite postback: %s %s %s qty=%s price=%s status=%s",
-        txn, symbol, order_id, qty, price, status,
-    )
-
-    # Auto-notify via centralized notification system
-    try:
-        from skopaq.notifications import notify_trade_event
-
-        await notify_trade_event(
-            action=txn,
-            symbol=symbol,
-            price=float(price) if price else 0,
-            quantity=int(qty) if qty else 0,
-            status=status,
-            order_id=order_id,
-        )
-    except Exception:
-        logger.warning("Postback notification failed", exc_info=True)
-
-    return {"status": "ok"}
 
 
 @app.get("/health")

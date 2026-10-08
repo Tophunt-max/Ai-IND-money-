@@ -37,9 +37,6 @@ def _config(**over):
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
-    kite = types.ModuleType("skopaq.broker.kite_client")
-    kite.get_access_token = lambda: "kite-tok"
-    monkeypatch.setitem(sys.modules, "skopaq.broker.kite_client", kite)
     monkeypatch.setenv("SKOPAQ_HALT_FILE", str(tmp_path / "HALT"))
     cfg = {"value": _config()}
     monkeypatch.setattr(dashboard_auth, "SkopaqConfig", lambda: cfg["value"])

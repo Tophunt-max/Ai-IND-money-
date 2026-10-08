@@ -15,7 +15,9 @@ from enum import StrEnum
 from typing import Optional
 from uuid import UUID, uuid4
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+
+from skopaq.constants import INDSTOCKS_BROKERAGE_PER_ORDER_INR
 
 
 # ── Enums ───────────────────────────────────────────────────────────────────
@@ -47,17 +49,30 @@ class OrderType(StrEnum):
 
 
 class Product(StrEnum):
-    """INDstocks product types.
+    """INDstocks product types (the values sent to the API).
 
-    API docs use INTRADAY/MARGIN/CNC.  We also keep MIS/NRML as aliases
-    so internal code can use either naming convention.
+    Equity: ``CNC`` (delivery) or ``INTRADAY``. Derivatives: ``MARGIN`` (carry forward,
+    "NRML") or ``INTRADAY``. ``MIS`` / ``NRML`` are aliases of the same members, so either
+    name can be used in code; the API always receives ``INTRADAY`` / ``MARGIN``.
     """
-    CNC = "CNC"            # Cash and Carry (delivery)
-    INTRADAY = "INTRADAY"  # Intraday
-    MARGIN = "MARGIN"      # Margin
-    # Aliases for internal code that uses Zerodha-style names
-    MIS = "INTRADAY"
-    NRML = "MARGIN"
+    CNC = "CNC"            # Cash and Carry (delivery), equity only
+    INTRADAY = "INTRADAY"  # Intraday, equity or derivatives
+    MARGIN = "MARGIN"      # Carry-forward derivatives
+    MIS = "INTRADAY"       # alias of INTRADAY
+    NRML = "MARGIN"        # alias of MARGIN
+
+
+class InstrumentType(StrEnum):
+    """Derivative contract types (INDstocks ``instrument_type``)."""
+    OPTIDX = "OPTIDX"  # index option
+    OPTSTK = "OPTSTK"  # stock option
+    FUTIDX = "FUTIDX"  # index future
+    FUTSTK = "FUTSTK"  # stock future
+
+
+class OptionType(StrEnum):
+    CE = "CE"
+    PE = "PE"
 
 
 class Validity(StrEnum):
@@ -110,9 +125,33 @@ class OrderRequest(BaseModel):
     security_id: str = ""               # e.g. "3045" from instruments CSV
     algo_id: str = "99999"              # REQUIRED — "99999" for regular orders
 
+    # Derivatives: ``quantity`` is in units (shares), and must be a whole number of
+    # lots. Not sent to the API; checked here so a wrong size never reaches the broker.
+    lot_size: int = Field(1, ge=1)
+
     # Internal tracking (not sent to API)
     internal_id: UUID = Field(default_factory=uuid4)
     tag: str = ""                       # User-defined tag
+
+    @model_validator(mode="after")
+    def _check_segment_rules(self) -> "OrderRequest":
+        if self.segment == Segment.DERIVATIVE:
+            if self.product == Product.CNC:
+                raise ValueError("Derivative orders take product MARGIN (NRML) or INTRADAY, "
+                                 "not CNC")
+            if self.quantity % self.lot_size != 0:
+                raise ValueError(
+                    f"Derivative quantity {self.quantity} is not a multiple of the lot size "
+                    f"{self.lot_size}"
+                )
+        elif self.product == Product.MARGIN:
+            raise ValueError("Product MARGIN is for derivatives; equity takes CNC or INTRADAY")
+        return self
+
+    @property
+    def lots(self) -> int:
+        """Number of lots (derivatives); the quantity itself for equity."""
+        return int(self.quantity) // self.lot_size
 
 
 class ModifyOrderRequest(BaseModel):
@@ -270,55 +309,154 @@ class Quote(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class OptionData(BaseModel):
-    """Single option contract in an option chain."""
-
-    strike_price: float = 0.0
-    expiry: str = ""
-    option_type: str = ""
-    ltp: float = 0.0
-    open_interest: int = 0
-    change_in_oi: int = 0
-    volume: int = 0
-    iv: float = 0.0
-    bid: float = 0.0
-    ask: float = 0.0
-
-    model_config = {"extra": "allow"}
-
-
-class OptionChain(BaseModel):
-    """Option chain from ``GET /option-chain``."""
-
-    symbol: str = ""
-    expiry: str = ""
-    calls: list[OptionData] = Field(default_factory=list)
-    puts: list[OptionData] = Field(default_factory=list)
-    spot_price: float = 0.0
-    pcr: float = 0.0
-
-    model_config = {"extra": "allow"}
-
-
 class Greeks(BaseModel):
-    """Option Greeks from ``POST /greeks``."""
+    """Option Greeks, as returned on each option-chain leg (no rho)."""
 
     delta: float = 0.0
     gamma: float = 0.0
     theta: float = 0.0
     vega: float = 0.0
-    iv: float = 0.0
 
     model_config = {"extra": "allow"}
 
+    @field_validator("delta", "gamma", "theta", "vega", mode="before")
+    @classmethod
+    def _blank_numbers(cls, value: object) -> object:
+        return _blank_to_zero(value)
+
+
+class OptionLeg(BaseModel):
+    """One call or put of an option-chain strike (``GET /market/option-chain``)."""
+
+    security_id: str = ""
+    trading_symbol: str = ""
+    last_price: float = 0.0
+    previous_close_price: float = 0.0
+    oi: int = 0
+    previous_oi: int = 0
+    volume: int = 0
+    top_bid_price: float = 0.0
+    top_bid_quantity: int = 0
+    top_ask_price: float = 0.0
+    top_ask_quantity: int = 0
+    iv: float = 0.0                      # percent: 10.5 means 10.5 %
+    greeks: Greeks = Field(default_factory=Greeks)
+
+    model_config = {"extra": "allow"}
+
+    @field_validator(
+        "last_price", "previous_close_price", "oi", "previous_oi", "volume", "top_bid_price",
+        "top_bid_quantity", "top_ask_price", "top_ask_quantity", "iv", mode="before",
+    )
+    @classmethod
+    def _blank_numbers(cls, value: object) -> object:
+        return _blank_to_zero(value)
+
+    @field_validator("security_id", mode="before")
+    @classmethod
+    def _security_id_text(cls, value: object) -> object:
+        return _id_to_str(value)
+
+    @field_validator("greeks", mode="before")
+    @classmethod
+    def _greeks_or_empty(cls, value: object) -> object:
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def oi_change(self) -> int:
+        return self.oi - self.previous_oi
+
+
+class OptionStrike(BaseModel):
+    strike: float
+    ce: Optional[OptionLeg] = None
+    pe: Optional[OptionLeg] = None
+
+
+class OptionChain(BaseModel):
+    """Option chain for one underlying and one expiry, strikes in ascending order.
+
+    The broker response carries no lot size, tick size or other expiries: take those
+    from the contracts search / instruments file.
+    """
+
+    underlying_ltp: float = 0.0
+    expiry: str = ""                     # YYYY-MM-DD
+    strikes: list[OptionStrike] = Field(default_factory=list)
+
+
+class DerivativeContract(BaseModel):
+    """A derivative contract (``GET /market/instruments/search``)."""
+
+    security_id: str = ""
+    trading_symbol: str = ""
+    expiry: str = ""                     # YYYY-MM-DD
+    strike_price: Optional[float] = None  # None for futures
+    option_type: Optional[str] = None     # CE / PE; None for futures
+    lot_size: int = 1
+    instrument_type: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+    @field_validator("security_id", mode="before")
+    @classmethod
+    def _security_id_text(cls, value: object) -> object:
+        return _id_to_str(value)
+
+    @property
+    def is_future(self) -> bool:
+        return self.option_type is None and self.strike_price is None
+
+
+class MarginCharges(BaseModel):
+    stt: float = 0.0
+    exchange_charges: float = 0.0
+    stamp_duty: float = 0.0
+    sebi_turn_over_charges: float = 0.0
+    brokerage: float = 0.0
+    gst: float = 0.0
+    ipft_charges: float = Field(0.0, validation_alias=AliasChoices("IPFTCharges", "ipft_charges"))
+    total_charges: float = 0.0
+
+    model_config = {"extra": "allow", "populate_by_name": True}
+
+
+class MarginEstimate(BaseModel):
+    """Margin and charges for one order (``GET /margin``)."""
+
+    total_margin: float = 0.0
+    span_margin: float = 0.0
+    exposure_margin: float = 0.0
+    var_margin: float = 0.0
+    delivery_margin: float = 0.0
+    hedge_benefit: float = 0.0
+    available_balance: float = 0.0
+    insufficient_balance: float = 0.0
+    brokerage: float = 0.0
+    charges: MarginCharges = Field(default_factory=MarginCharges)
+
+    model_config = {"extra": "allow"}
+
+    @property
+    def sufficient(self) -> bool:
+        return self.insufficient_balance <= 0
+
 
 class Funds(BaseModel):
-    """Available funds from ``GET /funds``."""
+    """Available funds from ``GET /funds``.
+
+    ``available_cash`` is equity CNC buying power (``detailed_avl_balance.eq_cnc``); the
+    other ``*_available`` fields are the per-segment balances of the same block.
+    """
 
     available_cash: float = 0.0
     used_margin: float = 0.0
     available_margin: float = 0.0
     total_collateral: float = 0.0
+    intraday_available: float = 0.0       # eq_mis
+    option_buy_available: float = 0.0     # option_buy
+    option_sell_available: float = 0.0    # option_sell
+    futures_available: float = 0.0        # future
 
     model_config = {"extra": "allow"}
 
@@ -397,7 +535,7 @@ class ExecutionResult(BaseModel):
     rejection_reason: str = ""
     fill_price: Optional[float] = None
     slippage: float = 0.0
-    brokerage: float = 5.0  # INR flat per order
+    brokerage: float = INDSTOCKS_BROKERAGE_PER_ORDER_INR  # INR flat per order
     timestamp: datetime = Field(default_factory=datetime.now)
 
     # Live only (paper keeps the defaults; consumers then use the ordered quantity).

@@ -30,7 +30,7 @@ Built from the root `Dockerfile`:
 - single stage on `python:3.14-slim-trixie`; no apt packages and no compiler (every
   dependency ships CPython 3.14 wheels for linux/arm64 and linux/amd64);
 - dependencies from `pip install -e ".[deploy]"` (Telegram bot with its job queue,
-  Kite Connect, Ollama, psycopg2, quantstats, langchain-community);
+  Ollama, psycopg2, quantstats, langchain-community);
 - runs as the non-root user `skopaq` (uid 1000) with `WORKDIR /home/skopaq`, so
   relative paths (`results/`, `.cache/`) are writable; `/app` (the code) is read-only
   for the app;
@@ -80,7 +80,7 @@ through:
 
 Every service shares the same image, `.env`, volumes, `TZ`, `init: true` (signal
 forwarding) and log rotation (5 x 10 MB). The API is published on `127.0.0.1:8000`
-only; expose it publicly only through a Cloudflare Tunnel with Access.
+only; expose it publicly (inbound HTTPS to the API and dashboard) only through a Cloudflare Tunnel with Access.
 
 ## Volumes and State
 
@@ -90,7 +90,7 @@ only; expose it publicly only through a Cloudflare Tunnel with Access.
 | `skopaq-home` | `/home/skopaq/.tradingagents/` | decision log |
 | `skopaq-home` | `/home/skopaq/results/`, `.cache/` | analysis reports, data cache |
 | `skopaq-home` | `/home/skopaq/scheduler/`, `logs/daemon/` | scheduler markers, one log per session |
-| `skopaq-data` | `/data/` | Kite access token (shared by `api` and `telegram`) |
+| `skopaq-data` | `/data/` | nothing (kept for existing installs, currently unused) |
 
 New named volumes start out owned by `skopaq` (the image creates the directories).
 If a volume was created by an older image and is root-owned:
@@ -131,9 +131,7 @@ always-on stack:
 | `SKOPAQ_SCHEDULER_PING_URL` | empty | dead-man's switch |
 | `SKOPAQ_NSE_HOLIDAYS` | empty | extra NSE closures (`YYYY-MM-DD,...`) |
 | `SKOPAQ_DOCKER_OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama on the host |
-| `SKOPAQ_PUBLIC_BASE_URL` | empty | public HTTPS URL of the API (Kite login links) |
-| `SKOPAQ_API_BASE_URL` | empty | where a process without the `/data` volume (another machine, the native Mac MCP server) fetches the Kite token; never set it on `api` |
-| `SKOPAQ_API_TOKEN` | empty | Bearer token for `/api/chat/*` and `/api/kite/token` |
+| `SKOPAQ_API_TOKEN` | empty | Bearer token for `/api/chat/*` |
 | `SKOPAQ_CORS_ORIGINS` | `*` | browser origins allowed to call the API |
 
 !!! warning "Never commit .env"

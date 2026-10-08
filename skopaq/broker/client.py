@@ -31,12 +31,15 @@ import httpx
 
 from skopaq.broker.models import (
     CancelOrderRequest,
+    DerivativeContract,
     Funds,
     HistoricalCandle,
     Holding,
+    MarginEstimate,
     ModifyOrderRequest,
     OptionChain,
-    OptionData,
+    OptionLeg,
+    OptionStrike,
     OrderRequest,
     OrderResponse,
     Position,
@@ -59,7 +62,7 @@ _order_limiter = RateLimiter(max_calls=10, period=1.0)
 # reads the book, positions, holdings and funds before it is placed) is not refused
 _NON_TRADING_PER_S = 12
 _NON_TRADING_PATHS = frozenset({"/order-book", "/order", "/order/trades", "/trade-book",
-                                "/funds", "/user/profile"})
+                                "/funds", "/user/profile", "/margin"})
 _NON_TRADING_PREFIXES = ("/trades/", "/portfolio/")
 
 
@@ -156,6 +159,15 @@ def _order_status_of(data: object) -> str:
 
 def _dict_rows(rows: list) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _check_date(value: str, name: str) -> None:
+    """``YYYY-MM-DD`` or ValueError: the derivatives endpoints answer a wrong date format
+    with the same 400 as an unknown underlying, so it is caught here instead."""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be YYYY-MM-DD, got {value!r}") from exc
 
 
 class INDstocksClient:
@@ -577,13 +589,15 @@ class INDstocksClient:
     async def get_instruments(self, source: str = "equity") -> str:
         """Fetch instruments master as CSV text.
 
-        Endpoint: ``GET /market/instruments?source=equity``
+        Endpoint: ``GET /market/instruments?source=equity|fno|index``
 
-        Returns raw CSV with columns:
-        SECURITY_ID, TRADING_SYMBOL, CUSTOM_SYMBOL, EXCH, SEGMENT,
-        INSTRUMENT_NAME, LOT_UNITS, EXPIRY_DATE, STRIKE_PRICE,
-        OPTION_TYPE, TICK_SIZE, SYMBOL_NAME
+        ``equity`` and ``fno`` return the 16-column file (SECURITY_ID, TRADING_SYMBOL,
+        EXCH, SEGMENT, LOT_UNITS, EXPIRY_DATE, STRIKE_PRICE, OPTION_TYPE, TICK_SIZE,
+        SYMBOL_NAME, ...). ``index`` returns three columns, ``EXCH,SEGMENT,SECURITY_ID``,
+        where the second holds the index name: read it by position.
         """
+        if source not in ("equity", "fno", "index"):
+            raise ValueError(f"Unknown instruments source {source!r} (equity, fno, index)")
         return await self._request_text(
             "GET", "/market/instruments",
             params={"source": source},
@@ -845,6 +859,26 @@ class INDstocksClient:
             )
         return positions
 
+    async def get_derivative_positions(self) -> list[Position]:
+        """Fetch today's F&O positions (MARGIN and INTRADAY).
+
+        Endpoint: ``GET /portfolio/positions?segment=derivative&product=margin|intraday``.
+        Kept apart from :meth:`get_positions`: derivative security ids are another
+        numbering from equity ones, so the equity sell checks must never see these rows.
+        Each row's ``product`` is set to the product queried; a failed read raises.
+        """
+        positions: list[Position] = []
+        for product in ("margin", "intraday"):
+            data = await self._request_envelope(
+                "GET", "/portfolio/positions",
+                params={"segment": "derivative", "product": product},
+            )
+            for row in self._rows(data, "/portfolio/positions", "net_positions"):
+                position = Position(**row)
+                position.product = product.upper()
+                positions.append(position)
+        return positions
+
     async def get_holdings(self) -> list[Holding]:
         """Fetch delivery holdings (``total_qty`` / ``avg_price`` parse via aliases).
 
@@ -863,15 +897,26 @@ class INDstocksClient:
             # INDstocks returns nested structure — map to our flat model.
             # Key fields: detailed_avl_balance.eq_cnc (equity CNC buying power),
             # funds_added, sod_balance, pledge_received.
-            avl = data.get("detailed_avl_balance", {})
-            eq_cnc = float(avl.get("eq_cnc", 0))
-            pledge = float(data.get("pledge_received", 0))
+            avl = data.get("detailed_avl_balance") or {}
+
+            def num(block: dict, key: str) -> float:
+                try:
+                    return float(block.get(key) or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            eq_cnc = num(avl, "eq_cnc")
+            pledge = num(data, "pledge_received")
 
             return Funds(
                 available_cash=eq_cnc,
                 available_margin=eq_cnc,
                 used_margin=0.0,
                 total_collateral=eq_cnc + pledge,
+                intraday_available=num(avl, "eq_mis"),
+                option_buy_available=num(avl, "option_buy"),
+                option_sell_available=num(avl, "option_sell"),
+                futures_available=num(avl, "future"),
             )
         return Funds()
 
@@ -887,25 +932,149 @@ class INDstocksClient:
             return UserProfile(**data)
         return UserProfile()
 
-    # ── Options ──────────────────────────────────────────────────────────
+    # ── Derivatives ──────────────────────────────────────────────────────
 
-    async def get_option_chain(self, symbol: str) -> OptionChain:
-        """Fetch option chain for a symbol.
+    async def get_option_chain(
+        self,
+        underlying_scrip: str,
+        expiry: str,
+        *,
+        segment: str = "INDEX",
+        exchange: str = "NSE",
+        strike_count: int = 10,
+    ) -> OptionChain:
+        """Option chain for one underlying and one expiry, with IV and Greeks.
 
-        Endpoint: ``GET /option-chain``
+        Endpoint: ``GET /market/option-chain``. ``underlying_scrip`` is the SECURITY_ID
+        of the underlying (``source=index`` for an index, the cash-market row of
+        ``source=equity`` for a stock) — never a contract id. ``segment`` is the
+        underlying's (``INDEX`` / ``EQUITY``), ``expiry`` is ``YYYY-MM-DD`` and
+        ``strike_count`` the strikes on each side of the money.
+        """
+        _check_date(expiry, "expiry")
+        if segment not in ("INDEX", "EQUITY"):
+            raise ValueError(f"Option-chain segment must be INDEX or EQUITY, not {segment!r}")
+        data = await self._request(
+            "GET", "/market/option-chain",
+            params={
+                "exchange": exchange,
+                "segment": segment,
+                "underlying-scrip": underlying_scrip,
+                "expiry": expiry,
+                "strike_count": strike_count,
+            },
+        )
+        if not isinstance(data, dict):
+            raise BrokerError(
+                f"/market/option-chain: unexpected payload {str(data)[:200]}", kind="bad_payload",
+            )
+        strikes: list[OptionStrike] = []
+        raw = data.get("strikes") or {}
+        if isinstance(raw, dict):
+            for key, legs in raw.items():
+                try:
+                    strike = float(key)
+                except (TypeError, ValueError):
+                    continue
+                legs = legs if isinstance(legs, dict) else {}
+                strikes.append(OptionStrike(
+                    strike=strike,
+                    ce=OptionLeg(**legs["ce"]) if isinstance(legs.get("ce"), dict) else None,
+                    pe=OptionLeg(**legs["pe"]) if isinstance(legs.get("pe"), dict) else None,
+                ))
+        strikes.sort(key=lambda s: s.strike)        # JSON key order is not guaranteed
+        try:
+            ltp = float(data.get("underlying_ltp") or 0)
+        except (TypeError, ValueError):
+            ltp = 0.0
+        return OptionChain(
+            underlying_ltp=ltp, expiry=str(data.get("expiry") or expiry), strikes=strikes,
+        )
+
+    async def get_expiries(self, underlying: str) -> list[str]:
+        """Upcoming expiry dates (``YYYY-MM-DD``, ascending) for an underlying.
+
+        Endpoint: ``GET /market/instruments/expiries?underlying=NIFTY&segment=DERIVATIVE``
         """
         data = await self._request(
-            "GET", "/option-chain",
-            params={"symbol": symbol},
+            "GET", "/market/instruments/expiries",
+            params={"underlying": underlying.upper(), "segment": "DERIVATIVE"},
         )
-        if isinstance(data, dict):
-            calls = [OptionData(**c) for c in data.get("calls", [])]
-            puts = [OptionData(**p) for p in data.get("puts", [])]
-            return OptionChain(
-                symbol=symbol,
-                calls=calls,
-                puts=puts,
-                spot_price=float(data.get("spot_price", 0)),
-                pcr=float(data.get("pcr", 0)),
+        if not isinstance(data, list):
+            raise BrokerError(
+                f"/market/instruments/expiries: unexpected payload {str(data)[:200]}",
+                kind="bad_payload",
             )
-        return OptionChain(symbol=symbol)
+        return sorted(str(d) for d in data if d)
+
+    async def search_derivatives(
+        self,
+        underlying: str,
+        *,
+        instrument_type: Optional[str] = None,
+        expiry: Optional[str] = None,
+        option_type: Optional[str] = None,
+        strike_from: Optional[float] = None,
+        strike_to: Optional[float] = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[int, list[DerivativeContract]]:
+        """Currently trading contracts of an underlying: ``(total count, this page)``.
+
+        Endpoint: ``GET /market/instruments/search`` (``segment=DERIVATIVE``). Rows carry
+        ``security_id``, ``trading_symbol``, ``expiry``, ``strike_price``,
+        ``option_type`` and ``lot_size``; futures have no strike or option type.
+        """
+        params: dict[str, Any] = {
+            "underlying": underlying.upper(), "segment": "DERIVATIVE",
+            "page": page, "page_size": max(1, min(page_size, 100)),
+        }
+        if instrument_type:
+            params["instrument_type"] = instrument_type
+        if expiry:
+            _check_date(expiry, "expiry")
+            params["expiry"] = expiry
+        if option_type:
+            params["option_type"] = option_type
+        if strike_from is not None:
+            params["strike_from"] = strike_from
+        if strike_to is not None:
+            params["strike_to"] = strike_to
+        data = await self._request("GET", "/market/instruments/search", params=params)
+        if not isinstance(data, dict) or not isinstance(data.get("instruments"), list):
+            raise BrokerError(
+                f"/market/instruments/search: unexpected payload {str(data)[:200]}",
+                kind="bad_payload",
+            )
+        rows = [DerivativeContract(**r) for r in data["instruments"] if isinstance(r, dict)]
+        try:
+            count = int(data.get("count") or len(rows))
+        except (TypeError, ValueError):
+            count = len(rows)
+        return count, rows
+
+    async def get_margin(
+        self,
+        *,
+        security_id: str,
+        side: str,
+        quantity: int,
+        price: float,
+        product: str,
+        segment: str = "DERIVATIVE",
+        exchange: str = "NSE",
+    ) -> MarginEstimate:
+        """Margin and charges one order would need, before placing it.
+
+        Endpoint: ``GET /margin`` with a JSON body (string values, as documented).
+        """
+        body = {
+            "segment": segment, "exchange": exchange, "securityID": str(security_id),
+            "txnType": side, "quantity": str(int(quantity)), "price": str(price),
+            "product": product,
+        }
+        data = await self._request_envelope("GET", "/margin", json_body=body, require_data=True)
+        if not isinstance(data, dict):
+            raise BrokerError(f"/margin: unexpected payload {str(data)[:200]}",
+                              kind="bad_payload")
+        return MarginEstimate(**data)

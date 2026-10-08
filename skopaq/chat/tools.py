@@ -32,30 +32,6 @@ def _get_infra() -> Infrastructure:
     return _infra
 
 
-def _get_kite_client():
-    """Return a connected KiteClient if available, else None.
-
-    Only returns a client if both API key AND access token are available.
-    The access token is checked from memory/file/env only — no remote
-    fetch during this call (to avoid hanging in tests or offline use) —
-    and a token past its 06:00 IST expiry is skipped.
-    """
-    try:
-        from skopaq.broker.kite_client import KiteClient, get_access_token
-
-        token = get_access_token(remote=False)
-        if not token:
-            return None
-
-        config = _get_infra().config
-        api_key = getattr(config, "kite_api_key", "")
-        if not api_key:
-            return None
-        return KiteClient(api_key=api_key, access_token=token)
-    except Exception:
-        return None
-
-
 # ── Tool Definitions ─────────────────────────────────────────────────────────
 
 
@@ -345,13 +321,7 @@ async def get_portfolio() -> str:
     config = infra.config
 
     try:
-        # Try Kite Connect first
-        kite = _get_kite_client()
-        if kite:
-            positions = await kite.get_positions()
-            holdings = await kite.get_holdings()
-            funds = await kite.get_funds()
-        elif config.trading_mode == "live":
+        if config.trading_mode == "live":
             from skopaq.broker.client import INDstocksClient
             from skopaq.broker.token_manager import TokenManager
 
@@ -420,11 +390,7 @@ async def get_quote(symbol: str) -> str:
     config = infra.config
 
     try:
-        # Try Kite Connect first (no IP whitelist issues)
-        kite = _get_kite_client()
-        if kite:
-            q = await kite.get_quote(f"NSE:{symbol}", symbol=symbol)
-        elif config.asset_class == "crypto":
+        if config.asset_class == "crypto":
             from skopaq.broker.binance_client import BinanceClient
             from skopaq.broker.crypto_symbols import to_binance_pair
 

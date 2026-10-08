@@ -10,31 +10,31 @@ The Telegram bot runs three scheduled jobs on NSE trading days. They are configu
 
 | Time (IST) | Time (UTC) | Job | Description |
 |------------|------------|-----|-------------|
-| 09:00 | 03:30 | Pre-Market Login | Kite Connect login reminder |
+| 09:00 | 03:30 | Pre-Market Token Check | INDstocks token status |
 | 09:25 | 03:55 | Market Scan | Auto-scan top 10 stocks |
 | 15:35 | 10:05 | EOD Summary | End-of-day P&L report |
 
-## Pre-Market Login (09:00 IST)
+## Pre-Market Token Check (09:00 IST)
 
-Sends a reminder to connect to Zerodha if the Kite access token is not set.
+Checks the INDstocks access token before the market opens.
 
 **What it does:**
 
-1. Checks if `get_access_token()` returns a valid token
-2. If connected: sends "Kite connected -- ready for market open"
-3. If not connected: sends login link `<SKOPAQ_PUBLIC_BASE_URL>/api/kite/login` (or says the link is not configured when `SKOPAQ_PUBLIC_BASE_URL` is empty)
+1. Reads the token health from `TokenManager` (same check as `/token`)
+2. If valid: sends "Good morning! INDstocks token valid (…left). Market opens at 9:15 IST. Auto-scan at 9:25."
+3. If missing or expired: says so and explains how to set it (dashboard Broker page or `skopaq token set <TOKEN>`)
 
 **Why 09:00?**
 
-NSE pre-open session starts at 09:00. Logging in early ensures the token is ready before 09:15 when regular trading begins.
+NSE pre-open session starts at 09:00. Checking early leaves time to set a fresh token before 09:15 when regular trading begins.
 
 ```python
 # IST 9:00 = UTC 3:30, Monday to Friday
 app.job_queue.run_daily(
-    job_pre_market_login,
+    job_pre_market_token,
     time=dt_time(hour=3, minute=30, tzinfo=timezone.utc),
-    days=(1, 2, 3, 4, 5),
-    name="pre_market_login",
+    days=weekdays,
+    name="pre_market_token",
 )
 ```
 
@@ -44,8 +44,8 @@ Scans NIFTY 50 top stocks and sends the results to all registered chats.
 
 **What it does:**
 
-1. Verifies Kite is connected (sends login prompt if not)
-2. Fetches live quotes for 10 blue-chip stocks:
+1. Verifies the INDstocks token (sends the token message and stops if it is missing or expired)
+2. Fetches live INDstocks quotes for 10 blue-chip stocks:
    RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, LT, BHARTIARTL, WIPRO, NTPC
 3. Sorts by absolute change% (top movers)
 4. Sends formatted scan results
@@ -80,9 +80,9 @@ Sends end-of-day portfolio summary after market close.
 
 **What it does:**
 
-1. Checks Kite connection (skips if not connected)
-2. Fetches open positions and funds
-3. Calculates total day P&L
+1. Checks the INDstocks token (skips if missing or expired)
+2. Fetches INDstocks equity and F&O positions and funds
+3. Calculates total P&L
 4. Sends formatted summary
 
 **Example output:**
@@ -115,10 +115,10 @@ weekdays = (1, 2, 3, 4, 5)
 
 # IST 9:00 = UTC 3:30
 app.job_queue.run_daily(
-    job_pre_market_login,
+    job_pre_market_token,
     time=dt_time(hour=3, minute=30, tzinfo=timezone.utc),
     days=weekdays,
-    name="pre_market_login",
+    name="pre_market_token",
 )
 
 # IST 9:25 = UTC 3:55

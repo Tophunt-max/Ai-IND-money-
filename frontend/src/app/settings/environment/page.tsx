@@ -16,7 +16,7 @@ import { useApi } from "@/lib/hooks";
 
 const GROUP_ORDER = [
   "Trading mode", "Scheduler", "Broker (INDstocks)", "Telegram", "Daemon, scanner & monitor",
-  "Risk & sizing", "AI models & keys", "Kite (Zerodha)", "Other",
+  "Risk & sizing", "AI models & keys", "Other",
 ];
 
 const INPUT = "field";

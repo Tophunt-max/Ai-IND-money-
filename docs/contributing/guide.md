@@ -97,14 +97,14 @@ Know where to put your code:
 |-----------|---------------|
 | `skopaq/agents/` | AI agent logic (sell analyst, etc.) |
 | `skopaq/api/` | FastAPI endpoints |
-| `skopaq/broker/` | Broker integrations (Kite, INDstocks) |
+| `skopaq/broker/` | INDstocks broker client, F&O helpers, paper engine |
 | `skopaq/cli/` | CLI commands and display |
 | `skopaq/db/` | Database clients and repositories |
 | `skopaq/execution/` | Order execution, safety, monitoring |
 | `skopaq/graph/` | LangGraph pipeline wrapper |
 | `skopaq/llm/` | LLM tiering, caching, env bridging |
 | `skopaq/memory/` | Agent memory and reflection |
-| `skopaq/options/` | Options chain, strategies, GTT |
+| `skopaq/options/` | Options chain (INDstocks), strategies |
 | `skopaq/risk/` | Risk management (ATR sizing, regime) |
 | `skopaq/scanner/` | Market scanner engine |
 
@@ -176,8 +176,8 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 feat: add new MCP tool for option Greeks
 fix: correct timestamp conversion in historical data
 refactor: simplify safety checker validation logic
-docs: add GTT orders documentation
-test: add unit tests for Kite client
+docs: add options selling documentation
+test: add unit tests for INDstocks client
 ```
 
 ## Questions?

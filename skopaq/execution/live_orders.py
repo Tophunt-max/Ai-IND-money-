@@ -61,7 +61,7 @@ from skopaq.broker.order_status import (
     to_decimal,
 )
 from skopaq.broker.scrip_resolver import cached_tick_size, resolve_tick_size
-from skopaq.constants import NSE_MARKET_CLOSE
+from skopaq.constants import INDSTOCKS_BROKERAGE_PER_ORDER_INR, NSE_MARKET_CLOSE
 from skopaq.execution.order_alerts import get_alerter
 from skopaq.execution.order_journal import OrderJournal
 from skopaq.execution.sellable import (
@@ -1684,7 +1684,7 @@ class LiveOrderWorker:
             rejection_reason=reason,
             fill_price=fill_price,
             slippage=round(slippage, 4),
-            brokerage=20.0 * len([p for p in pieces if p.filled_qty]),   # INDstocks flat fee
+            brokerage=INDSTOCKS_BROKERAGE_PER_ORDER_INR * len([p for p in pieces if p.filled_qty]),
             filled_quantity=filled,
             requested_quantity=target,
             outcome=outcome,

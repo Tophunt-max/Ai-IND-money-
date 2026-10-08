@@ -1,11 +1,11 @@
 "use client";
 
-import { CheckCircle2, ExternalLink, KeyRound, Link2, PlugZap, RefreshCw, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, KeyRound, Layers, PlugZap, RefreshCw, Trash2, XCircle } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { useAuth } from "@/components/AuthGate";
 import { Badge, Button, Card, ErrorBox, Field, KV, Notice, PageTitle, Select, Skeleton } from "@/components/ui";
-import { api, BACKEND_URL, when } from "@/lib/api";
+import { api, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 
 interface BrokerStatus {
@@ -19,7 +19,6 @@ interface BrokerStatus {
     stored: boolean;
     env_token: boolean;
   };
-  kite: { configured: boolean; connected: boolean; login_url: string | null };
 }
 
 function remaining(sec: number | null): string {
@@ -77,11 +76,10 @@ export default function BrokerPage() {
 
   const s = st.data;
   const ind = s?.indstocks;
-  const kiteLogin = s?.kite.login_url || `${BACKEND_URL}/api/kite/login`;
 
   return (
     <div className="space-y-6">
-      <PageTitle title="Broker connections" icon={PlugZap} subtitle="INDstocks executes the trades; Kite is optional for market data"
+      <PageTitle title="Broker connections" icon={PlugZap} subtitle="INDstocks is the only broker: market data, equity and F&O orders"
         right={<Button variant="ghost" icon={RefreshCw} onClick={st.reload}>Refresh</Button>} />
       <ErrorBox error={st.error || error} />
       {msg && <Notice tone="ok">{msg}</Notice>}
@@ -131,37 +129,19 @@ export default function BrokerPage() {
           )}
         </Card>
 
-        <Card title="Zerodha Kite" icon={Link2} subtitle="Optional: market data, options chain, GTT, mutual funds"
-          right={s && <Badge tone={s.kite.connected ? "ok" : s.kite.configured ? "warning" : "neutral"} dot>
-            {s.kite.connected ? "Connected" : s.kite.configured ? "Logged out" : "Not set up"}</Badge>}>
-          {!s ? <div className="space-y-3"><Skeleton /><Skeleton className="h-4 w-2/3" /></div> : (
-            <div className="space-y-5">
-              <div className="flex items-center gap-4 rounded-xl bg-white/[0.03] p-4 ring-1 ring-white/[0.06]">
-                <StatusIcon ok={s.kite.connected} />
-                <div>
-                  <div className="text-sm font-medium text-white">
-                    {s.kite.connected ? "Session active until 06:00 IST" : s.kite.configured ? "Log in once a day" : "SKOPAQ_KITE_API_KEY is not set"}
-                  </div>
-                  <div className="text-xs text-gray-500">Kite sessions expire every morning.</div>
-                </div>
-              </div>
-              {s.kite.configured && (
-                <a href={kiteLogin} target="_blank" rel="noreferrer">
-                  <Button icon={ExternalLink} className="w-full">{s.kite.connected ? "Log in again" : "Log in to Kite"}</Button>
-                </a>
-              )}
-              {!s.kite.login_url && s.kite.configured && (
-                <p className="text-xs text-gray-500">
-                  Set SKOPAQ_PUBLIC_BASE_URL (Environment page) to the API&apos;s public URL, and expose
-                  /api/kite/* in the reverse proxy, so the Zerodha redirect reaches the server. Telegram /login works too.
-                </p>
-              )}
-              <Notice tone="warning" title="Kite order tools">
-                With a Kite session, the Claude Code (MCP) order tools can place real Zerodha orders outside
-                the safety checks. The dashboard only reads from Kite.
-              </Notice>
-            </div>
-          )}
+        <Card title="Equity and F&O on INDstocks" icon={Layers} subtitle="One account, one token, one whitelisted IP">
+          <div className="space-y-4 text-sm text-gray-300">
+            <KV items={[
+              ["Equity", "CNC (delivery) and INTRADAY"],
+              ["F&O", "MARGIN (carry forward) and INTRADAY; quantity in whole lots"],
+              ["Option chain", "INDstocks, with IV and Greeks (Options page)"],
+              ["Brokerage", "₹10 per executed order + GST"],
+            ]} />
+            <Notice tone="info" title="Static IP">
+              INDstocks accepts orders only from the server&apos;s whitelisted IPv4 (an Elastic IP on AWS).
+              Quotes and the option chain work from anywhere.
+            </Notice>
+          </div>
         </Card>
       </div>
     </div>

@@ -325,7 +325,7 @@ export function AuthFrame({ children }: { children: ReactNode }) {
             ))}
           </div>
         </div>
-        <div className="relative text-xs text-gray-600">NSE · BSE · INDstocks · Zerodha Kite</div>
+        <div className="relative text-xs text-gray-600">NSE · BSE · F&O · INDstocks</div>
       </div>
       <div className="flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm">

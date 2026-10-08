@@ -217,30 +217,7 @@ def test_claude_md_describes_live_fills_and_the_monitor_exit_code():
         assert name in text, name
 
 
-# ── What reaches a broker (Kite) ──────────────────────────────────────────────
-
-
-def _kite_order_tools() -> list[str]:
-    """MCP tools that place orders on the Zerodha account through Kite: each calls
-    ``_get_kite()`` and an order-placing helper (``skopaq.trading.advanced_orders``'s
-    place_*/buy_option/trade_futures, or ``skopaq.options.gtt``'s place_gtt_*)."""
-    import ast
-
-    source = (ROOT / "skopaq" / "mcp_server.py").read_text()
-    placing = re.compile(r"^(place_|buy_option$|trade_futures$)")
-    tools = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.AsyncFunctionDef):
-            continue
-        called = {n.func.id for n in ast.walk(node)
-                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        imported = {alias.name for n in ast.walk(node) if isinstance(n, ast.ImportFrom)
-                    and n.module in ("skopaq.trading.advanced_orders", "skopaq.options.gtt")
-                    for alias in n.names}
-        if "_get_kite" in called and any(placing.match(name) for name in imported):
-            tools.append(node.name)
-    assert {"place_amo_order", "place_gtt_order", "place_basket"} <= set(tools)  # still found
-    return sorted(tools)
+# ── What reaches a broker (INDstocks only) ──────────────────────────────────
 
 
 def _section(text: str, heading: str) -> str:
@@ -249,24 +226,34 @@ def _section(text: str, heading: str) -> str:
     return text[start:] if end < 0 else text[start:end]
 
 
-def test_docs_never_say_kite_does_not_place_orders():
-    live = _require(ROOT / "docs" / "trading" / "live-trading.md").read_text()
-    for claim in ("never orders", "for market data only", "Kite Connect Setup (market data"):
-        assert claim not in live, f"live-trading.md still says Kite: {claim!r}"
-    mac = _require(ROOT / "docs" / "deployment" / "mac-mini.md").read_text()
-    assert "nothing it does reaches the broker's order book" not in mac
+def test_no_code_talks_to_kite():
+    """INDstocks is the only broker: no module may import or call Kite Connect."""
+    offenders = sorted(
+        str(path.relative_to(ROOT)) for path in (ROOT / "skopaq").rglob("*.py")
+        if re.search(r"kite|zerodha", path.read_text(), re.I)
+    )
+    assert offenders == [], f"Kite/Zerodha still referenced in {offenders}"
 
 
-def test_the_residual_limits_name_every_mcp_tool_that_places_real_kite_orders():
+def test_mcp_server_places_orders_only_through_place_order():
+    """The only MCP tool that can place an order is ``place_order``, which goes through
+    the OrderRouter and the SafetyChecker."""
+    import ast
+
+    source = (ROOT / "skopaq" / "mcp_server.py").read_text()
+    order_like = re.compile(r"^(place_|buy_|sell_|trade_|invest_|setup_)")
+    tools = sorted(
+        node.name for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.AsyncFunctionDef) and order_like.match(node.name)
+    )
+    assert tools == ["place_order"], tools
+
+
+def test_live_trading_doc_names_indstocks_as_the_only_broker():
     live = _require(ROOT / "docs" / "trading" / "live-trading.md").read_text()
-    limits = _section(live, "## Residual limits")
-    missing = [tool for tool in _kite_order_tools() if f"`{tool}`" not in limits]
-    assert missing == [], f"live-trading.md's residual limits do not name {missing}"
-    assert "SKOPAQ_TRADING_MODE" in limits and "SafetyChecker" in limits
+    assert not re.search(r"kite|zerodha", live, re.I), "live-trading.md still mentions Kite"
     mac = _require(ROOT / "docs" / "deployment" / "mac-mini.md").read_text()
-    mcp = _section(mac, "## 13.")
-    missing = [tool for tool in _kite_order_tools() if f"`{tool}`" not in mcp]
-    assert missing == [], f"mac-mini.md section 13 does not name {missing}"
+    assert not re.search(r"kite|zerodha", mac, re.I), "mac-mini.md still mentions Kite"
 
 
 # ── Commands the live docs tell the operator to run ──────────────────────────

@@ -381,13 +381,6 @@ if command -v fly >/dev/null 2>&1; then
     fi
 fi
 info "Railway" "make sure the Railway daemon cron service (railway-daemon.toml) is disabled"
-if has_key SKOPAQ_API_BASE_URL; then
-    warn "SKOPAQ_API_BASE_URL" "set in .env: every container reads it and api would fetch the Kite token from itself; set it only in the native MCP server's env block (runbook section 13)"
-fi
-if [ -f .claude/.mcp.json ] && grep -q 'skopaq.mcp_server' .claude/.mcp.json \
-    && ! grep -q 'SKOPAQ_API_BASE_URL' .claude/.mcp.json; then
-    info "native MCP" ".claude/.mcp.json sets no SKOPAQ_API_BASE_URL: the native server will not see the Kite session and quotes fall back to INDstocks (runbook section 13)"
-fi
 
 # ── Optional checks ───────────────────────────────────────────────────────────
 if [ "$PROBE" = 1 ] || [ "$UNIT" = 1 ] || [ "$DRYRUN" = 1 ]; then

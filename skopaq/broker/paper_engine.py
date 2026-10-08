@@ -29,12 +29,13 @@ from skopaq.broker.models import (
     Side,
     TradingSignal,
 )
+from skopaq.constants import INDSTOCKS_BROKERAGE_PER_ORDER_INR
 
 logger = logging.getLogger(__name__)
 
 # Default simulation parameters
 DEFAULT_SLIPPAGE_PCT = 0.001  # 0.1%
-DEFAULT_BROKERAGE_INR = 5.0  # INR flat per executed order
+DEFAULT_BROKERAGE_INR = INDSTOCKS_BROKERAGE_PER_ORDER_INR  # INR flat per executed order
 
 
 class PaperEngine:
@@ -45,7 +46,7 @@ class PaperEngine:
     Args:
         initial_capital: Starting cash in INR (default 10 lakh).
         slippage_pct: Simulated slippage as a fraction (default 0.1%).
-        brokerage: Flat brokerage per order in INR (default 5).
+        brokerage: Flat brokerage per order in INR (default: the INDstocks fee, 10).
     """
 
     def __init__(

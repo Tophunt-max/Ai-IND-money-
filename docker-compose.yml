@@ -42,7 +42,7 @@ x-skopaq: &skopaq
     # ~/.skopaq (INDstocks token + key, HALT kill-switch file), ~/.tradingagents (decision log),
     # results/ and .cache/ (cwd), scheduler markers and daemon session logs
     - skopaq-home:/home/skopaq
-    - skopaq-data:/data             # Kite access token, shared by api (OAuth callback) and telegram
+    - skopaq-data:/data             # spare data volume (kept for existing installs)
   logging:
     driver: json-file
     options:

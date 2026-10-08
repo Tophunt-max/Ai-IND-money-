@@ -51,7 +51,7 @@ portfolio - View positions and P&L
 status - System health check
 pnl - Current P&L summary
 analyze - Quick stock analysis
-login - Connect to Zerodha Kite
+token - INDstocks token status
 help - List all commands
 ```
 
@@ -71,8 +71,8 @@ The bot starts polling for messages and registers 3 scheduled jobs:
 
 ```
 Starting SkopaqTrader Telegram bot...
-Scheduled jobs:
-  09:00 IST — Pre-market login reminder
+Scheduled jobs (Mon-Fri, NSE trading days):
+  09:00 IST — Pre-market INDstocks token check
   09:25 IST — Auto market scan
   15:35 IST — EOD P&L summary
 Bot ready. Polling for messages...
@@ -91,8 +91,7 @@ fly launch --name skopaq-telegram --region bom --no-deploy
 ```bash
 fly secrets set \
   SKOPAQ_TELEGRAM_BOT_TOKEN="your-token" \
-  SKOPAQ_KITE_API_KEY="your-key" \
-  SKOPAQ_KITE_API_SECRET="your-secret" \
+  SKOPAQ_INDSTOCKS_TOKEN="your-token" \
   SKOPAQ_GOOGLE_API_KEY="your-key" \
   -a skopaq-telegram
 ```
@@ -125,14 +124,14 @@ primary_region = 'bom'
   cpus = 1
 ```
 
-### Step 4: Create Volume for Token Persistence
+### Step 4: Create the Volume
 
 ```bash
 fly volumes create skopaq_data --region bom --size 1 -a skopaq-telegram
 ```
 
-The Kite access token is persisted to `/data/skopaq_kite_token.json` so it survives restarts.
-It is used until 06:00 IST the next day, when Kite expires it; the 09:00 job then sends the login link again.
+`fly-telegram.toml` mounts `/data`; the volume is currently unused. The bot reads the INDstocks
+token from `SKOPAQ_INDSTOCKS_TOKEN`; the 09:00 job warns when it is missing or expired (check any time with `/token`).
 
 ## Deploying with Docker
 
@@ -161,9 +160,9 @@ skopaq/telegram_bot.py
       │
       ├── Command Handlers (/quote, /portfolio, etc.)
       ├── Natural Language Handler (AI chat brain)
-      ├── Scheduled Jobs (login, scan, EOD)
+      ├── Scheduled Jobs (token check, scan, EOD)
       │
-      ├── skopaq/broker/kite_client.py (market data)
+      ├── skopaq/broker/client.py (INDstocks market data, positions, funds)
       ├── skopaq/notifications.py (centralized alerts)
       └── skopaq/mcp_server.py (analysis tools)
 ```

@@ -1,15 +1,18 @@
-"""Option chain fetcher and processor via Kite Connect.
+"""Option chain via INDstocks (``GET /market/option-chain``).
 
-Fetches the full option chain for NIFTY/BANKNIFTY/stocks, filters by
-expiry, and computes key metrics (IV, distance from spot, premium yield).
+Fetches the chain for an index (NIFTY, BANKNIFTY, FINNIFTY, ...) or an F&O stock for one
+expiry, with live price, OI, IV and Greeks per leg, and adds the metrics the strategy
+selectors use (distance from spot, days to expiry, daily theta).
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import date, datetime, timezone
 from typing import Optional
+
+from skopaq.broker.models import OptionLeg
 
 logger = logging.getLogger(__name__)
 
@@ -19,32 +22,41 @@ class OptionContract:
     """A single option contract with computed metrics."""
 
     tradingsymbol: str
-    instrument_token: int
-    exchange: str
+    security_id: str     # the contract's id: pass it to OrderRequest.security_id
+    exchange: str        # NFO / BFO (derivatives segment of the exchange)
     strike: float
-    option_type: str  # "CE" or "PE"
+    option_type: str     # "CE" or "PE"
     expiry: date
     lot_size: int
 
-    # Live data (populated from quote)
+    # Live data
     ltp: float = 0.0
     bid: float = 0.0
     ask: float = 0.0
     volume: int = 0
     oi: int = 0
-    iv: float = 0.0  # Implied volatility
+    oi_change: int = 0
+    iv: float = 0.0      # implied volatility, percent
+    delta: float = 0.0
+    gamma: float = 0.0
+    theta: float = 0.0   # per day, as reported (negative for a long option)
+    vega: float = 0.0
 
     # Computed metrics
     spot_price: float = 0.0
-    distance_pct: float = 0.0  # % away from spot (OTM distance)
-    premium_yield_pct: float = 0.0  # Premium / margin required
+    distance_pct: float = 0.0       # % out of the money; negative when in the money
+    premium_yield_pct: float = 0.0  # premium / spot, percent
     days_to_expiry: int = 0
-    theta_estimate: float = 0.0  # Daily time decay estimate
+    theta_estimate: float = 0.0     # daily time decay (≥ 0)
+
+    @property
+    def is_otm(self) -> bool:
+        return self.distance_pct > 0
 
 
 @dataclass
 class OptionChainData:
-    """Complete option chain for a symbol."""
+    """Complete option chain for a symbol and expiry, strikes ascending."""
 
     symbol: str
     spot_price: float
@@ -52,143 +64,131 @@ class OptionChainData:
     calls: list[OptionContract] = field(default_factory=list)
     puts: list[OptionContract] = field(default_factory=list)
     lot_size: int = 1
-    fetched_at: datetime = field(default_factory=datetime.utcnow)
+    expiries: list[str] = field(default_factory=list)  # every upcoming expiry
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def atm_strike(self) -> Optional[float]:
+        strikes = sorted({c.strike for c in self.calls} | {p.strike for p in self.puts})
+        if not strikes:
+            return None
+        return min(strikes, key=lambda k: abs(k - self.spot_price))
+
+
+def _contract(
+    leg: OptionLeg, *, strike: float, option_type: str, expiry: date, lot: int, spot: float,
+    exchange: str, today: date,
+) -> OptionContract:
+    if spot > 0:
+        if option_type == "CE":
+            distance = (strike - spot) / spot * 100
+        else:
+            distance = (spot - strike) / spot * 100
+    else:
+        distance = 0.0
+    dte = max((expiry - today).days, 1)
+    theta = float(leg.greeks.theta or 0.0)
+    return OptionContract(
+        tradingsymbol=leg.trading_symbol,
+        security_id=leg.security_id,
+        exchange=exchange,
+        strike=strike,
+        option_type=option_type,
+        expiry=expiry,
+        lot_size=lot,
+        ltp=leg.last_price,
+        bid=leg.top_bid_price,
+        ask=leg.top_ask_price,
+        volume=leg.volume,
+        oi=leg.oi,
+        oi_change=leg.oi_change,
+        iv=leg.iv,
+        delta=leg.greeks.delta,
+        gamma=leg.greeks.gamma,
+        theta=theta,
+        vega=leg.greeks.vega,
+        spot_price=spot,
+        distance_pct=distance,
+        premium_yield_pct=(leg.last_price / spot * 100) if spot > 0 else 0.0,
+        days_to_expiry=dte,
+        theta_estimate=abs(theta) if theta else leg.last_price / dte,
+    )
 
 
 async def fetch_option_chain(
-    kite_client,
+    client,
     symbol: str = "NIFTY",
-    expiry_index: int = 0,  # 0 = current week, 1 = next week, etc.
+    expiry_index: int = 0,  # 0 = nearest expiry, 1 = next, etc.
+    strike_count: int = 15,
 ) -> OptionChainData:
-    """Fetch the option chain for a symbol via Kite Connect.
+    """Fetch the option chain for a symbol via INDstocks.
 
     Args:
-        kite_client: Authenticated KiteClient instance.
-        symbol: Underlying symbol (NIFTY, BANKNIFTY, RELIANCE, etc.).
-        expiry_index: 0 = nearest expiry, 1 = next, etc.
+        client: An open ``INDstocksClient``.
+        symbol: Underlying (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX, RELIANCE, ...).
+        expiry_index: 0 = nearest expiry, 1 = next, etc. (the last one if out of range).
+        strike_count: strikes on each side of the money (the chain has 2n + 1).
 
     Returns:
-        OptionChainData with all calls and puts for the selected expiry.
+        OptionChainData with every call and put of the selected expiry, ITM and OTM.
     """
-    import asyncio
+    from skopaq.broker import fno
 
-    # Get instruments for NFO exchange
-    instruments = await asyncio.to_thread(
-        kite_client._kite.instruments, "NFO"
-    )
-
-    # Filter for this symbol's options
-    option_instruments = [
-        i for i in instruments
-        if i["name"] == symbol
-        and i["instrument_type"] in ("CE", "PE")
-        and i["expiry"] is not None
-    ]
-
-    if not option_instruments:
-        raise ValueError(f"No options found for {symbol} on NFO")
-
-    # Get unique expiries sorted
-    expiries = sorted(set(i["expiry"] for i in option_instruments))
-    if expiry_index >= len(expiries):
+    underlying = await fno.resolve_underlying(client, symbol)
+    expiries = await client.get_expiries(underlying.symbol)
+    if not expiries:
+        raise ValueError(f"No upcoming F&O expiries for {underlying.symbol}")
+    if expiry_index >= len(expiries) or expiry_index < 0:
         expiry_index = 0
+    expiry = expiries[expiry_index]
+    logger.info("Option chain %s expiry %s (index %d of %d)",
+                underlying.symbol, expiry, expiry_index, len(expiries))
 
-    selected_expiry = expiries[expiry_index]
-    logger.info("Selected expiry: %s (index %d of %d)", selected_expiry, expiry_index, len(expiries))
+    chain = await client.get_option_chain(
+        underlying.security_id, expiry, segment=underlying.segment,
+        exchange=underlying.exchange, strike_count=strike_count,
+    )
+    lot = await fno.lot_size(client, underlying.symbol, expiry)
 
-    # Filter for selected expiry
-    chain_instruments = [
-        i for i in option_instruments if i["expiry"] == selected_expiry
-    ]
+    expiry_date = date.fromisoformat(chain.expiry or expiry)
+    spot = chain.underlying_ltp
+    exchange = "BFO" if underlying.exchange == "BSE" else "NFO"
+    today = date.today()
 
-    # Get spot price
-    exchange_symbol = f"NSE:{symbol}" if symbol in ("NIFTY", "BANKNIFTY", "NIFTY 50", "NIFTY BANK") else f"NSE:{symbol}"
-    # For indices, use the index quote
-    if symbol in ("NIFTY", "NIFTY 50"):
-        exchange_symbol = "NSE:NIFTY 50"
-    elif symbol in ("BANKNIFTY", "NIFTY BANK"):
-        exchange_symbol = "NSE:NIFTY BANK"
+    calls: list[OptionContract] = []
+    puts: list[OptionContract] = []
+    for row in chain.strikes:
+        common = dict(strike=row.strike, expiry=expiry_date, lot=lot, spot=spot,
+                      exchange=exchange, today=today)
+        if row.ce and row.ce.security_id:
+            calls.append(_contract(row.ce, option_type="CE", **common))
+        if row.pe and row.pe.security_id:
+            puts.append(_contract(row.pe, option_type="PE", **common))
 
-    spot_data = await asyncio.to_thread(kite_client._kite.ltp, [exchange_symbol])
-    spot_price = list(spot_data.values())[0]["last_price"] if spot_data else 0
-
-    # Get lot size
-    lot_size = chain_instruments[0].get("lot_size", 1) if chain_instruments else 1
-
-    # Filter strikes around spot price (±10% to avoid too many)
-    lower = spot_price * 0.90
-    upper = spot_price * 1.10
-    chain_instruments = [
-        i for i in chain_instruments
-        if lower <= i["strike"] <= upper
-    ]
-
-    # Fetch quotes for all instruments in the chain
-    instrument_tokens = [f"NFO:{i['tradingsymbol']}" for i in chain_instruments]
-
-    # Kite API allows max ~500 instruments per quote call
-    quotes = {}
-    for batch_start in range(0, len(instrument_tokens), 200):
-        batch = instrument_tokens[batch_start:batch_start + 200]
-        batch_quotes = await asyncio.to_thread(kite_client._kite.quote, batch)
-        quotes.update(batch_quotes)
-
-    # Build option contracts
-    calls = []
-    puts = []
-    days_to_expiry = (selected_expiry - date.today()).days
-
-    for inst in chain_instruments:
-        token_key = f"NFO:{inst['tradingsymbol']}"
-        q = quotes.get(token_key, {})
-        ohlc = q.get("ohlc", {})
-
-        # OTM distance: positive = out-of-the-money, negative = in-the-money
-        # CE is OTM when strike > spot; PE is OTM when strike < spot
-        if inst["instrument_type"] == "CE":
-            distance = ((inst["strike"] - spot_price) / spot_price) * 100
-            is_otm = inst["strike"] > spot_price
-        else:  # PE
-            distance = ((spot_price - inst["strike"]) / spot_price) * 100
-            is_otm = inst["strike"] < spot_price
-
-        # Only include OTM strikes (ITM options shouldn't be sold naked)
-        if not is_otm:
-            continue
-
-        contract = OptionContract(
-            tradingsymbol=inst["tradingsymbol"],
-            instrument_token=inst["instrument_token"],
-            exchange="NFO",
-            strike=inst["strike"],
-            option_type=inst["instrument_type"],
-            expiry=selected_expiry,
-            lot_size=lot_size,
-            ltp=q.get("last_price", 0),
-            bid=q.get("depth", {}).get("buy", [{}])[0].get("price", 0) if q.get("depth") else 0,
-            ask=q.get("depth", {}).get("sell", [{}])[0].get("price", 0) if q.get("depth") else 0,
-            volume=q.get("volume", 0),
-            oi=q.get("oi", 0),
-            spot_price=spot_price,
-            distance_pct=distance,  # Always positive for OTM
-            days_to_expiry=max(days_to_expiry, 1),
-            theta_estimate=q.get("last_price", 0) / max(days_to_expiry, 1),
-        )
-
-        if inst["instrument_type"] == "CE":
-            calls.append(contract)
-        else:
-            puts.append(contract)
-
-    # Sort by strike
-    calls.sort(key=lambda x: x.strike)
-    puts.sort(key=lambda x: x.strike)
-
+    calls.sort(key=lambda c: c.strike)
+    puts.sort(key=lambda p: p.strike)
     return OptionChainData(
-        symbol=symbol,
-        spot_price=spot_price,
-        expiry=selected_expiry,
+        symbol=underlying.symbol,
+        spot_price=spot,
+        expiry=expiry_date,
         calls=calls,
         puts=puts,
-        lot_size=lot_size,
+        lot_size=lot,
+        expiries=list(expiries),
     )
+
+
+async def load_option_chain(
+    symbol: str = "NIFTY",
+    expiry_index: int = 0,
+    *,
+    config=None,
+    strike_count: int = 15,
+) -> OptionChainData:
+    """:func:`fetch_option_chain` with its own INDstocks client (read only: market data
+    needs no whitelisted IP)."""
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.config import SkopaqConfig
+
+    async with INDstocksClient(config or SkopaqConfig(), TokenManager()) as client:
+        return await fetch_option_chain(client, symbol, expiry_index, strike_count)

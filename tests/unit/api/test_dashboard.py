@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import sys
 import time
-import types
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -32,9 +30,6 @@ def _config(**over):
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    kite = types.ModuleType("skopaq.broker.kite_client")
-    kite.get_access_token = lambda: "kite-tok"
-    monkeypatch.setitem(sys.modules, "skopaq.broker.kite_client", kite)
     monkeypatch.setenv("SKOPAQ_HALT_FILE", str(tmp_path / "HALT"))
     monkeypatch.delenv("SKOPAQ_TRADING_HALTED", raising=False)
     monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config())

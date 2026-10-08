@@ -23,7 +23,7 @@ Add to `~/.claude.json`:
 
 ### Step 2: Restart Claude Code
 
-Open Claude Code in the `skopaqtrader` directory. You'll see 23 trading tools available.
+Open Claude Code in the `skopaqtrader` directory. You'll see 29 trading tools available.
 
 ### Step 3: Trade
 
@@ -40,7 +40,7 @@ Or just talk naturally:
 ```
 > "What's the best stock to buy today?"
 > "Analyze HDFCBANK for me"
-> "Set up a swing trade on RELIANCE with support at 1280"
+> "Show me the NIFTY option chain for the nearest expiry"
 ```
 
 ## Option 2: Interactive Chat
@@ -118,6 +118,6 @@ skopaq monitor
 # Set in .env
 SKOPAQ_TRADING_MODE=live
 
-# For Kite Connect, login at:
-# https://skopaq-trader.fly.dev/api/kite/login
+# Set today's INDstocks token
+skopaq token set <TOKEN>
 ```

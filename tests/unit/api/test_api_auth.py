@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from types import SimpleNamespace
 
 import pytest
@@ -16,11 +14,8 @@ from skopaq.api.auth import cors_origins
 
 
 @pytest.fixture
-def client(monkeypatch):
-    """The real API app, with a stand-in Kite module (kiteconnect is a deploy extra)."""
-    kite = types.ModuleType("skopaq.broker.kite_client")
-    kite.get_access_token = lambda: "kite-tok"
-    monkeypatch.setitem(sys.modules, "skopaq.broker.kite_client", kite)
+def client():
+    """The real API app."""
     from skopaq.api.server import app
 
     return TestClient(app)
@@ -31,11 +26,23 @@ def _token(monkeypatch, value: str) -> None:
     monkeypatch.setattr(auth, "SkopaqConfig", lambda: SimpleNamespace(api_token=SecretStr(value)))
 
 
-def test_open_without_a_configured_token(client, monkeypatch):
+def test_kite_routes_are_gone(client):
+    """INDstocks is the only broker: the Kite OAuth/token/postback routes no longer exist."""
+    for method, path in (("get", "/api/kite/login"), ("get", "/api/kite/callback"),
+                         ("get", "/api/kite/status"), ("get", "/api/kite/token"),
+                         ("post", "/api/kite/postback")):
+        assert getattr(client, method)(path).status_code == 404, path
+
+
+def test_chat_tool_endpoint_is_open_without_a_configured_token(client, monkeypatch):
     _token(monkeypatch, "")
-    response = client.get("/api/kite/token")
-    assert response.status_code == 200
-    assert response.json() == {"access_token": "kite-tok"}
+
+    def teapot(_session_id):
+        raise HTTPException(418, "reached the endpoint")
+
+    monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", teapot)
+    body = {"tool": "get_quote", "args": {"symbol": "TCS"}}
+    assert client.post("/api/chat/tool", json=body).status_code == 418
 
 
 @pytest.mark.parametrize(
@@ -43,17 +50,12 @@ def test_open_without_a_configured_token(client, monkeypatch):
     [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Basic s3cret"},
      {"Authorization": "s3cret"}],
 )
-def test_kite_token_needs_the_bearer_token(client, monkeypatch, headers):
+def test_chat_tool_needs_the_bearer_token(client, monkeypatch, headers):
     _token(monkeypatch, "s3cret")
-    response = client.get("/api/kite/token", headers=headers)
+    body = {"tool": "get_quote", "args": {"symbol": "TCS"}}
+    response = client.post("/api/chat/tool", json=body, headers=headers)
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
-
-
-def test_kite_token_with_the_bearer_token(client, monkeypatch):
-    _token(monkeypatch, "s3cret")
-    response = client.get("/api/kite/token", headers={"Authorization": "Bearer s3cret"})
-    assert response.status_code == 200
 
 
 def test_chat_tool_endpoint_is_guarded(client, monkeypatch):

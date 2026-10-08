@@ -1,24 +1,21 @@
-"""More dashboard endpoints: broker connections, broker portfolio, scanner status, AI
-learning and memory, options and Kite read-outs, plus the backtest / Monte Carlo / settle
-job runners used by ``POST /api/dashboard/jobs`` (``skopaq/api/dashboard.py``).
+"""More dashboard endpoints: broker connection, broker portfolio, scanner status, AI
+learning and memory, the option chain, plus the backtest / Monte Carlo / settle job
+runners used by ``POST /api/dashboard/jobs`` (``skopaq/api/dashboard.py``).
 
-Everything here **reads** except setting / clearing the INDstocks token (admin). No
-endpoint places, modifies or cancels an order: the order tools of the MCP server (GTT, AMO,
-bracket, options, futures, mutual funds) stay out of the dashboard on purpose, because they
-bypass the safety checks and the kill switch.
+INDstocks is the only broker. Everything here **reads** except setting / clearing the
+INDstocks token (admin). No endpoint places, modifies or cancels an order.
 
-- ``GET    /api/dashboard/broker``                  INDstocks token health, Kite connection
+- ``GET    /api/dashboard/broker``                  INDstocks token health
 - ``POST   /api/dashboard/broker/indstocks-token``  store today's INDstocks token (admin)
 - ``DELETE /api/dashboard/broker/indstocks-token``  delete the stored token (admin)
-- ``GET    /api/dashboard/portfolio``               broker positions, holdings, funds, orders
+- ``GET    /api/dashboard/portfolio``               positions (equity, F&O), holdings, funds
 - ``GET    /api/dashboard/scanner/status``          background scanner status (not drained)
 - ``GET    /api/dashboard/learning``                win rates, calibration, sectors, timing
 - ``GET    /api/dashboard/learning/symbol``         one symbol's track record
 - ``GET    /api/dashboard/memory``                  agent memories and reflections for a query
-- ``GET    /api/dashboard/options/chain``           option chain (Kite)
-- ``GET    /api/dashboard/options/suggest``         an option-selling idea (Kite; no order)
-- ``GET    /api/dashboard/kite/gtt``                GTT orders (Kite)
-- ``GET    /api/dashboard/kite/mutual-funds``       mutual fund holdings and SIPs (Kite)
+- ``GET    /api/dashboard/options/expiries``        upcoming F&O expiries of an underlying
+- ``GET    /api/dashboard/options/chain``           option chain with IV and Greeks
+- ``GET    /api/dashboard/options/suggest``         an option-selling idea (no order)
 - ``POST   /api/dashboard/llm/check``               test the custom AI endpoint (admin)
 """
 
@@ -96,48 +93,12 @@ def _indstocks_status() -> dict[str, Any]:
     }
 
 
-def _kite_token() -> str:
-    import skopaq.broker.kite_client as kite_module
-
-    kite_module._access_token = ""  # re-read: the OAuth callback may have run since
-    return kite_module.get_access_token(remote=False) or ""
-
-
-def _kite_status() -> dict[str, Any]:
-    config = SkopaqConfig()
-    configured = bool(config.kite_api_key)
-    try:
-        connected = bool(_kite_token()) if configured else False
-    except Exception:
-        connected = False
-    base = (config.public_base_url or "").rstrip("/")
-    return {
-        "configured": configured,
-        "connected": connected,
-        "login_url": f"{base}/api/kite/login" if configured and base else None,
-    }
-
-
-def _kite_client():
-    """An authenticated KiteClient, or 503."""
-    config = SkopaqConfig()
-    if not config.kite_api_key:
-        raise HTTPException(503, "Kite is not configured (SKOPAQ_KITE_API_KEY)")
-    token = _kite_token()
-    if not token:
-        raise HTTPException(503, "Kite is not connected: log in to Kite first (Broker page)")
-    from skopaq.broker.kite_client import KiteClient
-
-    return KiteClient(api_key=config.kite_api_key, access_token=token)
-
-
 @router.get("/broker")
 async def broker_status() -> dict:
-    """INDstocks token health and the Kite connection."""
+    """INDstocks token health."""
     config = SkopaqConfig()
-    indstocks, kite = await asyncio.gather(asyncio.to_thread(_indstocks_status),
-                                           asyncio.to_thread(_kite_status))
-    return {"mode": config.trading_mode, "indstocks": indstocks, "kite": kite}
+    indstocks = await asyncio.to_thread(_indstocks_status)
+    return {"mode": config.trading_mode, "indstocks": indstocks}
 
 
 class TokenRequest(BaseModel):
@@ -190,32 +151,9 @@ async def _indstocks_portfolio() -> dict[str, Any]:
     config = SkopaqConfig()
     async with INDstocksClient(config, manager) as client:
         results = await asyncio.gather(
-            client.get_positions(), client.get_holdings(), client.get_funds(),
-            client.get_order_book(), return_exceptions=True)
-    names = ("positions", "holdings", "funds", "orders")
-    out: dict[str, Any] = {"available": True, "errors": {}}
-    for name, value in zip(names, results):
-        if isinstance(value, Exception):
-            out["errors"][name] = str(value)
-            out[name] = None if name == "funds" else []
-        elif name == "funds":
-            out[name] = _jsonable(value)
-        else:
-            out[name] = _rows(value)
-    return out
-
-
-async def _kite_portfolio() -> dict[str, Any]:
-    status = await asyncio.to_thread(_kite_status)
-    if not status["connected"]:
-        return {"available": False,
-                "error": "Kite is not connected" if status["configured"] else
-                "Kite is not configured"}
-    kite = _kite_client()
-    results = await asyncio.gather(
-        kite.get_positions(), kite.get_holdings(), kite.get_funds(), kite.get_order_book(),
-        return_exceptions=True)
-    names = ("positions", "holdings", "funds", "orders")
+            client.get_positions(), client.get_derivative_positions(), client.get_holdings(),
+            client.get_funds(), client.get_order_book(), return_exceptions=True)
+    names = ("positions", "fno_positions", "holdings", "funds", "orders")
     out: dict[str, Any] = {"available": True, "errors": {}}
     for name, value in zip(names, results):
         if isinstance(value, Exception):
@@ -242,10 +180,9 @@ async def _guard(coro, name: str) -> dict[str, Any]:
 
 @router.get("/portfolio")
 async def portfolio() -> dict:
-    """Positions, holdings, funds and the order book at INDstocks and Kite (read only)."""
-    indstocks, kite = await asyncio.gather(_guard(_indstocks_portfolio(), "INDstocks"),
-                                           _guard(_kite_portfolio(), "Kite"))
-    return {"mode": SkopaqConfig().trading_mode, "indstocks": indstocks, "kite": kite,
+    """Positions (equity and F&O), holdings, funds and the order book at INDstocks."""
+    indstocks = await _guard(_indstocks_portfolio(), "INDstocks")
+    return {"mode": SkopaqConfig().trading_mode, "indstocks": indstocks,
             "fetched_at": datetime.now(timezone.utc).isoformat()}
 
 
@@ -343,80 +280,71 @@ async def memory(q: str = Query(..., min_length=2, max_length=500)) -> dict:
     return _jsonable(await asyncio.to_thread(read))
 
 
-# ── Options and Kite read-outs ────────────────────────────────────────────────
+# ── Options (INDstocks) ───────────────────────────────────────────────────────
 
-_UNDERLYING = Query("NIFTY", min_length=2, max_length=20, pattern=r"^[A-Za-z0-9&\-]+$")
+_UNDERLYING = Query("NIFTY", min_length=2, max_length=20, pattern=r"^[A-Za-z0-9&\- ]+$")
+
+
+def _require_token() -> None:
+    from skopaq.broker.token_manager import TokenManager
+
+    if not TokenManager().get_health(notify=False).valid:
+        raise HTTPException(503, "No valid INDstocks token: set it on the Broker page")
+
+
+async def _chain(symbol: str, expiry_index: int, strike_count: int = 15):
+    from skopaq.options.chain import load_option_chain
+
+    await asyncio.to_thread(_require_token)
+    try:
+        return await asyncio.wait_for(
+            load_option_chain(symbol, expiry_index, strike_count=strike_count), 60)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(504, "INDstocks did not answer in time") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Option chain unavailable: {exc}") from exc
+
+
+@router.get("/options/expiries")
+async def option_expiries(symbol: str = _UNDERLYING) -> dict:
+    from skopaq.broker import fno
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.token_manager import TokenManager
+
+    await asyncio.to_thread(_require_token)
+    name = fno.canonical_underlying(symbol)
+    try:
+        async with INDstocksClient(SkopaqConfig(), TokenManager()) as client:
+            expiries = await asyncio.wait_for(client.get_expiries(name), 30)
+    except Exception as exc:
+        raise HTTPException(502, f"Expiries unavailable: {exc}") from exc
+    return {"symbol": name, "expiries": expiries}
 
 
 @router.get("/options/chain")
 async def option_chain(symbol: str = _UNDERLYING,
-                       expiry_index: int = Query(0, ge=0, le=6)) -> dict:
-    from skopaq.options.chain import fetch_option_chain
-
-    kite = _kite_client()
-    try:
-        chain = await asyncio.wait_for(
-            fetch_option_chain(kite, symbol.upper(), expiry_index), 60)
-    except asyncio.TimeoutError as exc:
-        raise HTTPException(504, "Kite did not answer in time") from exc
-    except Exception as exc:
-        raise HTTPException(502, f"Option chain unavailable: {exc}") from exc
-    return _jsonable(chain)
+                       expiry_index: int = Query(0, ge=0, le=12),
+                       strike_count: int = Query(15, ge=1, le=50)) -> dict:
+    return _jsonable(await _chain(symbol, expiry_index, strike_count))
 
 
 @router.get("/options/suggest")
 async def option_suggest(
     symbol: str = _UNDERLYING,
     strategy: Literal["SHORT_PUT", "SHORT_CALL", "SHORT_STRANGLE"] = "SHORT_PUT",
-    expiry_index: int = Query(0, ge=0, le=6),
+    expiry_index: int = Query(0, ge=0, le=12),
 ) -> dict:
     """An option-selling idea from the chain (rule based, no LLM). Places nothing."""
-    from skopaq.options.chain import fetch_option_chain
     from skopaq.options.strategy import select_short_call, select_short_put, select_short_strangle
 
-    kite = _kite_client()
-    try:
-        chain = await asyncio.wait_for(
-            fetch_option_chain(kite, symbol.upper(), expiry_index), 60)
-    except Exception as exc:
-        raise HTTPException(502, f"Option chain unavailable: {exc}") from exc
+    chain = await _chain(symbol, expiry_index, 25)
     pick = {"SHORT_PUT": select_short_put, "SHORT_CALL": select_short_call,
             "SHORT_STRANGLE": select_short_strangle}[strategy]
     trade = pick(chain)
-    return {"symbol": symbol.upper(), "strategy": strategy, "spot_price": chain.spot_price,
+    return {"symbol": chain.symbol, "strategy": strategy, "spot_price": chain.spot_price,
             "expiry": _jsonable(chain.expiry), "trade": _jsonable(trade) if trade else None}
-
-
-@router.get("/kite/gtt")
-async def kite_gtt() -> dict:
-    from skopaq.options.gtt import list_gtts
-
-    kite = _kite_client()
-    try:
-        return {"gtts": _jsonable(await asyncio.wait_for(list_gtts(kite), 30))}
-    except Exception as exc:
-        raise HTTPException(502, f"GTT list unavailable: {exc}") from exc
-
-
-@router.get("/kite/mutual-funds")
-async def kite_mutual_funds() -> dict:
-    from skopaq.trading.advanced_orders import list_mf_holdings, list_mf_sips
-
-    kite = _kite_client()
-    try:
-        holdings, sips = await asyncio.wait_for(
-            asyncio.gather(list_mf_holdings(kite), list_mf_sips(kite)), 30)
-    except Exception as exc:
-        raise HTTPException(502, f"Mutual funds unavailable: {exc}") from exc
-    return {
-        "holdings": [{"fund": h.get("tradingsymbol") or h.get("fund"),
-                      "units": h.get("quantity"), "avg_price": h.get("average_price"),
-                      "ltp": h.get("last_price"), "pnl": h.get("pnl")} for h in holdings or []],
-        "sips": [{"fund": s.get("tradingsymbol") or s.get("fund"),
-                  "amount": s.get("instalment_amount"), "frequency": s.get("frequency"),
-                  "status": s.get("status"), "next_date": s.get("next_instalment_date")}
-                 for s in sips or []],
-    }
 
 
 # ── Custom AI endpoint check ──────────────────────────────────────────────────

@@ -24,12 +24,8 @@ for _var in (
     "REDIS_URL",
     "SKOPAQ_DATABASE_URL",
     "DATABASE_URL",
-    "SKOPAQ_API_BASE_URL",
     "SKOPAQ_API_TOKEN",
     "SKOPAQ_INDSTOCKS_TOKEN",
-    "SKOPAQ_KITE_ACCESS_TOKEN",
-    "SKOPAQ_KITE_API_KEY",
-    "SKOPAQ_KITE_API_SECRET",
 ):
     os.environ[_var] = ""
 
@@ -44,13 +40,6 @@ os.environ.pop("SKOPAQ_TRADING_HALTED", None)
 os.environ["SKOPAQ_ENV_OVERRIDES_FILE"] = os.path.join(
     os.path.dirname(__file__), ".no-such-dir", "env-overrides-for-tests.json"
 )
-# Likewise the Kite session file (/data or /tmp/skopaq_kite_token.json, which the native MCP
-# server writes on a Mac): a real token there would make tests call api.kite.trade. A test
-# that needs a token file sets kite_client._TOKEN_FILE to its own tmp path.
-os.environ["SKOPAQ_KITE_TOKEN_FILE"] = os.path.join(
-    os.path.dirname(__file__), ".no-such-dir", "kite-token-for-tests.json"
-)
-
 
 @pytest.fixture(autouse=True)
 def _fresh_kill_switch():

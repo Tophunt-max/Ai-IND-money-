@@ -49,29 +49,32 @@ async def get_option_greeks(
     strike: float = 0,
     option_type: str = "CE",
 ) -> str:
-    """Calculate option Greeks (delta, gamma, theta, vega) for a specific contract.
+    """Get IV and Greeks (delta, gamma, theta, vega) for one option contract.
 
     Args:
         symbol: Underlying symbol (NIFTY, BANKNIFTY, or stock).
         strike: Strike price.
         option_type: CE (call) or PE (put).
     """
-    kite = _get_kite()
-    if not kite:
-        return json.dumps({"error": "Kite not connected"})
-
     try:
-        # Your implementation here
-        greeks = calculate_greeks(symbol, strike, option_type)
+        from skopaq.options.chain import load_option_chain
+
+        # Opens its own INDstocksClient (needs a valid INDstocks token)
+        chain = await load_option_chain(symbol, 0, config=_get_config())
+        legs = chain.calls if option_type.upper() == "CE" else chain.puts
+        contract = next((c for c in legs if c.strike == strike), None)
+        if contract is None:
+            return json.dumps({"error": f"No {option_type} {strike} in {symbol} chain"})
 
         return json.dumps({
             "symbol": symbol,
             "strike": strike,
             "type": option_type,
-            "delta": greeks.delta,
-            "gamma": greeks.gamma,
-            "theta": greeks.theta,
-            "vega": greeks.vega,
+            "iv": contract.iv,
+            "delta": contract.delta,
+            "gamma": contract.gamma,
+            "theta": contract.theta,
+            "vega": contract.vega,
         })
 
     except Exception as exc:
@@ -101,8 +104,9 @@ Access shared infrastructure via the lazy helpers:
 ```python
 config = _get_config()    # SkopaqConfig (cached)
 router = _get_router()    # OrderRouter + PaperEngine (cached)
-kite = _get_kite()        # KiteClient or None
 ```
+
+Market data comes from INDstocks: open a client per call (`async with INDstocksClient(config, TokenManager()) as client:`, as `get_quote` does) or use a helper that does it for you, like `load_option_chain` in `skopaq/options/chain.py`.
 
 Do not import and instantiate these at module level -- it would slow down server startup.
 
@@ -112,19 +116,28 @@ Add a test in `tests/unit/` that mocks external dependencies:
 
 ```python
 # tests/unit/test_mcp_greeks.py
+import json
+from datetime import date
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch
+
+from skopaq.options.chain import OptionChainData, OptionContract
 
 @pytest.mark.asyncio
-@patch("skopaq.mcp_server._get_kite")
-async def test_get_option_greeks(mock_kite):
-    from skopaq.mcp_server import get_option_greeks
+async def test_get_option_greeks():
+    from skopaq import mcp_server
 
-    mock_kite.return_value = AsyncMock()
-    # ... mock the calculation
-    result = await get_option_greeks("NIFTY", 24000, "CE")
-    data = json.loads(result)
-    assert "delta" in data
+    call = OptionContract(
+        tradingsymbol="NIFTY24000CE", security_id="1", exchange="NFO",
+        strike=24000, option_type="CE", expiry=date(2026, 4, 9), lot_size=75, delta=0.42,
+    )
+    chain = OptionChainData(symbol="NIFTY", spot_price=23900, expiry=call.expiry, calls=[call])
+
+    with patch.object(mcp_server, "_get_config", return_value=MagicMock()), \
+         patch("skopaq.options.chain.load_option_chain", AsyncMock(return_value=chain)):
+        data = json.loads(await mcp_server.get_option_greeks("NIFTY", 24000, "CE"))
+    assert data["delta"] == 0.42
 ```
 
 ### Step 5: Update Tests and Permissions
@@ -188,15 +201,9 @@ return json.dumps({
 })
 ```
 
-### Kite-Dependent Tools
+### Broker-Dependent Tools
 
-If your tool requires Kite Connect, check for it and return a clear error:
-
-```python
-kite = _get_kite()
-if not kite:
-    return json.dumps({"error": "Kite not connected. Login first."})
-```
+INDstocks calls fail when the token is missing or expired. Catch the exception and return it as JSON (as `get_option_chain` does) so the AI can tell the user to refresh the token (`skopaq token set`).
 
 ### Size Limits
 
@@ -215,11 +222,9 @@ return json.dumps({
 | Pattern | Example | When |
 |---------|---------|------|
 | `get_*` | `get_quote`, `get_funds` | Read-only data retrieval |
-| `place_*` | `place_order`, `place_gtt_order` | Actions that create something |
-| `list_*` | `list_gtt_orders` | List collections |
+| `place_*` | `place_order` | Actions that create something |
 | `gather_*` | `gather_market_data` | Fetch raw data for analysis |
 | `check_*` | `check_safety` | Validation tools |
-| `setup_*` | `setup_swing_trade` | Multi-step workflows |
 | `suggest_*` | `suggest_option_trade` | AI recommendations |
 
 ## File Reference

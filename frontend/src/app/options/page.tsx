@@ -10,6 +10,7 @@ import { useApi } from "@/lib/hooks";
 
 interface Contract {
   tradingsymbol: string;
+  security_id: string;
   strike: number;
   option_type: "CE" | "PE";
   ltp: number;
@@ -18,6 +19,9 @@ interface Contract {
   volume: number;
   oi: number;
   iv: number;
+  delta: number;
+  theta: number;
+  oi_change: number;
   distance_pct: number;
   premium_yield_pct: number;
   days_to_expiry: number;
@@ -31,6 +35,7 @@ interface Chain {
   calls: Contract[];
   puts: Contract[];
   lot_size: number;
+  expiries: string[];
   fetched_at: string;
 }
 
@@ -55,7 +60,7 @@ interface Suggestion {
   };
 }
 
-const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "RELIANCE", "HDFCBANK", "INFY", "TCS"];
+const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "RELIANCE", "HDFCBANK", "INFY", "TCS"];
 const STRATEGIES = [
   { value: "SHORT_PUT", label: "Short put" },
   { value: "SHORT_CALL", label: "Short call" },
@@ -65,7 +70,7 @@ const STRATEGIES = [
 const n2 = (v: number | null | undefined, d = 2) => (v == null ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: d }));
 
 export default function OptionsPage() {
-  const broker = useApi<{ kite: { configured: boolean; connected: boolean } }>("/api/dashboard/broker");
+  const broker = useApi<{ indstocks: { valid: boolean } }>("/api/dashboard/broker");
   const [symbol, setSymbol] = useState("NIFTY");
   const [expiry, setExpiry] = useState(0);
   const [strategy, setStrategy] = useState<(typeof STRATEGIES)[number]["value"]>("SHORT_PUT");
@@ -109,17 +114,17 @@ export default function OptionsPage() {
     return all.slice(Math.max(0, atm - 12), atm + 13);
   }, [chain]);
 
-  const kite = broker.data?.kite;
+  const token = broker.data?.indstocks;
   const t = idea?.trade;
 
   return (
     <div className="space-y-6">
-      <PageTitle title="Options" icon={Layers} subtitle="Option chain and rule-based option-selling ideas (read only, no orders)" />
+      <PageTitle title="Options" icon={Layers} subtitle="INDstocks option chain with IV and Greeks, and rule-based option-selling ideas (read only, no orders)" />
 
-      {kite && !kite.connected && (
-        <Notice tone="warning" icon={PlugZap} title="Kite is not connected"
-          action={<Link href="/broker" className="text-sm font-medium underline">Connect</Link>}>
-          The option chain comes from Zerodha Kite. Log in to Kite first.
+      {token && !token.valid && (
+        <Notice tone="warning" icon={PlugZap} title="No INDstocks token"
+          action={<Link href="/broker" className="text-sm font-medium underline">Set token</Link>}>
+          The option chain comes from INDstocks. Set today&apos;s token on the Broker page first.
         </Notice>
       )}
 
@@ -132,7 +137,8 @@ export default function OptionsPage() {
           </Field>
           <Field label="Expiry" className="w-40">
             <Select value={expiry} onChange={(e) => setExpiry(Number(e.target.value))}>
-              {["Nearest", "Next", "3rd", "4th"].map((l, i) => <option key={i} value={i}>{l}</option>)}
+              {(chain?.symbol === symbol && chain.expiries?.length ? chain.expiries.slice(0, 8) : ["Nearest", "Next", "3rd", "4th"])
+                .map((l, i) => <option key={i} value={i}>{l}</option>)}
             </Select>
           </Field>
           <Button icon={RefreshCw} loading={busy === "chain"} onClick={load}>Load chain</Button>
@@ -177,12 +183,12 @@ export default function OptionsPage() {
         <Card title={`${chain.symbol} option chain`} subtitle={`Spot ${n2(chain.spot_price)} · expiry ${chain.expiry} · lot ${chain.lot_size} · ${when(chain.fetched_at)}`} padded>
           {rows.length === 0 ? <Empty>No contracts for this expiry.</Empty> : (
             <div className="-mx-5 overflow-x-auto">
-              <table className="num w-full min-w-[720px] text-xs">
+              <table className="num w-full min-w-[860px] text-xs">
                 <thead>
                   <tr className="border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
-                    <th className="px-3 py-2 text-right">OI</th><th className="px-3 py-2 text-right">IV</th><th className="px-3 py-2 text-right">Call LTP</th>
+                    <th className="px-3 py-2 text-right">OI</th><th className="px-3 py-2 text-right">IV</th><th className="px-3 py-2 text-right">Delta</th><th className="px-3 py-2 text-right">Call LTP</th>
                     <th className="px-3 py-2 text-center text-gray-300">Strike</th>
-                    <th className="px-3 py-2 text-left">Put LTP</th><th className="px-3 py-2 text-left">IV</th><th className="px-3 py-2 text-left">OI</th>
+                    <th className="px-3 py-2 text-left">Put LTP</th><th className="px-3 py-2 text-left">Delta</th><th className="px-3 py-2 text-left">IV</th><th className="px-3 py-2 text-left">OI</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.03]">
@@ -192,9 +198,11 @@ export default function OptionsPage() {
                       <tr key={strike} className="hover:bg-white/[0.02]">
                         <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.oi, 0) : "—"}</td>
                         <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.iv, 1) : "—"}</td>
+                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.delta, 2) : "—"}</td>
                         <td className={`px-3 py-2 text-right font-medium text-emerald-300 ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.ltp) : "—"}</td>
                         <td className="px-3 py-2 text-center font-semibold text-white">{n2(strike, 0)}</td>
                         <td className={`px-3 py-2 font-medium text-rose-300 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.ltp) : "—"}</td>
+                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.delta, 2) : "—"}</td>
                         <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.iv, 1) : "—"}</td>
                         <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.oi, 0) : "—"}</td>
                       </tr>

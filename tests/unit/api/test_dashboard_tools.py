@@ -1,5 +1,6 @@
 """Dashboard tools (skopaq/api/dashboard_tools.py): broker status and token, portfolio,
-scanner status, learning, Kite read-outs, and the backtest / Monte Carlo / settle jobs."""
+scanner status, learning, the INDstocks option chain, and the backtest / Monte Carlo /
+settle jobs."""
 
 from __future__ import annotations
 
@@ -26,7 +27,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(tm, "TOKEN_FILE", tmp_path / ".skopaq" / "token.enc")
     monkeypatch.setattr(tm, "KEY_FILE", tmp_path / ".skopaq" / "token.key")
     monkeypatch.setenv("SKOPAQ_INDSTOCKS_TOKEN", "")
-    monkeypatch.setenv("SKOPAQ_KITE_API_KEY", "")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     from skopaq.api import dashboard_auth
 
@@ -52,7 +52,7 @@ def _wait(client, job_id, timeout=10.0):
 
 def test_everything_needs_a_login(client):
     for path in ("/api/dashboard/broker", "/api/dashboard/portfolio", "/api/dashboard/learning",
-                 "/api/dashboard/scanner/status", "/api/dashboard/kite/gtt"):
+                 "/api/dashboard/scanner/status", "/api/dashboard/options/chain"):
         assert client.get(path).status_code == 401, path
     assert client.post("/api/dashboard/broker/indstocks-token",
                        json={"token": "x" * 20}).status_code == 401
@@ -61,7 +61,7 @@ def test_everything_needs_a_login(client):
 def test_broker_without_any_token(client):
     r = client.get("/api/dashboard/broker", headers=AUTH).json()
     assert r["indstocks"]["valid"] is False and r["indstocks"]["source"] == "none"
-    assert r["kite"] == {"configured": False, "connected": False, "login_url": None}
+    assert "kite" not in r
 
 
 def test_set_and_clear_the_indstocks_token(client):
@@ -91,58 +91,110 @@ def test_bad_tokens_are_refused(client, body):
                        json=body).status_code == 422
 
 
-def test_kite_login_url_needs_the_public_base_url(client, monkeypatch):
-    monkeypatch.setenv("SKOPAQ_KITE_API_KEY", "kite-key")
-    monkeypatch.setenv("SKOPAQ_PUBLIC_BASE_URL", "https://api.example.com/")
-    monkeypatch.setattr(dashboard_tools, "_kite_token", lambda: "")
-    kite = client.get("/api/dashboard/broker", headers=AUTH).json()["kite"]
-    assert kite == {"configured": True, "connected": False,
-                    "login_url": "https://api.example.com/api/kite/login"}
-
-
 def test_portfolio_without_brokers(client):
     r = client.get("/api/dashboard/portfolio", headers=AUTH)
     assert r.status_code == 200
     body = r.json()
     assert body["indstocks"]["available"] is False
     assert "INDstocks token" in body["indstocks"]["error"]
-    assert body["kite"] == {"available": False, "error": "Kite is not configured"}
+    assert "kite" not in body
 
 
-def test_portfolio_reads_kite(client, monkeypatch):
+def _store_token(client):
+    assert client.post("/api/dashboard/broker/indstocks-token", headers=AUTH,
+                       json={"token": "eyJabcdefghijklmnop"}).status_code == 200
+
+
+def test_portfolio_reads_equity_and_fno_positions(client, monkeypatch):
+    from skopaq.broker import client as broker_client
     from skopaq.broker.models import Funds, Holding, Position
 
-    class FakeKite:
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
         async def get_positions(self):
-            return [Position(symbol="TCS", quantity=2, average_price=100, last_price=110, pnl=20)]
+            return [Position(symbol="TCS", quantity=2, average_price=100, pnl=20, product="CNC")]
+
+        async def get_derivative_positions(self):
+            return [Position(symbol="NIFTY 3 JUL 25700 CE", quantity=75, average_price=120,
+                             product="MARGIN")]
 
         async def get_holdings(self):
-            return [Holding(symbol="INFY", quantity=5, average_price=1500, last_price=1600,
-                            pnl=500)]
+            return [Holding(symbol="INFY", quantity=5, average_price=1500)]
 
         async def get_funds(self):
-            return Funds(available_cash=1000, used_margin=50)
+            return Funds(available_cash=1000, option_buy_available=800)
 
         async def get_order_book(self):
             raise RuntimeError("order book down")
 
-    monkeypatch.setattr(dashboard_tools, "_kite_status",
-                        lambda: {"configured": True, "connected": True, "login_url": None})
-    monkeypatch.setattr(dashboard_tools, "_kite_client", lambda: FakeKite())
-    kite = client.get("/api/dashboard/portfolio", headers=AUTH).json()["kite"]
-    assert kite["available"] is True
-    assert kite["positions"][0]["symbol"] == "TCS" and kite["positions"][0]["pnl"] == 20
-    assert kite["holdings"][0]["quantity"] == 5
-    assert kite["funds"]["available_cash"] == 1000
-    assert kite["orders"] == [] and "order book down" in kite["errors"]["orders"]
+    _store_token(client)
+    monkeypatch.setattr(broker_client, "INDstocksClient", FakeClient)
+    ind = client.get("/api/dashboard/portfolio", headers=AUTH).json()["indstocks"]
+    assert ind["available"] is True
+    assert ind["positions"][0]["symbol"] == "TCS"
+    assert ind["fno_positions"][0]["product"] == "MARGIN"
+    assert ind["funds"]["option_buy_available"] == 800
+    assert ind["orders"] == [] and "order book down" in ind["errors"]["orders"]
 
 
-def test_kite_endpoints_need_a_session(client):
-    for path in ("/api/dashboard/kite/gtt", "/api/dashboard/kite/mutual-funds",
-                 "/api/dashboard/options/chain?symbol=NIFTY",
-                 "/api/dashboard/options/suggest?symbol=NIFTY"):
+def test_options_need_an_indstocks_token(client):
+    for path in ("/api/dashboard/options/chain?symbol=NIFTY",
+                 "/api/dashboard/options/suggest?symbol=NIFTY",
+                 "/api/dashboard/options/expiries?symbol=NIFTY"):
         r = client.get(path, headers=AUTH)
-        assert r.status_code == 503 and "Kite" in r.json()["detail"], path
+        assert r.status_code == 503 and "INDstocks token" in r.json()["detail"], path
+
+
+def test_kite_endpoints_are_gone(client):
+    for path in ("/api/dashboard/kite/gtt", "/api/dashboard/kite/mutual-funds"):
+        assert client.get(path, headers=AUTH).status_code == 404, path
+
+
+def _chain_data():
+    from datetime import date
+
+    from skopaq.options.chain import OptionChainData, OptionContract
+
+    def leg(strike, kind, ltp, distance):
+        return OptionContract(
+            tradingsymbol=f"NIFTY-Aug2026-{strike}-{kind}", security_id=str(strike),
+            exchange="NFO", strike=strike, option_type=kind, expiry=date(2026, 10, 13),
+            lot_size=75, ltp=ltp, volume=10, oi=1000, spot_price=25000,
+            distance_pct=distance, days_to_expiry=5, theta_estimate=2.0)
+
+    return OptionChainData(
+        symbol="NIFTY", spot_price=25000, expiry=date(2026, 10, 13), lot_size=75,
+        calls=[leg(25000, "CE", 150, 0.0), leg(26000, "CE", 20, 4.0)],
+        puts=[leg(24000, "PE", 25, 4.0), leg(25000, "PE", 140, 0.0)],
+        expiries=["2026-10-13", "2026-10-20"])
+
+
+def test_option_chain_and_suggestion_from_indstocks(client, monkeypatch):
+    import skopaq.options.chain as chain_mod
+
+    async def load(symbol, expiry_index=0, **kwargs):
+        assert symbol == "NIFTY" and expiry_index == 1
+        return _chain_data()
+
+    _store_token(client)
+    monkeypatch.setattr(chain_mod, "load_option_chain", load)
+    r = client.get("/api/dashboard/options/chain?symbol=NIFTY&expiry_index=1", headers=AUTH)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["lot_size"] == 75 and body["expiry"] == "2026-10-13"
+    assert body["calls"][0]["security_id"] == "25000"
+
+    r = client.get("/api/dashboard/options/suggest?symbol=NIFTY&strategy=SHORT_PUT"
+                   "&expiry_index=1", headers=AUTH).json()
+    assert r["trade"]["sell_contract"]["strike"] == 24000
 
 
 def test_option_symbol_is_validated(client):
