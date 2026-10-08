@@ -6,6 +6,18 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Environment settings in the dashboard** (Settings → ⚙️ Environment, admins only). Set,
+  change or reset `SKOPAQ_*` settings (mode, scheduler, INDstocks token, Telegram, LLM
+  keys, risk and daemon limits) without editing `ENV_FILE` and redeploying. They are saved in
+  `~/.skopaq/env_overrides.json` on the home volume, win over `ENV_FILE`, and survive
+  deploys. Secrets are never sent back to the browser. Turning live trading on needs typing
+  `LIVE`, and every change is logged (`env_overrides.log`) and sent to Telegram. The
+  scheduler picks changes up between sessions, never during one. Login and API access
+  settings, state directories, `SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK` and
+  `SKOPAQ_TRADING_HALTED` stay `ENV_FILE`-only (docs/deployment/dashboard.md).
+
 Moves the vendored TradingAgents from v0.5.1 to **v0.5.2** (upstream commit
 `5eb5085`, 65 commits). No Skopaq-facing behaviour change beyond the notes
 below.

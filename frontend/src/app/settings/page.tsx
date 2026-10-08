@@ -173,7 +173,8 @@ export default function SettingsPage() {
               <p className="text-xs text-gray-500">Only an admin can resume trading.</p>
             ) : k.source === "env" ? (
               <p className="text-xs text-yellow-400">
-                Set by SKOPAQ_TRADING_HALTED in ENV_FILE: remove it there and redeploy to resume.
+                Set by SKOPAQ_TRADING_HALTED in ENV_FILE: remove it there and redeploy to resume
+                (it cannot be changed from the Environment page).
               </p>
             ) : (
               <Button onClick={() => act("/api/dashboard/kill-switch/resume")} disabled={busy}>
@@ -219,13 +220,20 @@ export default function SettingsPage() {
           </div>
         </dl>
         <p className="text-xs text-gray-500 mt-4">
-          Mode, keys and live trading are changed in the ENV_FILE GitHub secret, then
-          Actions → Deploy (EC2) → Run workflow.
+          {isAdmin ? (
+            <>Mode, keys and live trading: <Link href="/settings/environment" className="text-blue-400">⚙️ Environment</Link>{" "}
+              (overrides ENV_FILE). Login and API access settings stay in the ENV_FILE GitHub secret.</>
+          ) : (
+            <>Mode, keys and live trading are changed by an admin.</>
+          )}
         </p>
       </Card>
 
       <Card title="More">
         <div className="grid grid-cols-2 gap-2 text-sm">
+          {isAdmin && (
+            <Link href="/settings/environment" className="border border-gray-800 rounded p-3 hover:bg-gray-900 col-span-2">⚙️ Environment (mode, keys, live trading)</Link>
+          )}
           <Link href="/scheduler" className="border border-gray-800 rounded p-3 hover:bg-gray-900">⏰ Scheduler & logs</Link>
           <Link href="/scanner" className="border border-gray-800 rounded p-3 hover:bg-gray-900">🔎 Scanner</Link>
         </div>

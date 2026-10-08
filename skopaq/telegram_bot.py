@@ -800,6 +800,10 @@ def main() -> None:
     """Start the Telegram bot with scheduled jobs."""
     from datetime import time as dt_time
 
+    from skopaq import env_overrides
+
+    env_overrides.apply()  # settings saved from the dashboard (read at start only)
+
     token = os.environ.get("SKOPAQ_TELEGRAM_BOT_TOKEN", "")
     if not token:
         from skopaq.config import SkopaqConfig
