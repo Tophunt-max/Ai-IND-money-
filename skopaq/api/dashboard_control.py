@@ -134,6 +134,27 @@ async def control_status() -> dict:
     return await asyncio.to_thread(_status)
 
 
+_READINESS: dict[str, Any] = {}      # the last check and when (it reads the broker + ipify)
+_READINESS_TTL_S = 60.0
+
+
+@router.get("/readiness")
+async def readiness(live: Optional[bool] = None, refresh: bool = False) -> dict:
+    """Live readiness (``skopaq preflight``): token, account, clock, static IP, funds, kill
+    switch, websockets, control dir, database. Cached for a minute."""
+    import time as _t
+
+    from skopaq.execution.readiness import check_readiness
+
+    key = f"{live}"
+    hit = _READINESS.get(key)
+    if hit and not refresh and _t.monotonic() - hit[0] < _READINESS_TTL_S:
+        return hit[1]
+    result = (await check_readiness(SkopaqConfig(), live=live)).as_dict()
+    _READINESS[key] = (_t.monotonic(), result)
+    return result
+
+
 @router.get("/control/stream")
 async def control_stream(request: Request) -> StreamingResponse:
     """Server-Sent Events: the control status every 2 s, for up to 10 minutes."""

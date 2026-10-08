@@ -10,8 +10,9 @@ Going live with SkopaqTrader requires an INDstocks account, safety verification,
 Before going live:
 
 - [ ] Paper traded for at least 7 days (`mandatory_paper_days_for_new_strategy`)
-- [ ] INDstocks account with API access; today's token set (`skopaq token set <TOKEN>`, or `SKOPAQ_INDSTOCKS_TOKEN`)
-- [ ] The host's egress IPv4 whitelisted at INDstocks (orders and cancels are refused from any other IP; see the [Mac mini runbook](../deployment/mac-mini.md) §3)
+- [ ] INDstocks account with API access; today's token set (`skopaq token set <TOKEN>`, `SKOPAQ_INDSTOCKS_TOKEN`, or automatically with TOTP: [Go live on AWS](../deployment/go-live.md) §2)
+- [ ] The host's egress IP whitelisted at INDstocks, and the same IP in `SKOPAQ_INDSTOCKS_STATIC_IPS` (orders and cancels are refused from any other IP; see [Go live on AWS](../deployment/go-live.md) §1)
+- [ ] `skopaq preflight --live` passes (or **Control → Live readiness**)
 - [ ] All unit tests passing (`python3 -m pytest tests/unit/ -x -q`)
 - [ ] For F&O: the account activated for NSE F&O (`is_nse_fno_onboarded` in `GET /user/profile`)
 

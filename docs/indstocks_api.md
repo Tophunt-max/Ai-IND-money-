@@ -17,12 +17,21 @@ The client is `skopaq/broker/client.py` (`INDstocksClient`); status and row pars
 
 - **Base URL:** `https://api.indstocks.com` (`SKOPAQ_INDSTOCKS_BASE_URL`).
 - **Auth header:** `Authorization: <token>`, with **no** `Bearer` prefix. A token lasts
-  24 hours (`skopaq token set <TOKEN>` every trading day).
+  24 hours: `skopaq token set <TOKEN>` every trading day, or automatically from TOTP
+  (`POST /generate/token` with the Client ID as `x-api-key`, MPIN and the current code;
+  `skopaq token auto`, `skopaq/broker/auto_token.py`). Each TOTP generation invalidates
+  the previous TOTP token; one a minute; 5 wrong codes lock generation for 15 minutes.
 - **Instruments** are addressed by scrip code, `{EXCH}_{SECURITY_ID}` (for example
   `NSE_2885` for RELIANCE). Market data takes `scrip-codes=NSE_2885`, never
   `symbols=NSE:RELIANCE`. Orders take the bare `security_id` (`2885`).
-- **Static IP:** placing, modifying and cancelling orders needs a whitelisted IPv4 (NSE
-  circular NSE/INVG/67858). Read-only calls (quotes, historical data, order book, profile,
+- **Static IP:** placing, modifying and cancelling orders needs a whitelisted IP: two
+  slots, IPv4 or IPv6, each changeable once a calendar week (NSE circular NSE/INVG/67858).
+  `SKOPAQ_INDSTOCKS_STATIC_IPS` tells Skopaq which they are (`skopaq preflight`).
+- **Algo id:** every order carries `algo_id`: `99999` on NSE, `9999999999999999` on BSE
+  (`SKOPAQ_INDSTOCKS_ALGO_ID_NSE` / `_BSE` for registered ids).
+- **Profile:** `GET /user/profile` also answers `ucc`, `is_nse_onboarded`,
+  `is_nse_fno_onboarded`, `is_bse_fno_onboarded` and `is_ddpi_active`, which the readiness
+  check reads. Read-only calls (quotes, historical data, order book, profile,
   funds) do not, so confirming a fill works from anywhere; placing does not.
 - **Timestamps:** historical data takes epoch **milliseconds** and returns candle `ts` in
   epoch **seconds**. Order rows carry ISO-8601 times with a `+05:30` offset.
@@ -40,9 +49,10 @@ The client is `skopaq/broker/client.py` (`INDstocksClient`); status and row pars
 Going over returns HTTP 429. Each client keeps its Non-Trading reads (order book,
 `GET /order`, trades, trade book, positions, holdings, funds, profile) to 12 in any rolling
 second, so a burst of live SELLs (each reads the book, positions, holdings and funds
-before it is placed) is not refused. Its limiter for other calls still allows 100 a
-second (the older "10 orders/s, 100 calls/s" figure), which is above the current quote
-and data limits. The live order worker stays well inside them: by default it polls each
+before it is placed) is not refused. Quotes and data calls (instruments, history, option
+chain) are held to 4 in any rolling second each, and order calls to 8 (also under SEBI's
+10 orders a second for unregistered retail algos). A 429 on a GET is retried twice after a
+pause (`Retry-After`, else 1 s, 2 s); an order is never re-sent. The live order worker stays well inside them: by default it polls each
 order once a second, and all the orders it is watching share one order-book read (0.5 s
 cache).
 

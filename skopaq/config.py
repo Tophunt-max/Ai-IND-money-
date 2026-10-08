@@ -103,6 +103,20 @@ class SkopaqConfig(BaseSettings):
     indstocks_base_url: str = "https://api.indstocks.com"
     indstocks_ws_price_url: str = "wss://ws-prices.indstocks.com/api/v1/ws/prices"
     indstocks_ws_order_url: str = "wss://ws-order-updates.indstocks.com/api/v1/ws/trades"
+    # Exchange algo ids sent on every order (INDstocks: 99999 for NSE, sixteen 9s for BSE).
+    # Replace them only with the ids the broker or the exchange registered for your algo
+    indstocks_algo_id_nse: str = "99999"
+    indstocks_algo_id_bse: str = "9999999999999999"
+    # The static IPs whitelisted on the INDstocks Access Tokens page (comma-separated,
+    # IPv4/IPv6). Orders from any other IP are refused by the broker; with this set, a live
+    # session refuses to start from another egress IP and the readiness check says so
+    indstocks_static_ips: str = ""
+    # Automatic daily token (POST /generate/token): the Client ID shown after TOTP setup,
+    # the account MPIN and the authenticator's base32 secret. All three set: the scheduler
+    # makes the day's token before the session (skopaq token auto). .env only
+    indstocks_client_id: str = ""
+    indstocks_mpin: SecretStr = SecretStr("")
+    indstocks_totp_secret: SecretStr = SecretStr("")
     # Live prices over the price WebSocket for the position monitor (REST is the fallback)
     ws_price_feed_enabled: bool = True
     # Order updates WebSocket: only `skopaq ticks --orders` reads it (REST stays the

@@ -80,6 +80,7 @@ nav:
     - Notifications: architecture/notifications.md
   - Deployment:
     - Mac mini (Docker): deployment/mac-mini.md
+    - Go live on AWS (INDstocks): deployment/go-live.md
     - Auto-deploy to EC2 (GitHub): deployment/github-auto-deploy.md
     - Web dashboard (Vercel): deployment/dashboard.md
     - Docker: deployment/docker.md

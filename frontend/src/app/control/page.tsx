@@ -2,7 +2,7 @@
 
 import {
   Ban, CirclePlay, CircleStop, Gauge, Pause, Pencil, Play, Power, Radio, RefreshCw, Send,
-  ShieldAlert, SlidersHorizontal, Target, TrendingUp, X, Zap,
+  ShieldAlert, ShieldCheck, SlidersHorizontal, Target, TrendingUp, X, Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -212,6 +212,8 @@ export default function ControlPage() {
               value={!c.monitor ? "—" : c.monitor.feed ? (c.monitor.feed.connected ? "WebSocket" : "REST fallback") : "REST"}
               detail={c.monitor ? `checks every ${c.monitor.check_every_s}s${c.monitor.feed ? ` · ${c.monitor.feed.ticks} ticks` : ""}` : "no monitor running"} />
           </div>
+
+          <ReadinessCard live={live} />
 
           {c.halt.halted && <Notice tone="warning" icon={Pause} title="New BUYs are paused">{c.halt.text}. Exits, stops and targets keep running.</Notice>}
 
@@ -661,6 +663,41 @@ function FnoCard({ c, isAdmin, busy, act, live }: {
               </tr>
             ))}
           </Table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+interface ReadinessCheck { name: string; status: "ok" | "warn" | "fail"; detail: string; fix: string }
+interface Readiness { live: boolean; passed: boolean; checked_at: string; checks: ReadinessCheck[] }
+
+function ReadinessCard({ live }: { live: boolean }) {
+  const [refresh, setRefresh] = useState(0);
+  const r = useApi<Readiness>(`/api/dashboard/readiness?live=true${refresh ? `&refresh=true&n=${refresh}` : ""}`, 300000);
+  const d = r.data;
+  const bad = d?.checks.filter((c) => c.status !== "ok") ?? [];
+  const tone = !d ? "neutral" : !d.passed ? "error" : bad.length ? "warning" : "ok";
+  return (
+    <Card title="Live readiness" icon={ShieldCheck}
+      subtitle={d ? `Checked ${d.checked_at.slice(11, 16)} IST · token, account, clock, static IP, funds${live ? "" : " — judged for LIVE (you are on paper)"}` : "Token, account, clock, static IP, funds"}
+      right={<div className="flex items-center gap-2">
+        {d && <Badge tone={tone} dot>{!d.passed ? "Not ready" : bad.length ? "Ready, with warnings" : "Ready"}</Badge>}
+        <Button variant="ghost" size="sm" icon={RefreshCw} loading={r.loading} onClick={() => setRefresh((n) => n + 1)}>Check</Button>
+      </div>}>
+      <ErrorBox error={r.error} />
+      {!d ? <Skeleton className="h-16" /> : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {d.checks.map((c) => (
+            <div key={c.name} className="flex items-start gap-2 rounded-xl bg-white/[0.02] p-3 ring-1 ring-white/[0.05]">
+              <Badge tone={c.status === "ok" ? "ok" : c.status === "warn" ? "warning" : "error"}>{c.status === "ok" ? "OK" : c.status === "warn" ? "WARN" : "FAIL"}</Badge>
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-white">{c.name}</div>
+                <div className="text-xs text-gray-400">{c.detail}</div>
+                {c.fix && c.status !== "ok" && <div className="mt-1 text-[11px] text-amber-200/80">→ {c.fix}</div>}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </Card>

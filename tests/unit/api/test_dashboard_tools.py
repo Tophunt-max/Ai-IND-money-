@@ -283,3 +283,30 @@ def test_settle_job(client, monkeypatch):
 ])
 def test_bad_job_requests(client, body):
     assert client.post("/api/dashboard/jobs", headers=AUTH, json=body).status_code == 422
+
+
+def test_broker_status_shows_the_automatic_token_and_it_needs_its_credentials(client):
+    status = client.get("/api/dashboard/broker", headers=AUTH).json()
+    assert status["indstocks"]["auto"]["configured"] is False
+    assert "mpin" not in str(status).lower()
+    assert client.post("/api/dashboard/broker/indstocks-token/auto",
+                       json={}).status_code == 401
+    refused = client.post("/api/dashboard/broker/indstocks-token/auto", json={},
+                          headers=AUTH)
+    assert refused.status_code == 409 and "SKOPAQ_INDSTOCKS_MPIN" in refused.json()["detail"]
+
+
+def test_readiness_endpoint_answers_the_checks(client, monkeypatch):
+    from skopaq.api import dashboard_control
+    from skopaq.execution import readiness
+
+    async def egress(**_kw):
+        return {"ipv4": "1.1.1.1", "ipv6": None}
+
+    monkeypatch.setattr(readiness, "egress_ips", egress)
+    dashboard_control._READINESS.clear()
+    assert client.get("/api/dashboard/readiness").status_code == 401
+    body = client.get("/api/dashboard/readiness?live=true", headers=AUTH).json()
+    assert body["live"] is True and body["passed"] is False         # no token here
+    names = [c["name"] for c in body["checks"]]
+    assert names[:2] == ["mode", "token"] and "static IP" in names

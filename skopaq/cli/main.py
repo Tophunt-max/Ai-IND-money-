@@ -116,6 +116,73 @@ def token_clear() -> None:
     display_success("Token cleared")
 
 
+@token_app.command("auto")
+def token_auto(
+    force: bool = typer.Option(False, "--force",
+                               help="Make a new token even if the stored one is still good "
+                                    "(it invalidates the previous TOTP token)."),
+) -> None:
+    """Make today's token from TOTP (SKOPAQ_INDSTOCKS_CLIENT_ID / _MPIN / _TOTP_SECRET).
+
+    Only when the stored token would not last until the end of today's session, unless
+    --force. The scheduler does this itself before each session."""
+    from datetime import datetime, timedelta, timezone
+
+    from skopaq.broker import auto_token
+    from skopaq.config import SkopaqConfig
+    from skopaq.execution.readiness import session_end
+
+    config = SkopaqConfig()
+    if not auto_token.configured(config):
+        console.print("[red]Automatic token is off:[/red] set SKOPAQ_INDSTOCKS_CLIENT_ID, "
+                      "SKOPAQ_INDSTOCKS_MPIN and SKOPAQ_INDSTOCKS_TOTP_SECRET "
+                      "(docs/deployment/go-live.md)")
+        raise typer.Exit(1)
+    if force:
+        try:
+            expires = asyncio.run(auto_token.generate_token(config))
+        except auto_token.AutoTokenError as exc:
+            console.print(f"[red]Token not made:[/red] {exc}")
+            raise typer.Exit(1)
+        ist = expires.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        display_success(f"New token stored, valid until {ist:%d %b %H:%M} IST")
+        return
+    result = auto_token.ensure_token_sync(config,
+                                          session_end(datetime.now(timezone.utc)))
+    if not result.ok:
+        console.print(f"[red]{result.message}[/red]")
+        raise typer.Exit(1)
+    display_success(result.message)
+
+
+@app.command("preflight")
+def preflight(
+    live: bool = typer.Option(False, "--live", help="Judge for live trading (real orders)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the checks as JSON."),
+) -> None:
+    """Is this host ready to trade? Token, account, clock, static IP, funds, kill switch,
+    websockets, control dir, database. Exit 1 when a check fails."""
+    import json as _json
+
+    from skopaq.config import SkopaqConfig
+    from skopaq.execution.readiness import check_readiness
+
+    config = SkopaqConfig()
+    result = asyncio.run(check_readiness(config, live=True if live else None))
+    if json_out:
+        console.print_json(_json.dumps(result.as_dict()))
+    else:
+        icons = {"ok": "[green]✔[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✘[/red]"}
+        console.print(f"[bold]Readiness ({'LIVE' if result.live else 'paper'})[/bold] — "
+                      f"{result.checked_at}")
+        for c in result.checks:
+            console.print(f" {icons.get(c.status, '?')} [bold]{c.name}[/bold]: {c.detail}")
+            if c.fix and c.status != "ok":
+                console.print(f"     → {c.fix}")
+        console.print("[green]READY[/green]" if result.passed else "[red]NOT READY[/red]")
+    raise typer.Exit(0 if result.passed else 1)
+
+
 # ── Status ───────────────────────────────────────────────────────────────────
 
 

@@ -89,8 +89,14 @@ class TokenManager:
             "stored_at": datetime.now(timezone.utc).isoformat(),
         })
         encrypted = fernet.encrypt(payload.encode())
-        TOKEN_FILE.write_bytes(encrypted)
-        TOKEN_FILE.chmod(0o600)
+        # Atomic: every container reads this file on each request, and a half-written one
+        # would read as "no token" in the middle of a session
+        import os
+
+        tmp = TOKEN_FILE.with_name(TOKEN_FILE.name + ".tmp")
+        tmp.write_bytes(encrypted)
+        tmp.chmod(0o600)
+        os.replace(tmp, TOKEN_FILE)
         self._warned_thresholds.clear()
         logger.info("Token stored, expires at %s", expires_at.isoformat())
 
