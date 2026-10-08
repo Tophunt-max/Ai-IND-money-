@@ -1401,3 +1401,67 @@ def test_run_job_touches_the_heartbeat(tmp_path):
     assert result.rc == 0
     assert heartbeat.exists()
     assert (tmp_path / "logs" / "hb.log").read_text() == "x\n"
+
+
+# ── Settings saved from the dashboard (reload between sessions) ──────────────
+
+
+def test_run_forever_uses_reloaded_settings_for_the_next_session(tmp_path):
+    paper = _settings(tmp_path)
+    live = dataclasses.replace(paper, mode="live", confirm_live=True)
+    rec, stop, launched, seen = Recorder(), threading.Event(), [], []
+
+    def reload(current):
+        seen.append(current.mode)
+        return live if len(seen) == 1 else None
+
+    run_forever(
+        paper, clock=lambda: _at(MONDAY, "09:16"),
+        runner=lambda cmd, **kw: launched.append(cmd[3:]) or JobResult(0),
+        alert=rec.alert, ping=rec.ping, sleep=_stop_after(stop, 2), stop=stop, reload=reload,
+    )
+    assert launched == [["daemon", "--once", "--live", "--confirm-live"]]
+    assert seen == ["paper", "live"]  # once per iteration, never while the job runs
+    assert any(a.startswith("🔴 LIVE (real money) from the next session") and "mode paper → live"
+               in a for a in rec.alerts)
+
+
+def test_reload_keeps_the_settings_and_alerts_once_when_they_are_invalid(tmp_path):
+    settings = _settings(tmp_path)
+    rec = Recorder()
+
+    def bad(_current):
+        raise ValueError("Invalid scheduler configuration:\n- SKOPAQ_SCHEDULER_START: no")
+
+    kept, error = scheduler._reload(settings, bad, rec.alert, "")
+    kept, error = scheduler._reload(kept, bad, rec.alert, error)
+    assert kept is settings
+    assert len(rec.alerts) == 1 and "not usable" in rec.alerts[0]
+    # Fixed: no alert for an unchanged reload, and the error is forgotten.
+    assert scheduler._reload(kept, lambda _c: None, rec.alert, error) == (settings, error)
+    assert scheduler._reload(kept, lambda c: c, rec.alert, error) == (settings, "")
+
+
+def test_reload_settings_reads_the_dashboard_file(tmp_path, monkeypatch):
+    import json
+
+    from skopaq import env_overrides
+
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "env_overrides.json"
+    monkeypatch.setenv(env_overrides.FILE_ENV, str(path))
+    monkeypatch.setenv("SKOPAQ_SCHEDULER_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("SKOPAQ_SCHEDULER_START", raising=False)
+    env_overrides.reset_for_tests()
+    try:
+        current = _settings(tmp_path)
+        assert scheduler.reload_settings(current) is None  # no file: nothing changed
+        path.write_text(json.dumps({"values": {"SKOPAQ_SCHEDULER_START": "09:20"}}))
+        new = scheduler.reload_settings(current)
+        assert new.start == time(9, 20)
+        assert new.state_dir == current.state_dir and new.log_dir == current.log_dir
+        assert scheduler.reload_settings(new) is None
+        assert "start 09:15 → 09:20" in scheduler._settings_diff(current, new)
+    finally:
+        env_overrides.apply({})
+        env_overrides.reset_for_tests()
