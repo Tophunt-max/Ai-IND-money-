@@ -51,6 +51,27 @@ _LENIENT_FIELDS = (
     "scalp_rest_poll_seconds",
     "scalp_rr",
     "scalp_orb_minutes",
+    "fno_enabled",
+    "fno_allow_bearish",
+    "fno_avoid_expiry_day",
+    "fno_expiry_index",
+    "fno_strike_offset",
+    "fno_max_spread_pct",
+    "fno_risk_per_trade_inr",
+    "fno_max_lots",
+    "fno_max_premium_inr",
+    "fno_premium_stop_pct",
+    "fno_trail_pct",
+    "fno_max_trades_per_day",
+    "fno_max_open",
+    "fno_max_daily_loss_inr",
+    "fno_cooldown_minutes",
+    "fno_max_hold_minutes",
+    "fno_min_reward_to_cost",
+    "fno_candle_seconds",
+    "fno_rest_poll_seconds",
+    "fno_rr",
+    "fno_orb_minutes",
 )
 
 
@@ -231,6 +252,38 @@ class SkopaqConfig(BaseSettings):
     scalp_min_reward_to_cost: float = 2.0      # target profit ≥ this × round-trip charges
     scalp_orb_minutes: int = 15
     scalp_rest_poll_seconds: float = 3.0       # batched REST quotes when the feed is down
+
+    # ── F&O engine (skopaq/scalping/fno_engine.py): index options BUYING, INTRADAY ──
+    # Bullish setups buy a CE (or the near future), bearish ones a PE. Never a SELL to
+    # open: no option writing, no short futures. Runs inside the daemon session when
+    # enabled (or alone: skopaq fno)
+    fno_enabled: bool = False
+    fno_underlyings: str = "NIFTY"             # NIFTY, BANKNIFTY, FINNIFTY, SENSEX, stocks
+    fno_instrument: str = "options"            # options | futures (long only)
+    fno_strategies: str = "vwap_pullback,ema_rsi,orb,range_reversal"
+    fno_allow_bearish: bool = True             # buy PEs on bearish setups
+    fno_expiry_index: int = 0                  # 0 = nearest expiry
+    fno_avoid_expiry_day: bool = True          # on expiry day trade the next expiry
+    fno_strike_offset: int = 0                 # 0 ATM, -1 one strike ITM, +1 one OTM
+    fno_max_spread_pct: float = 0.03           # skip a contract with a wider bid-ask
+    fno_risk_per_trade_inr: float = 3_000.0    # ₹ lost if the premium stop is hit
+    fno_max_lots: int = 1                      # lots per trade (safety cap: 5)
+    fno_max_premium_inr: float = 25_000.0      # ₹ premium per trade
+    fno_premium_stop_pct: float = 0.25         # premium stop: 25 % below the entry
+    fno_trail_pct: float = 0.15                # after +1 R: trail 15 % below the high
+    fno_max_trades_per_day: int = 4
+    fno_max_open: int = 1
+    fno_max_daily_loss_inr: float = 6_000.0    # no new F&O trades once the day lost this
+    fno_cooldown_minutes: float = 10.0         # after a losing trade
+    fno_entry_start: str = "09:30"
+    fno_entry_end: str = "14:30"
+    fno_flatten_at: str = "15:10"              # before the broker's intraday square-off
+    fno_max_hold_minutes: float = 30.0         # time stop without profit
+    fno_min_reward_to_cost: float = 3.0        # expected profit ≥ this × round-trip charges
+    fno_candle_seconds: int = 60
+    fno_rest_poll_seconds: float = 3.0
+    fno_rr: float = 2.0                        # underlying target = rr × risk
+    fno_orb_minutes: int = 15
 
     # Dashboard control: status, stop/start requests and commands (shared home volume)
     control_dir: str = "~/.skopaq/control"

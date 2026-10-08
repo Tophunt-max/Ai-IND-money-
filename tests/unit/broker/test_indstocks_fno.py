@@ -238,7 +238,16 @@ def test_max_lots_counts_lots_for_derivatives():
 
 
 def test_indstocks_chain_symbols_count_as_options_for_the_naked_sell_rule():
+    """An option symbol SELL outside the DERIVATIVE segment is refused outright; an F&O
+    SELL is left to the no-short-sale check (it may only close a long position)."""
     checker = SafetyChecker()
     rejections: list[str] = []
-    checker._check_naked_options(_fno_order(side=Side.SELL), rejections)
+    checker._check_naked_options(
+        OrderRequest(symbol="NIFTY-Oct2026-24500-CE", side=Side.SELL, quantity=Decimal(75),
+                     price=150.0, product=Product.INTRADAY), rejections)
     assert rejections and "Naked option" in rejections[0]
+    rejections = []
+    checker._check_naked_options(_fno_order(side=Side.SELL), rejections)
+    assert rejections == []
+    short = checker._check_no_short_sale(_fno_order(side=Side.SELL), [], [], rejections)
+    assert short == "no-short-sale" and "No short sales" in rejections[0]

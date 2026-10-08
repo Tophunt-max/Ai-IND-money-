@@ -80,7 +80,8 @@ _EXTRA: dict[str, str] = {
 # Plain str fields in SkopaqConfig that hold a bool or a choice (scheduler: a typo must
 # stop only the scheduler, so they are parsed there).
 _STR_BOOLS = {"scheduler_enabled", "scheduler_confirm_live"}
-_STR_CHOICES = {"scheduler_mode": ("paper", "live")}
+_STR_CHOICES = {"scheduler_mode": ("paper", "live"),
+                "fno_instrument": ("options", "futures")}
 _SCHEDULER_KEYS_PREFIX = "scheduler_"
 _SCHEDULER_RELATED = {"nse_holidays", "monitor_eod_exit_minutes_before_close"}
 
@@ -123,6 +124,25 @@ _HELP: dict[str, str] = {
     "scalp_max_hold_minutes": "Time stop: sell a scalp not in profit after this long",
     "scalp_rr": "Target = this × risk (ORB and range reversal use their own)",
     "scalp_min_reward_to_cost": "Skip a scalp whose target pays less than this × charges",
+    "fno_enabled": "Run the F&O engine inside the daily session (buys options, INTRADAY)",
+    "fno_underlyings": "Comma-separated: NIFTY, BANKNIFTY, FINNIFTY, SENSEX or F&O stocks",
+    "fno_instrument": "options (CE/PE buying) or futures (long only)",
+    "fno_allow_bearish": "Buy PEs on bearish setups",
+    "fno_strike_offset": "0 = ATM, -1 = one strike in the money, +1 = one out",
+    "fno_risk_per_trade_inr": "₹ lost when the premium stop is hit (sizes the lots)",
+    "fno_max_lots": "Max lots per trade (the safety rules allow 5)",
+    "fno_max_premium_inr": "Max premium paid per trade (₹)",
+    "fno_premium_stop_pct": "Premium stop below the entry (0.25 = 25%)",
+    "fno_trail_pct": "After +1 R, trail this far below the premium's high",
+    "fno_max_trades_per_day": "Max F&O trades a day",
+    "fno_max_open": "Max F&O positions open at once",
+    "fno_max_daily_loss_inr": "No new F&O trades once the day has lost this (₹)",
+    "fno_entry_start": "IST HH:MM, first entry",
+    "fno_entry_end": "IST HH:MM, last entry",
+    "fno_flatten_at": "IST HH:MM, every F&O position is sold",
+    "fno_max_hold_minutes": "Time stop: sell a position not in profit after this long",
+    "fno_rr": "Underlying target = this × risk",
+    "fno_min_reward_to_cost": "Skip a trade whose expected profit is under this × charges",
     "ws_price_feed_enabled": "Live prices over the INDstocks WebSocket (REST fallback)",
     "ws_tick_max_age_seconds": "Ticks older than this fall back to REST quotes",
     "monitor_target_mode": "Target per position: rr (risk:reward), pct, inr (₹ profit), off",
@@ -147,6 +167,7 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Telegram", ("telegram_",)),
     ("Daemon, scanner & monitor", ("daemon_", "scanner_", "monitor_")),
     ("Scalper", ("scalp_",)),
+    ("F&O", ("fno_",)),
     ("Risk & sizing", ("position_sizing", "risk_per_trade", "atr_", "min_confidence",
                        "confidence_sizing", "max_sector", "regime_")),
     ("AI models & keys", ("custom_llm_", "google_", "anthropic_", "perplexity_", "xai_", "openrouter_",

@@ -25,6 +25,7 @@ from skopaq.broker.models import (
     OrderRequest,
     OrderType,
     Product,
+    Segment,
     Side,
     TradingSignal,
     fill_status_of,
@@ -118,15 +119,18 @@ class Executor:
             regime_scale: Market regime multiplier (0.0–1.2).
             calendar_scale: Event calendar multiplier (0.0–1.0).
         """
-        # Step 0a: Resolve entry_price if missing (upstream agents don't set it)
-        if signal.action == "BUY" and not signal.entry_price:
+        # Step 0a: Resolve entry_price if missing (upstream agents don't set it). An F&O
+        # contract has no Yahoo price: its caller (the options engine) sets the premium
+        derivative = signal.is_derivative
+        if signal.action == "BUY" and not signal.entry_price and not derivative:
             price = self._fetch_current_price(signal.symbol)
             if price:
                 signal.entry_price = price
                 logger.info("Resolved entry_price for %s: %.2f", signal.symbol, price)
 
-        # Step 0b: ATR-based position sizing (BUY only)
-        if self._sizer and signal.action == "BUY" and signal.entry_price:
+        # Step 0b: ATR-based position sizing (equity BUYs only: an F&O order comes sized in
+        # whole lots by the options engine)
+        if self._sizer and signal.action == "BUY" and signal.entry_price and not derivative:
             # Map confidence [0, 100] → scale [0.5, 1.0]
             confidence_scale = 0.5 + (signal.confidence / 100.0) * 0.5
             await self._apply_position_sizing(
@@ -205,7 +209,8 @@ class Executor:
         # cost basis of what was sold, for the shares actually sold, so the loss
         # limits and cool-down see it
         if result.success and result.fill_price and signal.action == "SELL":
-            cost = _cost_basis(order.symbol, positions, holdings)
+            cost = _cost_basis(order.symbol, positions, holdings,
+                               security_id=order.security_id if derivative else "")
             if cost and filled:
                 pnl = (result.fill_price - cost) * float(filled)
                 self._safety.record_pnl(pnl)
@@ -259,7 +264,11 @@ class Executor:
             inputs = (await self._router.sell_inputs(order, position_only=True)
                       if position_only else await self._router.sell_inputs(order))
         if inputs is None:
-            positions = await self._router.get_positions()
+            if order.segment == Segment.DERIVATIVE:
+                # Equity and F&O rows together: the open-positions limit counts both
+                positions = await self._router.get_all_positions()
+            else:
+                positions = await self._router.get_positions()
             holdings = await self._holdings_for(order)
         else:
             positions, holdings = inputs.positions, inputs.holdings
@@ -422,6 +431,9 @@ class Executor:
             OrderType.LIMIT if signal.entry_price else OrderType.MARKET
         )
 
+        if signal.is_derivative:
+            return self._build_derivative_order(signal, side, order_type)
+
         # Determine quantity
         quantity = signal.quantity or 1  # Default to 1 if not specified
 
@@ -437,9 +449,45 @@ class Executor:
             tag=f"skopaq-{signal.confidence}",
         )
 
+    @staticmethod
+    def _build_derivative_order(signal: TradingSignal, side: Side,
+                                order_type: OrderType) -> Optional[OrderRequest]:
+        """An F&O order: the contract's security id and lot size, product INTRADAY unless
+        the signal says MARGIN, the quantity in units (a whole number of lots: 1 lot when
+        the signal has none). The stop-loss is not sent as a trigger price: the options
+        engine exits on its own rules (the safety check still sees ``signal.stop_loss``).
+        None when the contract has no security id (it is never looked up in the equity
+        instruments file) or the quantity is not a whole number of lots."""
+        if not signal.security_id:
+            logger.error("F&O signal %s has no contract security id — not ordered",
+                         signal.symbol)
+            return None
+        lot = max(1, int(signal.lot_size or 1))
+        quantity = signal.quantity or lot
+        product = signal.product if signal.product in (Product.INTRADAY, Product.MARGIN) \
+            else Product.INTRADAY
+        try:
+            return OrderRequest(
+                symbol=signal.symbol,
+                exchange=signal.exchange,
+                segment=Segment.DERIVATIVE,
+                side=side,
+                quantity=quantity,
+                order_type=order_type,
+                price=signal.entry_price if order_type == OrderType.LIMIT else None,
+                product=product,
+                security_id=signal.security_id,
+                lot_size=lot,
+                tag=f"skopaq-{signal.confidence}",
+            )
+        except ValueError as exc:
+            logger.error("F&O order %s not built: %s", signal.symbol, exc)
+            return None
+
     async def _holdings_for(self, order: OrderRequest) -> list:
-        """Delivery holdings, fetched only for SELLs (the no-short-sale check)."""
-        if order.side != Side.SELL:
+        """Delivery holdings, fetched only for equity SELLs (the no-short-sale check); F&O
+        contracts have none."""
+        if order.side != Side.SELL or order.segment == Segment.DERIVATIVE:
             return []
         try:
             return await self._router.get_settled_holdings()
@@ -519,16 +567,23 @@ def _in_background(coro) -> None:
 _BACKGROUND: set = set()   # notifications sent without an OrderAlerter (kept referenced)
 
 
-def _cost_basis(symbol: str, positions: list, holdings: list) -> Optional[float]:
+def _cost_basis(symbol: str, positions: list, holdings: list, *,
+                security_id: str = "") -> Optional[float]:
     """Average price paid for *symbol*: a long position first, else the holding.
 
     Rows with no long quantity are skipped: live, shares sold earlier today show
     as a net-negative position while the delivery holding keeps the real cost.
+    ``security_id`` (an F&O contract's): a row with a security id must carry that one
+    (the broker's trading symbol may be written differently from the chain's).
     """
     base = _base_symbol(symbol)
     for item in [*positions, *holdings]:
         price = float(getattr(item, "average_price", 0) or 0)
-        if (_base_symbol(getattr(item, "symbol", "")) == base
-                and (getattr(item, "quantity", 0) or 0) > 0 and price > 0):
+        row_id = str(getattr(item, "security_id", "") or "")
+        if security_id and row_id:
+            same = row_id == str(security_id)
+        else:
+            same = _base_symbol(getattr(item, "symbol", "")) == base
+        if same and (getattr(item, "quantity", 0) or 0) > 0 and price > 0:
             return price
     return None

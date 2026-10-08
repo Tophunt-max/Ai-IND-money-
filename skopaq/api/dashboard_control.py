@@ -114,11 +114,15 @@ def _status() -> dict[str, Any]:
     session = channel.fresh_status("session", _ACTIVE_S) if channel else None
     monitor = channel.fresh_status("monitor", _ACTIVE_S) if channel else None
     scalper = channel.fresh_status("scalper", _ACTIVE_S) if channel else None
+    fno = channel.fresh_status("fno", _ACTIVE_S) if channel else None
     out["session"] = session
     out["monitor"] = monitor
     out["scalper"] = scalper
     out["scalp_enabled"] = config.scalp_enabled
-    out["active"] = bool(session or monitor or scalper)
+    out["fno"] = fno
+    out["fno_enabled"] = config.fno_enabled
+    out["fno_instrument"] = config.fno_instrument
+    out["active"] = bool(session or monitor or scalper or fno)
     out["pending_commands"] = channel.pending() if channel else 0
     last = channel.read_status("session") if channel else None
     out["last_session"] = last if last and not session else None
@@ -272,27 +276,28 @@ async def _via_session(kind: str, payload: dict, user: DashboardUser,
 
 class CloseBody(BaseModel):
     symbol: Optional[str] = None   # None: every position
-    scope: Literal["swing", "scalp"] = "swing"   # CNC positions, or the scalper's INTRADAY
+    # CNC positions, the scalper's INTRADAY equity, or the F&O engine's contracts
+    scope: Literal["swing", "scalp", "fno"] = "swing"
 
 
 @router.post("/control/close")
 async def close(body: CloseBody, user: DashboardUser = Depends(require_admin)) -> dict:
     symbol = _symbol(body.symbol) if body.symbol else None
-    scalp = body.scope == "scalp"
-    what = (f"Close {symbol}" if symbol else "CLOSE ALL positions") + (" (scalps)" if scalp
-                                                                       else "")
+    scope = body.scope
+    label = {"scalp": " (scalps)", "fno": " (F&O)"}.get(scope, "")
+    what = (f"Close {symbol}" if symbol else "CLOSE ALL positions") + label
     await _notify(_audit(user, f"🔻 {what}"))
     kind, payload = ("close", {"symbol": symbol}) if symbol else ("close_all", {})
-    res = await _via_session(kind, payload, user,
-                             target="scalper" if scalp else "monitor")
+    target = {"scalp": "scalper", "fno": "fno"}.get(scope, "monitor")
+    res = await _via_session(kind, payload, user, target=target)
     if res is not None:
         return res
     config = SkopaqConfig()
     if config.trading_mode != "live":
         raise HTTPException(409, "No session is running: paper positions exist only inside a "
                                  "session")
-    return {"via": "api", **(await _live_close(config, symbol, user,
-                                               product="INTRADAY" if scalp else "CNC"))}
+    product = {"scalp": "INTRADAY", "fno": "FNO"}.get(scope, "CNC")
+    return {"via": "api", **(await _live_close(config, symbol, user, product=product))}
 
 
 class PlanBody(BaseModel):
@@ -501,9 +506,14 @@ def _result_text(result, signal) -> str:
 
 async def _live_close(config, symbol: Optional[str], user: DashboardUser, *,
                       product: str = "CNC") -> dict:
-    """Sell the day's ``product`` positions (CNC: the swing book; INTRADAY: scalps)."""
+    """Sell the day's ``product`` positions (CNC: the swing book; INTRADAY: scalps;
+    FNO: the F&O positions, INTRADAY or MARGIN — long rows only: a SELL never opens a
+    short)."""
     from skopaq.broker.models import OrderType, Product, TradingSignal
     from skopaq.broker.order_status import is_non_cnc_product
+
+    if product == "FNO":
+        return await _live_close_fno(config, symbol, user)
 
     def ours(p) -> bool:
         if product == "CNC":
@@ -531,6 +541,37 @@ async def _live_close(config, symbol: Optional[str], user: DashboardUser, *,
     return {"ok": all(d["ok"] for d in done), "message": "; ".join(d["message"] for d in done),
             "results": done, "warning": "No monitor is running: start one to protect what "
                                         "is left" if not all(d["ok"] for d in done) else None}
+
+
+async def _live_close_fno(config, symbol: Optional[str], user: DashboardUser) -> dict:
+    """Sell the F&O positions held long (the whole net quantity, a whole number of lots),
+    each with its contract's security id."""
+    from skopaq.broker.models import Exchange, OrderType, Product, Segment, TradingSignal
+
+    done = []
+    async with _LiveDesk(config) as desk:
+        rows = [p for p in await desk.router.get_derivative_positions()
+                if p.quantity > 0 and p.security_id
+                and (symbol is None or p.symbol.upper() == symbol)]
+        if not rows:
+            return {"ok": False, "message": f"No open F&O {symbol or 'position'} at the broker"}
+        for row in rows:
+            ltp = row.last_price or row.average_price
+            product = (row.product or "").upper()
+            signal = TradingSignal(
+                symbol=row.symbol, action="SELL", confidence=100, entry_price=ltp,
+                exchange=Exchange.BSE if (row.exchange or "").upper() in ("BSE", "BFO")
+                else Exchange.NSE,
+                order_type=OrderType.MARKET, quantity=Decimal(row.quantity),
+                reasoning=f"MANUAL F&O CLOSE from the dashboard ({user.email})",
+                position_only=True, segment=Segment.DERIVATIVE, security_id=row.security_id,
+                lot_size=int(getattr(row, "lot_size", 0) or 1),
+                product=Product.MARGIN if product == "MARGIN" else Product.INTRADAY)
+            result = await desk.run(signal)
+            done.append({"symbol": row.symbol, "ok": result.success,
+                         "message": _result_text(result, signal)})
+    return {"ok": all(d["ok"] for d in done), "message": "; ".join(d["message"] for d in done),
+            "results": done}
 
 
 async def _live_order(config, p: dict, user: DashboardUser) -> dict:

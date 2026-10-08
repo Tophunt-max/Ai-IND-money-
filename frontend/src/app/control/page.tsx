@@ -2,7 +2,7 @@
 
 import {
   Ban, CirclePlay, CircleStop, Gauge, Pause, Pencil, Play, Power, Radio, RefreshCw, Send,
-  ShieldAlert, SlidersHorizontal, Target, X, Zap,
+  ShieldAlert, SlidersHorizontal, Target, TrendingUp, X, Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -51,6 +51,9 @@ interface Control {
   };
   scalper: null | Scalper;
   scalp_enabled: boolean;
+  fno: null | Fno;
+  fno_enabled: boolean;
+  fno_instrument: string;
   active: boolean;
   pending_commands: number;
   last_session: null | { phase: string; session_date: string; updated_at: number; errors: string[] };
@@ -69,6 +72,23 @@ interface Scalper {
   skipped_cost: number; rejected: number; symbols: string[]; strategies: string[]; window: string;
   limits: { max_trades: number; max_open: number; max_daily_loss: number };
   blocked: string | null; age_s: number;
+}
+
+interface FnoRow {
+  symbol: string; underlying: string; kind: string; strategy: string; quantity: number;
+  lots: number; lot_size: number; entry_price: number; ltp: number | null; stop_loss: number;
+  breakeven: boolean; underlying_ltp: number | null; underlying_stop: number | null;
+  underlying_target: number | null; pnl: number | null; opened_at: string; expiry: string | null;
+}
+
+interface Fno {
+  mode: string; instrument: string; positions: FnoRow[];
+  trades: Scalper["trades"];
+  entries: number; net_pnl: number; by_strategy: Scalper["by_strategy"];
+  skipped_cost: number; skipped_size: number; skipped_contract: number; rejected: number;
+  underlyings: Record<string, number | null>; strategies: string[]; window: string;
+  limits: { max_trades: number; max_open: number; max_daily_loss: number; max_lots: number; risk_per_trade: number };
+  notes: string[]; blocked: string | null; age_s: number;
 }
 
 interface Order {
@@ -101,6 +121,26 @@ const SCALP_KEYS = [
   ["SKOPAQ_SCALP_ENTRY_END", "Last entry"],
   ["SKOPAQ_SCALP_FLATTEN_AT", "Flatten at"],
   ["SKOPAQ_SCALP_RR", "Risk:reward"],
+] as const;
+
+const FNO_KEYS = [
+  ["SKOPAQ_FNO_ENABLED", "F&O engine on"],
+  ["SKOPAQ_FNO_UNDERLYINGS", "Underlyings"],
+  ["SKOPAQ_FNO_INSTRUMENT", "Instrument"],
+  ["SKOPAQ_FNO_ALLOW_BEARISH", "Buy PEs on bearish setups"],
+  ["SKOPAQ_FNO_STRATEGIES", "Strategies (priority)"],
+  ["SKOPAQ_FNO_STRIKE_OFFSET", "Strike (0 ATM, -1 ITM, +1 OTM)"],
+  ["SKOPAQ_FNO_RISK_PER_TRADE_INR", "Risk / trade ₹"],
+  ["SKOPAQ_FNO_MAX_LOTS", "Max lots / trade"],
+  ["SKOPAQ_FNO_MAX_PREMIUM_INR", "Max premium / trade ₹"],
+  ["SKOPAQ_FNO_PREMIUM_STOP_PCT", "Premium stop"],
+  ["SKOPAQ_FNO_TRAIL_PCT", "Trail after +1R"],
+  ["SKOPAQ_FNO_MAX_TRADES_PER_DAY", "Max trades / day"],
+  ["SKOPAQ_FNO_MAX_DAILY_LOSS_INR", "Daily loss limit ₹"],
+  ["SKOPAQ_FNO_ENTRY_START", "First entry"],
+  ["SKOPAQ_FNO_ENTRY_END", "Last entry"],
+  ["SKOPAQ_FNO_FLATTEN_AT", "Flatten at"],
+  ["SKOPAQ_FNO_RR", "Risk:reward (underlying)"],
 ] as const;
 
 const n2 = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
@@ -230,6 +270,8 @@ export default function ControlPage() {
 
           <ScalperCard c={c} isAdmin={isAdmin} busy={busy} act={act} live={live} />
 
+          <FnoCard c={c} isAdmin={isAdmin} busy={busy} act={act} live={live} />
+
           {isAdmin && <OrderCard live={live} active={!!c.monitor} busy={busy} act={act} />}
 
           {live && (
@@ -262,6 +304,8 @@ export default function ControlPage() {
             subtitle="Target, booking and stops for new swing positions (a running monitor uses them from its next start). All settings: Environment." />}
           {isAdmin && <SettingsCard keys={SCALP_KEYS} title="Scalping"
             subtitle="The intraday scalper runs inside the daily session when on (INTRADAY orders, flattened before the close). Changes apply from the next session." />}
+          {isAdmin && <SettingsCard keys={FNO_KEYS} title="F&O (options buying)"
+            subtitle="Bullish setups buy a CE, bearish ones a PE (or the future, long only). Never option writing or short futures. INTRADAY, flattened before the close. Changes apply from the next session." />}
 
           {c.monitor?.exit_reasons?.length ? (
             <Card title="Recent exits" subtitle="This session">
@@ -538,6 +582,86 @@ function SettingsCard({ keys, title, subtitle }: {
             <Button icon={SlidersHorizontal} loading={busy} disabled={!changed.length} onClick={save}>Save {changed.length || ""}</Button>
           </div>
         </>
+      )}
+    </Card>
+  );
+}
+
+function FnoCard({ c, isAdmin, busy, act, live }: {
+  c: Control; isAdmin: boolean; busy: string | null; live: boolean;
+  act: (key: string, path: string, body?: unknown, done?: string) => Promise<any>;
+}) {
+  const f = c.fno;
+  const close = (symbol?: string) => {
+    const what = symbol ? `Close ${symbol} at MARKET?` : "Close ALL F&O positions at MARKET?";
+    if (live ? !confirmLive(what) : !confirm(what)) return;
+    act(symbol ? `fclose-${symbol}` : "fcloseall", "/api/dashboard/control/close",
+      symbol ? { symbol, scope: "fno" } : { scope: "fno" });
+  };
+  if (!f) {
+    return (
+      <Card title="F&O" icon={TrendingUp} subtitle={c.fno_enabled ? `On (${c.fno_instrument}): it runs inside the next session` : "Off — turn it on under F&O below"}>
+        <Empty icon={TrendingUp}>{c.fno_enabled ? "Not running now." : "The F&O engine is off."} Try it on paper first: <code className="text-xs">skopaq fno --underlyings NIFTY</code></Empty>
+        {isAdmin && live && (
+          <div className="mt-3"><Button variant="danger" size="sm" icon={X} loading={busy === "fcloseall"} onClick={() => close()}>Close all F&O at the broker</Button></div>
+        )}
+      </Card>
+    );
+  }
+  const strat = Object.entries(f.by_strategy || {});
+  const unders = Object.entries(f.underlyings || {});
+  return (
+    <Card title="F&O" icon={TrendingUp}
+      subtitle={`${f.instrument} · ${f.strategies.join(", ")} · ${f.window} · updated ${Math.round(f.age_s)}s ago`}
+      right={isAdmin && <Button variant="danger" size="sm" icon={X} loading={busy === "fcloseall"} disabled={!f.positions.length} onClick={() => close()}>Close all F&O</Button>}>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard title="Net P&L (after charges)" value={<span className={pnlClass(f.net_pnl)}>{inr(f.net_pnl)}</span>} tone={f.net_pnl > 0 ? "ok" : f.net_pnl < 0 ? "error" : "neutral"} />
+        <StatCard title="Trades today" value={`${f.entries} / ${f.limits.max_trades}`} detail={`${f.positions.length} open (max ${f.limits.max_open}) · ≤${f.limits.max_lots} lot(s)`} />
+        <StatCard title="Skipped" value={String(f.skipped_cost + f.skipped_size + f.skipped_contract)} detail={`${f.skipped_size} too big for ₹${f.limits.risk_per_trade} risk · ${f.skipped_cost} charges · ${f.skipped_contract} no contract · ${f.rejected} refused`} />
+        <StatCard title="New entries" value={f.blocked ? "No" : "Yes"} tone={f.blocked ? "warning" : "ok"} detail={f.blocked || "waiting for a setup"} />
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {unders.map(([name, ltp]) => <Badge key={name} tone="neutral">{name} {n2(ltp)}</Badge>)}
+        {strat.map(([name, row]) => (
+          <Badge key={name} tone={row.pnl > 0 ? "ok" : row.pnl < 0 ? "error" : "neutral"}>
+            {name}: {row.trades} ({row.wins} won) {inr(row.pnl, 0)}
+          </Badge>
+        ))}
+      </div>
+      {f.notes?.length > 0 && <div className="mt-3"><Notice tone="warning">{f.notes.join(" · ")}</Notice></div>}
+      <div className="mt-5">
+        {f.positions.length === 0 ? <Empty>No open F&O positions.</Empty> : (
+          <Table head={["Contract", "Lots", "Entry", "LTP", "P&L", "Premium stop", "Underlying stop / target", ""]}>
+            {f.positions.map((p) => (
+              <tr key={p.symbol} className="hover:bg-white/[0.02]">
+                <td><div className="font-medium text-white">{p.symbol}</div><div className="text-[11px] text-gray-500">{p.kind} · {p.strategy}{p.breakeven && " · trailing"}{p.expiry && ` · exp ${p.expiry}`}</div></td>
+                <td>{p.lots} × {p.lot_size}</td>
+                <td>{n2(p.entry_price)}</td>
+                <td>{n2(p.ltp)}</td>
+                <td className={pnlClass(p.pnl)}>{inr(p.pnl)}</td>
+                <td className="text-rose-300">{n2(p.stop_loss)}</td>
+                <td className="text-xs"><span className="text-rose-300">{n2(p.underlying_stop)}</span> / <span className="text-emerald-300">{n2(p.underlying_target)}</span><div className="text-[11px] text-gray-500">{p.underlying} {n2(p.underlying_ltp)}</div></td>
+                <td>{isAdmin && <Button size="sm" variant="danger" loading={busy === `fclose-${p.symbol}`} onClick={() => close(p.symbol)}>Close</Button>}</td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </div>
+      {f.trades.length > 0 && (
+        <div className="mt-5">
+          <Table head={["Trade", "Qty", "Entry", "Exit", "Net", "Why"]}>
+            {f.trades.slice().reverse().map((t, i) => (
+              <tr key={i}>
+                <td><div className="text-white">{t.symbol}</div><div className="text-[11px] text-gray-500">{t.strategy} · {t.opened_at.slice(11, 16)}–{t.closed_at.slice(11, 16)}</div></td>
+                <td>{t.qty}</td>
+                <td>{n2(t.entry)}</td>
+                <td>{n2(t.exit)}</td>
+                <td className={pnlClass(t.pnl)}>{inr(t.pnl)}</td>
+                <td className="max-w-[260px] truncate text-xs text-gray-400">{t.reason}</td>
+              </tr>
+            ))}
+          </Table>
+        </div>
       )}
     </Card>
   );

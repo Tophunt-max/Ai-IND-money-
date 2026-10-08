@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
-from skopaq.broker.models import Holding, Position
+from skopaq.broker.models import Holding, Position, is_derivative_segment
 from skopaq.broker.order_status import OrderSnapshot, parse_order_book
 from skopaq.risk.calendar import now_ist
 
@@ -40,13 +40,18 @@ async def read_broker_snapshot(
     extra_terminal: frozenset[str] = frozenset(),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     wall: Callable[[], datetime] = now_ist,
+    segment: str = "EQUITY",
 ) -> BrokerSnapshot:
     """Order book, then positions, then holdings — never the other way round.
 
     Reading the book first means an order that fills between the reads is counted twice
     (pending in the book, sold in positions), which understates what can be sold; the other
     order would count it zero times. A book error is retried once after 0.5 s and then
-    reported in book_error; a positions error raises (callers decide)."""
+    reported in book_error; a positions error raises (callers decide).
+
+    ``segment`` DERIVATIVE reads the F&O positions (``get_derivative_positions``, each row
+    marked DERIVATIVE) and no holdings: F&O contracts are never delivery holdings."""
+    derivative = is_derivative_segment(segment)
     orders: tuple[OrderSnapshot, ...] = ()
     book_error = ""
     read_at = wall()
@@ -67,11 +72,19 @@ async def read_broker_snapshot(
             if attempt == 0:
                 await sleep(_BOOK_RETRY_DELAY_S)
 
-    positions = tuple(await client.get_positions())
+    if derivative:
+        positions = tuple(await client.get_derivative_positions())
+        for row in positions:
+            try:
+                row.segment = "DERIVATIVE"
+            except (AttributeError, ValueError):
+                pass
+    else:
+        positions = tuple(await client.get_positions())
 
     holdings: tuple[Holding, ...] = ()
     holdings_error = ""
-    if need_holdings:
+    if need_holdings and not derivative:
         try:
             holdings = tuple(await client.get_holdings())
         except Exception as exc:

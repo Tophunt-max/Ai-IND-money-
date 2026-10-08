@@ -525,6 +525,16 @@ class TradingSignal(BaseModel):
     # None: CNC (delivery). The scalper trades INTRADAY; its positions are its own (the
     # swing monitor and CLOSING manage CNC rows only)
     product: Optional[Product] = None
+    # F&O (the options engine): segment DERIVATIVE, the contract's security id and lot
+    # size; ``symbol`` is the contract's trading symbol and ``quantity`` is in units (a
+    # whole number of lots). None: equity
+    segment: Optional[Segment] = None
+    security_id: str = ""
+    lot_size: int = Field(1, ge=1)
+
+    @property
+    def is_derivative(self) -> bool:
+        return self.segment == Segment.DERIVATIVE
 
 
 class ExecutionResult(BaseModel):
@@ -556,6 +566,20 @@ class ExecutionResult(BaseModel):
 
 # Readers for ExecutionResult's live fields. Tests pass MagicMock results whose
 # attributes are truthy mocks, so every consumer reads through these.
+
+
+def derivative_scrip_code(exchange: str, security_id: str) -> str:
+    """The market-data scrip code of an F&O contract: ``NFO_<id>`` (NSE), ``BFO_<id>``
+    (BSE). Orders send the cash exchange (NSE/BSE) with segment DERIVATIVE instead."""
+    prefix = "BFO" if str(exchange).upper() in ("BSE", "BFO") else "NFO"
+    return f"{prefix}_{security_id}"
+
+
+def is_derivative_segment(value: object) -> bool:
+    """A segment as INDstocks or Skopaq writes it (``DERIVATIVE``, ``FNO``, ``F&O``,
+    ``NFO``, ``BFO``) is the derivatives one; ``""`` (unknown) is not."""
+    text = str(getattr(value, "value", value) or "").upper()
+    return text.startswith("DERIV") or text in ("FNO", "F&O", "FO", "NFO", "BFO")
 
 
 def filled_quantity_of(result: object, default: Decimal | int) -> Decimal:

@@ -112,6 +112,8 @@ class DaemonSessionReport:
     exits_blocked: list[str] = field(default_factory=list)    # exits refused or skipped
     scalp_summary: str = ""        # the scalper's day, when it ran
     scalp_pnl: float = 0.0
+    fno_summary: str = ""          # the F&O engine's day, when it ran
+    fno_pnl: float = 0.0
 
 
 class TradingDaemon:
@@ -167,6 +169,9 @@ class TradingDaemon:
         self._scalper: Optional[asyncio.Task] = None
         self._scalp_stop: Optional[asyncio.Event] = None
         self._scalp_feed = None
+        self._fno: Optional[asyncio.Task] = None
+        self._fno_stop: Optional[asyncio.Event] = None
+        self._fno_feed = None
         self._started_wall = _time.time()
         self._graph = None        # SkopaqTradingGraph
         self._llm_map = None      # Per-role LLM map
@@ -243,6 +248,7 @@ class TradingDaemon:
                 self._arm_shutdown()  # the stop came before the router existed
             if not dry_run and not self._stop.is_set():
                 await self._start_scalper()
+                await self._start_fno()
 
             # Kill switch: no scanning or new trades while trading is halted
             halt = self._halt_status()
@@ -316,6 +322,8 @@ class TradingDaemon:
             # confirm: nothing else would sell them.
             if self._scalp_stop is not None:
                 self._scalp_stop.set()        # the session failed: the scalper flattens
+            if self._fno_stop is not None:
+                self._fno_stop.set()          # and the F&O engine
             opened = report.trades_opened > 0 or report.orders_unconfirmed > 0
             if opened and self._phase != DaemonPhase.CLOSING:
                 logger.warning("Session failed with %d trade(s) opened and %d unconfirmed: "
@@ -332,6 +340,7 @@ class TradingDaemon:
             self._phase = DaemonPhase.REPORTING
             report.phase_times = dict(self._phase_times)
             await self._finish_scalper(report)
+            await self._finish_fno(report)
             # A dry run is scan-only: no LLM reflection calls or Supabase writes.
             if not dry_run:
                 report.decisions_settled = await self._settle_due_decisions()
@@ -413,8 +422,76 @@ class TradingDaemon:
         finally:
             self._scalper = None
             if self._scalp_feed is not None:
-                await self._scalp_feed.stop()
+                if self._fno is not None and self._fno_feed is None:
+                    # The F&O engine shares this feed: it stops it when it ends
+                    self._fno_feed = self._scalp_feed
+                else:
+                    await self._scalp_feed.stop()
                 self._scalp_feed = None
+
+    # ── F&O engine ────────────────────────────────────────────────────
+
+    async def _start_fno(self) -> None:
+        """The F&O engine (``fno_enabled``: index options buying, INTRADAY) beside the
+        swing session, until its flatten time or the session's stop."""
+        if getattr(self._config, "fno_enabled", False) is not True:
+            return
+        from skopaq.broker.websocket import feeds_from_config
+        from skopaq.execution.control import ControlChannel
+        from skopaq.execution.executor import Executor
+        from skopaq.scalping.fno_engine import FnoEngine
+
+        self._fno_stop = asyncio.Event()
+        stop = self._fno_stop
+
+        async def link() -> None:
+            await self._stop.wait()
+            stop.set()
+
+        feed = self._scalp_feed            # one price connection when the scalper runs
+        if feed is None:
+            self._fno_feed, _ = feeds_from_config(self._config)
+            feed = self._fno_feed
+            if feed is not None:
+                await feed.start()
+        engine = FnoEngine(
+            self._config,
+            # Its own executor (no swing sizing or exit plans); the same router and safety
+            # checker: the loss limits and the order rate count every order
+            Executor(self._router, self._safety),
+            self._client, self._router, feed=feed,
+            on_trade=self._record_exit, control=ControlChannel.from_config(self._config),
+            max_lots=getattr(self._rules, "max_lots_per_position", None),
+            max_position_pct=getattr(self._rules, "max_position_pct", 0.0) or 0.0,
+        )
+        linker = asyncio.create_task(link())
+
+        async def run():
+            try:
+                return await engine.run(stop)
+            finally:
+                linker.cancel()
+
+        self._fno = asyncio.create_task(run(), name="fno")
+        logger.info("F&O engine started beside the session")
+
+    async def _finish_fno(self, report: DaemonSessionReport) -> None:
+        """Wait for the F&O engine (it ends at its flatten time, or on the stop)."""
+        if self._fno is None:
+            return
+        try:
+            fno = await self._fno
+            report.fno_summary = fno.summary()
+            report.fno_pnl = fno.net_pnl
+            report.positions_left.extend(f"{s} (F&O)" for s in fno.left_open)
+        except Exception as exc:
+            logger.error("F&O engine failed", exc_info=True)
+            report.errors.append(f"fno: {exc}")
+        finally:
+            self._fno = None
+            if self._fno_feed is not None:
+                await self._fno_feed.stop()
+                self._fno_feed = None
 
     # ── Dashboard status ──────────────────────────────────────────────
 
@@ -1277,6 +1354,8 @@ class TradingDaemon:
             msg += f"\nExits blocked: {', '.join(report.exits_blocked)}"
         if report.scalp_summary:
             msg += f"\n\n{report.scalp_summary}"
+        if report.fno_summary:
+            msg += f"\n\n{report.fno_summary}"
         if report.errors:
             msg += f"\nErrors: {len(report.errors)}"
         return msg

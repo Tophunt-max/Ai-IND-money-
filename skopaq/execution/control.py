@@ -35,8 +35,8 @@ REQUEST_TTL_S = 300.0      # a stop/start request older than this is ignored
 COMMAND_TTL_S = 120.0      # a command nobody claimed within this is expired
 RESULT_KEEP_S = 3600.0
 COMMAND_KINDS = ("close", "close_all", "set_plan", "order")
-STATUS_NAMES = ("session", "monitor", "scalper")
-COMMAND_TARGETS = ("monitor", "scalper")
+STATUS_NAMES = ("session", "monitor", "scalper", "fno")
+COMMAND_TARGETS = ("monitor", "scalper", "fno")
 
 
 def _atomic_write(path: Path, data: Any) -> None:

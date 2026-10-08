@@ -33,8 +33,10 @@ from skopaq.broker.models import (
     OrderRequest,
     OrderResponse,
     Position,
+    Segment,
     Side,
     TradingSignal,
+    is_derivative_segment,
 )
 from skopaq.broker.order_status import parse_order_book
 from skopaq.broker.paper_engine import PaperEngine
@@ -227,9 +229,14 @@ class OrderRouter:
         return await self._worker.execute(order, signal)
 
     async def _ensure_security_id(self, order: OrderRequest) -> None:
-        """Resolve ``order.security_id`` if missing (executor builds orders without it)."""
+        """Resolve ``order.security_id`` if missing (executor builds orders without it).
+
+        An F&O order must come with its contract's id: the equity instruments file would
+        give the id of a stock, never of a contract."""
         if order.security_id:
             return
+        if order.segment == Segment.DERIVATIVE:
+            raise ValueError(f"F&O order {order.symbol} has no contract security id")
         order.security_id = await resolve_security_id(
             self._live, order.symbol, order.exchange.value,
         )
@@ -261,9 +268,11 @@ class OrderRouter:
                            "the order book counts against it", order.symbol, exc)
 
         settings = self._worker.settings
+        # An F&O SELL counts the F&O positions (no holdings); an equity SELL the equity
+        # ones: the two number their security ids apart
         snap = await self._bounded(read_broker_snapshot(
             self._live, extra_terminal=settings.extra_terminal_statuses,
-            sleep=self._sleep, wall=self._wall,
+            sleep=self._sleep, wall=self._wall, segment=order.segment.value,
         ))
         lag = settings.sell_fill_lag_window_s
         own = set(self._registry.ids())
@@ -331,6 +340,34 @@ class OrderRouter:
         """Get positions from the active backend."""
         if self._mode == "live" and self._live:
             return await self._live.get_positions()
+        return self._paper.get_positions()
+
+    async def get_derivative_positions(self) -> list[Position]:
+        """Today's F&O positions (live: ``segment=derivative``; paper: the paper book's
+        DERIVATIVE rows), each row's ``segment`` set to DERIVATIVE."""
+        if self._mode == "live" and self._live:
+            rows = await self._live.get_derivative_positions()
+        else:
+            rows = [p for p in self._paper.get_positions()
+                    if is_derivative_segment(getattr(p, "segment", ""))]
+        for row in rows:
+            try:
+                row.segment = Segment.DERIVATIVE.value
+            except (AttributeError, ValueError):
+                pass
+        return list(rows)
+
+    async def get_all_positions(self) -> list[Position]:
+        """Equity and F&O positions together (live: two reads; an F&O read that fails is
+        logged and leaves the equity rows). Paper: the paper book, which has both."""
+        if self._mode == "live" and self._live:
+            rows = list(await self._live.get_positions())
+            try:
+                rows.extend(await self.get_derivative_positions())
+            except Exception:
+                logger.warning("F&O positions unreadable — equity positions only",
+                               exc_info=True)
+            return rows
         return self._paper.get_positions()
 
     async def get_holdings(self) -> list[Holding]:

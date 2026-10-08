@@ -4,6 +4,7 @@ Each safety rule gets its own test to ensure it fires at the right threshold.
 """
 
 import pytest
+from decimal import Decimal
 from datetime import datetime, time, timezone, timedelta
 from unittest.mock import patch
 
@@ -231,6 +232,30 @@ class TestNakedOptions:
         )
         result = checker.validate(order, None, [], funds, 1_000_000)
         assert not result.passed
+        # An F&O SELL with no long position of the contract would write the option
+        assert any("No short sales" in r for r in result.rejections)
+        assert result.codes == ["no-short-sale"]
+
+    def test_selling_an_option_held_long_passes(self, checker, funds):
+        order = OrderRequest(
+            symbol="NIFTY23DEC21000CE", exchange=Exchange.NSE, side=Side.SELL,
+            quantity=50, order_type=OrderType.MARKET, product=Product.INTRADAY,
+            segment=Segment.DERIVATIVE, lot_size=50, security_id="45110",
+        )
+        held = Position(symbol="NIFTY23DEC21000CE", security_id="45110", quantity=50,
+                        average_price=180, product="INTRADAY")
+        assert checker.validate(order, None, [held], funds, 1_000_000).passed
+        # More than held (100 > 50) is a write of the rest
+        bigger = order.model_copy(update={"quantity": Decimal(100)})
+        assert not checker.validate(bigger, None, [held], funds, 1_000_000).passed
+
+    def test_option_symbol_sell_outside_the_fno_segment_is_refused(self, checker, funds):
+        order = OrderRequest(
+            symbol="NIFTY23DEC21000CE", exchange=Exchange.NSE, side=Side.SELL,
+            quantity=50, order_type=OrderType.LIMIT, price=200, product=Product.INTRADAY,
+        )
+        held = Position(symbol="NIFTY23DEC21000CE", quantity=50, average_price=180)
+        result = checker.validate(order, None, [held], funds, 1_000_000)
         assert any("Naked option" in r for r in result.rejections)
 
     def test_buying_option_passes(self, checker, funds, signal_with_sl):
@@ -609,9 +634,11 @@ class TestNoShortSaleWithOpenOrders:
     def test_option_sells_are_still_the_naked_options_checks_business(self):   # T8
         option = self._order(1, symbol="NIFTY23DEC21000CE")
         result = self._validate(option, self._context(error="HTTP 503"))
-        assert result.rejections == [
-            "Naked option selling is forbidden. Ensure a protective position exists."]
-        assert result.codes == ["safety"]
+        # Outside the F&O segment an option symbol is refused outright; the unreadable
+        # book refuses it too (every SELL is checked against the book now)
+        assert "Naked option selling is forbidden. Ensure a protective position exists." \
+            in result.rejections
+        assert result.codes == ["book-unreadable", "safety"]
 
     def test_the_override_checks_without_the_book_and_says_so(self, caplog):   # T9
         import logging

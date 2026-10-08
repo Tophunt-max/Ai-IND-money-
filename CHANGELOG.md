@@ -26,6 +26,43 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **F&O trading: index options buying** (`skopaq/scalping/fno_engine.py`,
+  `fno_rules.py`, `docs/trading/fno.md`). It runs beside the daily session
+  (`SKOPAQ_FNO_ENABLED`, off by default) or alone (`skopaq fno`).
+  - **Direction:** the scalping strategies on the underlying's 1-minute candles. A
+    bullish setup buys a CE. A bearish setup (the same strategies on inverted candles)
+    buys a PE.
+  - **Contract:** from the live option chain, ATM by default
+    (`SKOPAQ_FNO_STRIKE_OFFSET`), with a spread filter. On expiry day the next expiry is
+    used.
+  - **Size:** whole lots by premium risk, capped by `SKOPAQ_FNO_MAX_LOTS`, the premium
+    cap and the safety lot cap.
+  - **Charges:** a trade whose expected profit does not cover the F&O charges several
+    times over is skipped.
+  - **Exits:**
+    - the underlying's stop and target;
+    - a premium stop, with breakeven at +1 R and then a trail;
+    - a time stop;
+    - a flatten at 15:10.
+  - **Limits:** trades a day, open positions, daily loss, a cool-down after a loss, and
+    the kill switch.
+  - **Futures:** `SKOPAQ_FNO_INSTRUMENT=futures`, long only. Index futures are refused by
+    the immutable order-value and position limits.
+  - **Dashboard:** an F&O card (P&L, open contracts with Close, the day's trades) and an
+    F&O settings card. A live **Close all F&O at the broker** works without a session.
+- **Derivative orders through the whole pipeline.**
+  - `TradingSignal` gains `segment`, `security_id` and `lot_size`.
+  - **Executor:** builds DERIVATIVE orders: INTRADAY/MARGIN, whole lots, no Yahoo price,
+    no ATR sizing.
+  - **Safety:** an F&O SELL may only close a long position of the same contract, so
+    there is no option writing and no short futures. Options are paid from the
+    option-buying balance, futures from an estimated margin. One lot passes the position
+    percentage like one share.
+  - **Live SELL checks:** they read the F&O positions (no holdings) and leave out
+    order-book rows of the other segment.
+  - **Exit re-pricing:** uses the `NFO_` / `BFO_` LTP on the ₹0.05 tick.
+  - **Paper engine:** never writes options. Its F&O rows keep their contract.
+
 - **Intraday scalping engine** (`skopaq/scalping/`, `docs/trading/scalping.md`). It trades
   long scalps on live ticks with the INTRADAY product, and runs beside the daily session
   (`SKOPAQ_SCALP_ENABLED`, off by default) or alone (`skopaq scalp`).
@@ -142,6 +179,11 @@ All notable changes to SkopaqTrader. The format follows
 Moves the vendored TradingAgents from v0.5.1 to **v0.5.2** (upstream commit
 `5eb5085`, 65 commits). No Skopaq-facing behaviour change beyond the notes
 below.
+
+### Fixed
+
+- Trade rows wrote product `INTRADAY`, which the `trades` table's CHECK refuses (CNC, MIS,
+  NRML). INTRADAY is now written `MIS`, and MARGIN is written `NRML`.
 
 ### Changed
 

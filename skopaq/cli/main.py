@@ -288,6 +288,87 @@ async def _run_scalp(config):
     return report
 
 
+@app.command("fno")
+def fno_trade(
+    live: bool = typer.Option(False, "--live", help="Real F&O orders on INDstocks."),
+    confirm_live: bool = typer.Option(False, "--confirm-live", help="Skip the live prompt."),
+    underlyings: str = typer.Option("", help="Comma-separated, e.g. NIFTY,BANKNIFTY "
+                                             "(default: FNO_UNDERLYINGS)."),
+    instrument: str = typer.Option("", help="options (CE/PE buying) or futures (long only)."),
+    strategies: str = typer.Option("", help="vwap_pullback,ema_rsi,orb,range_reversal"),
+) -> None:
+    """Run the F&O engine now (options buying), until its flatten time (paper unless
+    --live). It never writes options nor shorts futures."""
+    from skopaq.config import SkopaqConfig
+
+    _setup_logging("INFO")
+    config = SkopaqConfig()
+    config.trading_mode = "live" if live else "paper"
+    if underlyings:
+        config.fno_underlyings = underlyings
+    if instrument:
+        config.fno_instrument = instrument
+    if strategies:
+        config.fno_strategies = strategies
+    if live and not confirm_live and not typer.confirm(
+            "LIVE F&O: real option/future BUY orders with real money. Proceed?"):
+        raise typer.Exit(1)
+    report = asyncio.run(_run_fno(config))
+    console.print(report.summary())
+    raise typer.Exit(4 if report.left_open else 0)
+
+
+async def _run_fno(config):
+    import signal as sig
+    import time as _time
+
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.paper_engine import PaperEngine
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.broker.websocket import feeds_from_config
+    from skopaq.constants import DAEMON_PAPER_SAFETY_RULES, DAEMON_SAFETY_RULES
+    from skopaq.execution.control import ControlChannel, watch_stop
+    from skopaq.execution.executor import Executor
+    from skopaq.execution.order_router import OrderRouter
+    from skopaq.execution.pnl_history import seed_safety_checker
+    from skopaq.execution.safety_checker import SafetyChecker
+    from skopaq.scalping.fno_engine import FnoEngine
+
+    live = config.trading_mode == "live"
+    tokens = TokenManager()
+    client = INDstocksClient(config, tokens)
+    router = OrderRouter(config, PaperEngine(initial_capital=config.initial_paper_capital),
+                         live_client=client if live else None)
+    rules = DAEMON_SAFETY_RULES if live else DAEMON_PAPER_SAFETY_RULES
+    safety = SafetyChecker(rules=rules,
+                           max_sector_concentration_pct=config.max_sector_concentration_pct)
+    seed_safety_checker(safety, config)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for s in (sig.SIGINT, sig.SIGTERM):
+        loop.add_signal_handler(s, stop.set)
+    control = ControlChannel.from_config(config)
+    watcher = loop.create_task(watch_stop(control, stop, started_at=_time.time()))
+    feed, _ = feeds_from_config(config, tokens)
+    async with client:
+        if feed is not None:
+            await feed.start()
+        engine = FnoEngine(
+            config, Executor(router, safety), client, router, feed=feed, control=control,
+            on_trade=lambda signal, execution: _record_exit(config, None, None, signal,
+                                                            execution),
+            max_lots=rules.max_lots_per_position, max_position_pct=rules.max_position_pct)
+        try:
+            report = await engine.run(stop)
+        finally:
+            watcher.cancel()
+            if feed is not None:
+                await feed.stop()
+            if router.worker is not None:
+                await router.registry.drain_recordings()
+    return report
+
+
 @app.command("scalp-backtest")
 def scalp_backtest(
     symbol: str = typer.Argument(..., help="NSE symbol, e.g. RELIANCE"),
@@ -1669,11 +1750,30 @@ async def _run_lifecycle(config, graph, memory_store, result, *,
     return booked
 
 
+# The trades table's product vocabulary (CHECK: CNC, MIS, NRML)
+_ROW_PRODUCT = {"INTRADAY": "MIS", "MIS": "MIS", "MARGIN": "NRML", "NRML": "NRML",
+                "CNC": "CNC"}
+
+
 def _product_of(signal) -> str:
-    """The trade row's product: the signal's (the scalper's INTRADAY), else CNC."""
+    """The trade row's product: the signal's (the scalper's and the options engine's
+    INTRADAY is written MIS, MARGIN NRML), else CNC."""
     product = getattr(signal, "product", None)
     value = getattr(product, "value", product)
-    return value if isinstance(value, str) and value else "CNC"
+    if not isinstance(value, str) or not value:
+        return "CNC"
+    return _ROW_PRODUCT.get(value.upper(), "CNC")
+
+
+def _fno_signals(signal) -> dict:
+    """An F&O trade's contract (segment, security id, lot size, lots) for model_signals;
+    {} for equity."""
+    if getattr(signal, "is_derivative", False) is not True:
+        return {}
+    lot = int(getattr(signal, "lot_size", 1) or 1)
+    qty = int(getattr(signal, "quantity", 0) or 0)
+    return {"segment": "DERIVATIVE", "security_id": str(signal.security_id or ""),
+            "lot_size": lot, "lots": qty // lot if lot else qty}
 
 
 def _agent_decision(signal) -> dict:
@@ -1739,6 +1839,9 @@ def _build_trade_record(result, config):
         if late and ids:
             broker["late_fill_of"] = ids[0]
         model_signals["broker"] = broker
+    fno_info = _fno_signals(result.signal)
+    if fno_info:
+        model_signals["fno"] = fno_info
 
     # Determine exchange and product based on asset class
     is_crypto = config.asset_class == "crypto"
@@ -1750,7 +1853,7 @@ def _build_trade_record(result, config):
 
     return TradeRecord(
         symbol=trade_symbol,
-        exchange="BINANCE" if is_crypto else "NSE",
+        exchange="BINANCE" if is_crypto else _row_exchange(result.signal),
         product="SPOT" if is_crypto else _product_of(result.signal),
         side=result.signal.action,
         quantity=filled_quantity_of(execution, result.signal.quantity or Decimal("1")),
@@ -1779,6 +1882,13 @@ def _build_trade_record(result, config):
         agent_decision=_agent_decision(result.signal),
         model_signals=model_signals,
     )
+
+
+def _row_exchange(signal) -> str:
+    """NSE or BSE (the trades table allows only those; an F&O row says so in
+    model_signals["fno"])."""
+    exchange = getattr(getattr(signal, "exchange", None), "value", "NSE")
+    return exchange if exchange in ("NSE", "BSE") else "NSE"
 
 
 def _json_number(value):
