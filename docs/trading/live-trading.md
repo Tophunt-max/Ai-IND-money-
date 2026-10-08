@@ -64,8 +64,13 @@ Live trading enforces immutable safety rules defined in `skopaq/constants.py`:
 | `max_monthly_loss_pct` | 12% | Stop trading after 12% monthly loss |
 | `max_open_positions` | 5 | Maximum concurrent positions |
 | `max_order_value_inr` | Rs 5,00,000 | Maximum single order value |
-| `max_shares_per_position` | 1000 | Maximum shares in one equity order |
-| `max_lots_per_position` | 5 | Maximum lots in one F&O order |
+| `max_shares_per_position` | 5000 | Ceiling for shares in one equity order |
+| `max_lots_per_position` | 20 | Ceiling for lots in one F&O order |
+
+The working order size limits are set from the dashboard (**Control → Exits & risk**):
+`SKOPAQ_MAX_SHARES_PER_ORDER` (default 1000) and `SKOPAQ_MAX_LOTS_PER_ORDER` (default 5).
+They apply to every strategy from the next session, and a value above the ceiling is
+clamped to it (with a warning in the logs and in `skopaq preflight`).
 | `max_orders_per_minute` | 20 | Rate limit on orders |
 | `require_stop_loss` | true | Every order must have a stop-loss |
 | `min_stop_loss_pct` | 2% | Minimum stop-loss distance |

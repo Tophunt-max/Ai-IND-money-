@@ -230,6 +230,7 @@ def test_derivative_order_rules():
 
 def test_max_lots_counts_lots_for_derivatives():
     checker = SafetyChecker()
+    checker.set_order_limits(lots=5)                          # the dashboard's default
     rejections: list[str] = []
     checker._check_max_lots(_fno_order(quantity=Decimal(75 * 5)), rejections)
     assert rejections == []                                  # 5 lots = the limit

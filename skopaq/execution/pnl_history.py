@@ -86,7 +86,13 @@ def load_realized_pnl(config, now: Optional[datetime] = None) -> Optional[Realiz
 
 
 def seed_safety_checker(safety: SafetyChecker, config, now: Optional[datetime] = None) -> None:
-    """Seed *safety* with this day's, week's and month's realized P&L."""
+    """Seed *safety* with this day's, week's and month's realized P&L, and its order size
+    limits from *config* (every production checker is seeded here)."""
+    try:
+        safety.apply_config_limits(config)
+    except Exception:
+        logger.warning("Order size limits not applied — the safety ceilings stay",
+                       exc_info=True)
     realized = load_realized_pnl(config, now)
     if realized is None:
         logger.info(

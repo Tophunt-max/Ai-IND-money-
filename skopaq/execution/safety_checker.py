@@ -79,6 +79,9 @@ class SafetyChecker:
         max_sector_concentration_pct: float = 0.40,
     ) -> None:
         self._rules = rules
+        # Working quantity limits: the rules' ceilings until set_order_limits lowers them
+        self._max_shares = rules.max_shares_per_position
+        self._max_lots = rules.max_lots_per_position
         self._ist_offset_hours = ist_offset_hours
         self._concentration = ConcentrationChecker(max_sector_concentration_pct)
 
@@ -88,6 +91,50 @@ class SafetyChecker:
         self._week_pnl: float = 0.0
         self._month_pnl: float = 0.0
         self._last_loss_time: Optional[datetime] = None
+
+    # ── Order size limits (dashboard-adjustable, below the immutable ceilings) ──
+
+    @property
+    def max_shares(self) -> int:
+        """Shares allowed in one equity order (working limit)."""
+        return self._max_shares
+
+    @property
+    def max_lots(self) -> int:
+        """Lots allowed in one F&O order (working limit)."""
+        return self._max_lots
+
+    def set_order_limits(self, shares: object = None, lots: object = None) -> list[str]:
+        """Set the working limits (``SKOPAQ_MAX_SHARES_PER_ORDER`` /
+        ``SKOPAQ_MAX_LOTS_PER_ORDER``), each clamped to [1, the rules' ceiling]. None or a
+        non-integer keeps the current limit. Returns a note per value it had to change."""
+        notes: list[str] = []
+
+        def clamp(value: object, ceiling: int, name: str, current: int) -> int:
+            if value is None or isinstance(value, bool) or not isinstance(value, int):
+                return current
+            if value < 1:
+                notes.append(f"{name}={value} is below 1; using 1")
+                return 1
+            if value > ceiling:
+                notes.append(f"{name}={value} is above the safety ceiling {ceiling} "
+                             "(skopaq/constants.py); using the ceiling")
+                return ceiling
+            return value
+
+        self._max_shares = clamp(shares, self._rules.max_shares_per_position,
+                                 "SKOPAQ_MAX_SHARES_PER_ORDER", self._max_shares)
+        self._max_lots = clamp(lots, self._rules.max_lots_per_position,
+                               "SKOPAQ_MAX_LOTS_PER_ORDER", self._max_lots)
+        for note in notes:
+            logger.warning(note)
+        return notes
+
+    def apply_config_limits(self, config: object) -> list[str]:
+        """``set_order_limits`` from a SkopaqConfig (``max_shares_per_order``,
+        ``max_lots_per_order``)."""
+        return self.set_order_limits(getattr(config, "max_shares_per_order", None),
+                                     getattr(config, "max_lots_per_order", None))
 
     def validate(
         self,
@@ -461,19 +508,19 @@ class SafetyChecker:
 
         Prevents accidentally sized orders (e.g., 50 lots from a parsing error)
         from reaching the broker. Derivatives count lots (quantity / lot size) against
-        ``max_lots_per_position``; equity counts shares against
-        ``max_shares_per_position``.
+        the working lot limit (``max_lots``); equity counts shares against ``max_shares``.
+        Both are set from the dashboard below the immutable ceilings.
         """
         if order.segment == Segment.DERIVATIVE:
-            if order.lots > self._rules.max_lots_per_position:
+            if order.lots > self._max_lots:
                 rejections.append(
-                    f"{order.lots} lots exceeds max {self._rules.max_lots_per_position} "
+                    f"{order.lots} lots exceeds max {self._max_lots} "
                     "lots per position"
                 )
             return
-        if order.quantity > self._rules.max_shares_per_position:
+        if order.quantity > self._max_shares:
             rejections.append(
-                f"Quantity {order.quantity} exceeds max {self._rules.max_shares_per_position} "
+                f"Quantity {order.quantity} exceeds max {self._max_shares} "
                 "shares per position"
             )
 

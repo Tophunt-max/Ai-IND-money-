@@ -51,6 +51,8 @@ _LENIENT_FIELDS = (
     "scalp_rest_poll_seconds",
     "scalp_rr",
     "scalp_orb_minutes",
+    "max_shares_per_order",
+    "max_lots_per_order",
     "fno_enabled",
     "fno_allow_bearish",
     "fno_avoid_expiry_day",
@@ -266,6 +268,12 @@ class SkopaqConfig(BaseSettings):
     scalp_min_reward_to_cost: float = 2.0      # target profit ≥ this × round-trip charges
     scalp_orb_minutes: int = 15
     scalp_rest_poll_seconds: float = 3.0       # batched REST quotes when the feed is down
+
+    # ── Order size limits (dashboard: Control → Exits & risk) ──────────────
+    # Per order, every strategy (swing, scalper, F&O engine, manual). Clamped to the
+    # immutable ceilings in skopaq/constants.py (5000 shares, 20 lots)
+    max_shares_per_order: int = 1000           # equity shares
+    max_lots_per_order: int = 5                # F&O lots
 
     # ── F&O engine (skopaq/scalping/fno_engine.py): index options BUYING, INTRADAY ──
     # Bullish setups buy a CE (or the near future), bearish ones a PE. Never a SELL to

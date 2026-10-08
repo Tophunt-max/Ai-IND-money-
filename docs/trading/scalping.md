@@ -47,13 +47,13 @@ day. The scalper owns its INTRADAY positions: the swing monitor and CLOSING mana
 rows only. If the process restarts, the scalper adopts the INTRADAY positions it finds in
 its symbols, with a conservative stop and target.
 
-!!! note "Share cap: `max_shares_per_position` (1000)"
-    `SafetyRules.max_shares_per_position` in `skopaq/constants.py` caps an equity order at
-    1000 shares (it was 5, which made most scalps too small to pay their charges). The
-    real limits on a scalp are its value (`SKOPAQ_SCALP_MAX_POSITION_VALUE_INR`, ₹50,000),
-    the safety rules' order value (₹2 lakh in the daemon, ₹5 lakh otherwise) and 15 % of
-    the portfolio. F&O keeps its own cap, `max_lots_per_position` (5 lots). The rules are
-    immutable at runtime: only a human edits `constants.py`.
+!!! note "Share limit: `SKOPAQ_MAX_SHARES_PER_ORDER` (1000)"
+    An equity order may have up to `SKOPAQ_MAX_SHARES_PER_ORDER` shares (default 1000;
+    change it on **Control → Exits & risk**). It can never exceed the immutable ceiling
+    `SafetyRules.max_shares_per_position` (5000) in `skopaq/constants.py`. The real limits
+    on a scalp are its value (`SKOPAQ_SCALP_MAX_POSITION_VALUE_INR`, ₹50,000), the safety
+    rules' order value (₹2 lakh in the daemon, ₹5 lakh otherwise) and 15 % of the
+    portfolio.
 
 ## Dashboard
 
