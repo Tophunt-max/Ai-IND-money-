@@ -2,7 +2,7 @@
 
 import {
   Ban, CirclePlay, CircleStop, Gauge, Pause, Pencil, Play, Power, Radio, RefreshCw, Send,
-  ShieldAlert, SlidersHorizontal, Target, X,
+  ShieldAlert, SlidersHorizontal, Target, X, Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -49,9 +49,26 @@ interface Control {
     exit_reasons: string[]; feed: { connected: boolean; ticks: number } | null;
     check_every_s: number; age_s: number;
   };
+  scalper: null | Scalper;
+  scalp_enabled: boolean;
   active: boolean;
   pending_commands: number;
   last_session: null | { phase: string; session_date: string; updated_at: number; errors: string[] };
+}
+
+interface ScalpRow {
+  symbol: string; strategy: string; quantity: number; entry_price: number; ltp: number | null;
+  stop_loss: number; target: number; breakeven: boolean; high: number; pnl: number | null;
+  opened_at: string;
+}
+
+interface Scalper {
+  mode: string; positions: ScalpRow[];
+  trades: { symbol: string; strategy: string; qty: number; entry: number; exit: number; pnl: number; reason: string; opened_at: string; closed_at: string }[];
+  entries: number; net_pnl: number; by_strategy: Record<string, { trades: number; wins: number; pnl: number }>;
+  skipped_cost: number; rejected: number; symbols: string[]; strategies: string[]; window: string;
+  limits: { max_trades: number; max_open: number; max_daily_loss: number };
+  blocked: string | null; age_s: number;
 }
 
 interface Order {
@@ -69,6 +86,21 @@ const EXIT_KEYS = [
   ["SKOPAQ_MONITOR_TRAILING_STOP_PCT", "Trailing stop"],
   ["SKOPAQ_MONITOR_HARD_STOP_PCT", "Hard stop"],
   ["SKOPAQ_DAEMON_MAX_TRADES_PER_SESSION", "Max BUYs / session"],
+] as const;
+
+const SCALP_KEYS = [
+  ["SKOPAQ_SCALP_ENABLED", "Scalper on"],
+  ["SKOPAQ_SCALP_SYMBOLS", "Symbols"],
+  ["SKOPAQ_SCALP_STRATEGIES", "Strategies (priority)"],
+  ["SKOPAQ_SCALP_RISK_PER_TRADE_PCT", "Risk / scalp"],
+  ["SKOPAQ_SCALP_MAX_POSITION_VALUE_INR", "Max value / scalp ₹"],
+  ["SKOPAQ_SCALP_MAX_TRADES_PER_DAY", "Max scalps / day"],
+  ["SKOPAQ_SCALP_MAX_OPEN", "Max open"],
+  ["SKOPAQ_SCALP_MAX_DAILY_LOSS_INR", "Daily loss limit ₹"],
+  ["SKOPAQ_SCALP_ENTRY_START", "First entry"],
+  ["SKOPAQ_SCALP_ENTRY_END", "Last entry"],
+  ["SKOPAQ_SCALP_FLATTEN_AT", "Flatten at"],
+  ["SKOPAQ_SCALP_RR", "Risk:reward"],
 ] as const;
 
 const n2 = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
@@ -196,6 +228,8 @@ export default function ControlPage() {
 
           <PositionsCard c={c} isAdmin={isAdmin} busy={busy} act={act} live={live} />
 
+          <ScalperCard c={c} isAdmin={isAdmin} busy={busy} act={act} live={live} />
+
           {isAdmin && <OrderCard live={live} active={!!c.monitor} busy={busy} act={act} />}
 
           {live && (
@@ -224,7 +258,10 @@ export default function ControlPage() {
             </Card>
           )}
 
-          {isAdmin && <ExitSettings />}
+          {isAdmin && <SettingsCard keys={EXIT_KEYS} title="Exits & risk"
+            subtitle="Target, booking and stops for new swing positions (a running monitor uses them from its next start). All settings: Environment." />}
+          {isAdmin && <SettingsCard keys={SCALP_KEYS} title="Scalping"
+            subtitle="The intraday scalper runs inside the daily session when on (INTRADAY orders, flattened before the close). Changes apply from the next session." />}
 
           {c.monitor?.exit_reasons?.length ? (
             <Card title="Recent exits" subtitle="This session">
@@ -366,15 +403,93 @@ function OrderCard({ live, active, busy, act }: {
   );
 }
 
-function ExitSettings() {
+function ScalperCard({ c, isAdmin, busy, act, live }: {
+  c: Control; isAdmin: boolean; busy: string | null; live: boolean;
+  act: (key: string, path: string, body?: unknown, done?: string) => Promise<any>;
+}) {
+  const sc = c.scalper;
+  const close = (symbol?: string) => {
+    const what = symbol ? `Close the ${symbol} scalp at MARKET?` : "Close ALL scalps at MARKET?";
+    if (live ? !confirmLive(what) : !confirm(what)) return;
+    act(symbol ? `sclose-${symbol}` : "scloseall", "/api/dashboard/control/close",
+      symbol ? { symbol, scope: "scalp" } : { scope: "scalp" });
+  };
+  if (!sc) {
+    return (
+      <Card title="Scalper" icon={Zap} subtitle={c.scalp_enabled ? "On: it runs inside the next session (09:30–14:45 entries)" : "Off — turn it on under Scalping below"}>
+        <Empty icon={Zap}>{c.scalp_enabled ? "Not running now." : "The intraday scalper is off."} Backtest it first: <code className="text-xs">skopaq scalp-backtest RELIANCE --days 5</code></Empty>
+      </Card>
+    );
+  }
+  const strat = Object.entries(sc.by_strategy || {});
+  return (
+    <Card title="Scalper" icon={Zap}
+      subtitle={`${sc.strategies.join(", ")} on ${sc.symbols.length} symbol(s) · ${sc.window} · updated ${Math.round(sc.age_s)}s ago`}
+      right={isAdmin && <Button variant="danger" size="sm" icon={X} loading={busy === "scloseall"} disabled={!sc.positions.length} onClick={() => close()}>Close all scalps</Button>}>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard title="Net P&L (after charges)" value={<span className={pnlClass(sc.net_pnl)}>{inr(sc.net_pnl)}</span>} tone={sc.net_pnl > 0 ? "ok" : sc.net_pnl < 0 ? "error" : "neutral"} />
+        <StatCard title="Scalps today" value={`${sc.entries} / ${sc.limits.max_trades}`} detail={`${sc.positions.length} open (max ${sc.limits.max_open})`} />
+        <StatCard title="Skipped" value={String(sc.skipped_cost)} detail={`target below the charges · ${sc.rejected} refused`} />
+        <StatCard title="New entries" value={sc.blocked ? "No" : "Yes"} tone={sc.blocked ? "warning" : "ok"} detail={sc.blocked || "waiting for a setup"} />
+      </div>
+      {strat.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {strat.map(([name, row]) => (
+            <Badge key={name} tone={row.pnl > 0 ? "ok" : row.pnl < 0 ? "error" : "neutral"}>
+              {name}: {row.trades} ({row.wins} won) {inr(row.pnl, 0)}
+            </Badge>
+          ))}
+        </div>
+      )}
+      <div className="mt-5">
+        {sc.positions.length === 0 ? <Empty>No open scalps.</Empty> : (
+          <Table head={["Symbol", "Qty", "Entry", "LTP", "P&L", "Stop", "Target", ""]}>
+            {sc.positions.map((p) => (
+              <tr key={p.symbol} className="hover:bg-white/[0.02]">
+                <td><div className="font-medium text-white">{p.symbol}</div><div className="text-[11px] text-gray-500">{p.strategy}{p.breakeven && " · trailing"}</div></td>
+                <td>{p.quantity}</td>
+                <td>{n2(p.entry_price)}</td>
+                <td>{n2(p.ltp)}</td>
+                <td className={pnlClass(p.pnl)}>{inr(p.pnl)}</td>
+                <td className="text-rose-300">{n2(p.stop_loss)}</td>
+                <td className="text-emerald-300">{n2(p.target)}</td>
+                <td>{isAdmin && <Button size="sm" variant="danger" loading={busy === `sclose-${p.symbol}`} onClick={() => close(p.symbol)}>Close</Button>}</td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </div>
+      {sc.trades.length > 0 && (
+        <div className="mt-5">
+          <Table head={["Trade", "Qty", "Entry", "Exit", "Net", "Why"]}>
+            {sc.trades.slice().reverse().map((t, i) => (
+              <tr key={i}>
+                <td><div className="text-white">{t.symbol}</div><div className="text-[11px] text-gray-500">{t.strategy} · {t.opened_at.slice(11, 16)}–{t.closed_at.slice(11, 16)}</div></td>
+                <td>{t.qty}</td>
+                <td>{n2(t.entry)}</td>
+                <td>{n2(t.exit)}</td>
+                <td className={pnlClass(t.pnl)}>{inr(t.pnl)}</td>
+                <td className="max-w-[260px] truncate text-xs text-gray-400">{t.reason}</td>
+              </tr>
+            ))}
+          </Table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function SettingsCard({ keys, title, subtitle }: {
+  keys: readonly (readonly [string, string])[]; title: string; subtitle: string;
+}) {
   const env = useApi<EnvData>("/api/dashboard/settings/env");
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const settings = useMemo(() => {
-    const m: Record<string, { value: string; choices: string[]; help: string }> = {};
-    for (const s of env.data?.settings ?? []) m[s.key] = { value: s.value ?? s.default, choices: s.choices, help: s.help };
+    const m: Record<string, { value: string; choices: string[]; help: string; kind: string }> = {};
+    for (const s of env.data?.settings ?? []) m[s.key] = { value: s.value ?? s.default, choices: s.choices, help: s.help, kind: s.kind };
     return m;
   }, [env.data]);
   useEffect(() => setDraft({}), [env.data]);
@@ -395,23 +510,22 @@ function ExitSettings() {
   };
 
   return (
-    <Card title="Exits & risk" icon={SlidersHorizontal}
-      subtitle="Target, booking and stops for new positions (a running monitor uses them from its next start). All settings: Environment."
+    <Card title={title} icon={SlidersHorizontal} subtitle={subtitle}
       right={<Link href="/settings/environment" className="text-sm text-gray-400 underline">Environment</Link>}>
       <ErrorBox error={env.error || error} />
       {saved && <Notice tone="ok" className="mb-4">Saved.</Notice>}
       {!env.data ? <Skeleton className="h-20" /> : (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {EXIT_KEYS.map(([key, label]) => {
+            {keys.map(([key, label]) => {
               const s = settings[key];
               if (!s) return null;
               const value = draft[key] ?? s.value;
               return (
                 <Field key={key} label={label} hint={s.help}>
-                  {s.choices.length ? (
+                  {s.choices.length || s.kind === "bool" ? (
                     <Select value={value} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}>
-                      {s.choices.map((ch) => <option key={ch}>{ch}</option>)}
+                      {(s.choices.length ? s.choices : ["true", "false"]).map((ch) => <option key={ch}>{ch}</option>)}
                     </Select>
                   ) : (
                     <input className="field" value={value} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />

@@ -1756,6 +1756,8 @@ class PositionMonitor:
         for pos in raw_positions:
             if pos.quantity <= 0:
                 continue
+            if is_non_cnc_product(getattr(pos, "product", "")):
+                continue  # intraday (the scalper's) or derivatives: not this monitor's
             try:
                 scrip_code = await resolve_scrip_code(self._client, pos.symbol)
             except Exception:

@@ -522,6 +522,9 @@ class TradingSignal(BaseModel):
     # delivery holdings. An analysis SELL leaves it False (it may sell holdings). Paper
     # ignores it.
     position_only: bool = False
+    # None: CNC (delivery). The scalper trades INTRADAY; its positions are its own (the
+    # swing monitor and CLOSING manage CNC rows only)
+    product: Optional[Product] = None
 
 
 class ExecutionResult(BaseModel):

@@ -21,6 +21,7 @@ from typing import Optional
 import typer
 
 from skopaq import __version__
+from skopaq.cli.theme import console
 from skopaq.cli.display import (
     display_analyze_result,
     display_analyze_start,
@@ -209,6 +210,126 @@ async def _run_ticks(config, symbols: list[str], seconds: int, interval: int,
             await order_feed.stop()
     print(f"{feed.ticks} tick(s), {feed.connects} connection(s)")
     return 0 if feed.ticks else 1
+
+
+@app.command("scalp")
+def scalp(
+    live: bool = typer.Option(False, "--live", help="Real INTRADAY orders on INDstocks."),
+    confirm_live: bool = typer.Option(False, "--confirm-live", help="Skip the live prompt."),
+    symbols: str = typer.Option("", help="Comma-separated symbols (default: SCALP_SYMBOLS)."),
+    strategies: str = typer.Option("", help="vwap_pullback,ema_rsi,orb,range_reversal"),
+) -> None:
+    """Run the intraday scalper now, until its flatten time (paper unless --live)."""
+    from skopaq.config import SkopaqConfig
+
+    _setup_logging("INFO")
+    config = SkopaqConfig()
+    config.trading_mode = "live" if live else "paper"
+    if symbols:
+        config.scalp_symbols = symbols
+    if strategies:
+        config.scalp_strategies = strategies
+    if live and not confirm_live and not typer.confirm(
+            "LIVE scalping: real INTRADAY orders with real money. Proceed?"):
+        raise typer.Exit(1)
+    report = asyncio.run(_run_scalp(config))
+    console.print(report.summary())
+    raise typer.Exit(4 if report.left_open else 0)
+
+
+async def _run_scalp(config):
+    import signal as sig
+    import time as _time
+
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.paper_engine import PaperEngine
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.broker.websocket import feeds_from_config
+    from skopaq.constants import DAEMON_PAPER_SAFETY_RULES, DAEMON_SAFETY_RULES
+    from skopaq.execution.control import ControlChannel, watch_stop
+    from skopaq.execution.executor import Executor
+    from skopaq.execution.order_router import OrderRouter
+    from skopaq.execution.pnl_history import seed_safety_checker
+    from skopaq.execution.safety_checker import SafetyChecker
+    from skopaq.scalping.engine import ScalpEngine
+
+    live = config.trading_mode == "live"
+    tokens = TokenManager()
+    client = INDstocksClient(config, tokens)
+    router = OrderRouter(config, PaperEngine(initial_capital=config.initial_paper_capital),
+                         live_client=client if live else None)
+    rules = DAEMON_SAFETY_RULES if live else DAEMON_PAPER_SAFETY_RULES
+    safety = SafetyChecker(rules=rules,
+                           max_sector_concentration_pct=config.max_sector_concentration_pct)
+    seed_safety_checker(safety, config)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for s in (sig.SIGINT, sig.SIGTERM):
+        loop.add_signal_handler(s, stop.set)
+    control = ControlChannel.from_config(config)
+    watcher = loop.create_task(watch_stop(control, stop, started_at=_time.time()))
+    feed, _ = feeds_from_config(config, tokens)
+    async with client:
+        if feed is not None:
+            await feed.start()
+        engine = ScalpEngine(
+            config, Executor(router, safety), client, router, feed=feed, control=control,
+            on_trade=lambda signal, execution: _record_exit(config, None, None, signal,
+                                                            execution),
+            max_qty=rules.max_lots_per_position)
+        try:
+            report = await engine.run(stop)
+        finally:
+            watcher.cancel()
+            if feed is not None:
+                await feed.stop()
+            if router.worker is not None:
+                await router.registry.drain_recordings()
+    return report
+
+
+@app.command("scalp-backtest")
+def scalp_backtest(
+    symbol: str = typer.Argument(..., help="NSE symbol, e.g. RELIANCE"),
+    days: int = typer.Option(5, help="Trading days of 1-minute candles (INDstocks)."),
+    strategies: str = typer.Option("", help="vwap_pullback,ema_rsi,orb,range_reversal"),
+    max_qty: int = typer.Option(0, help="Share cap per scalp (0 = none; the safety rules "
+                                        "allow max_lots_per_position)."),
+    equity: float = typer.Option(1_000_000.0, help="Equity the risk per trade is taken of."),
+) -> None:
+    """Backtest the scalping strategies on past 1-minute candles (no orders)."""
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.config import SkopaqConfig
+    from skopaq.scalping.backtest import fetch_days, simulate
+    from skopaq.scalping.settings import ScalpSettings
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    if strategies:
+        config.scalp_strategies = strategies
+    settings = ScalpSettings.from_config(config)
+
+    async def load():
+        async with INDstocksClient(config, TokenManager()) as client:
+            return await fetch_days(client, symbol.upper(), days)
+
+    candles = asyncio.run(load())
+    if not candles:
+        console.print(f"No 1-minute candles for {symbol.upper()}")
+        raise typer.Exit(1)
+    result = simulate(symbol.upper(), candles, settings, equity=equity,
+                      max_qty=max_qty or None)
+    console.print(f"{symbol.upper()}: {len(candles)} day(s), strategies "
+                  f"{', '.join(settings.strategies)} (skipped for charges: "
+                  f"{result.skipped_cost})")
+    for name, row in result.stats().items():
+        console.print(f"  {name:<15} trades {row['trades']:>3}  win {row['win_rate_pct']:>5}%  "
+                      f"net ₹{row['net_pnl']:>10,.2f}  PF {row['profit_factor']}  "
+                      f"max DD ₹{row['max_drawdown']:,.2f}")
+    for t in result.trades[-20:]:
+        console.print(f"  {t.day} {t.opened}-{t.closed} {t.strategy:<14} {t.qty:>5} "
+                      f"{t.entry:>9.2f} → {t.exit:>9.2f}  ₹{t.pnl:>9.2f}  {t.reason}")
 
 
 @app.command("report")
@@ -1548,6 +1669,13 @@ async def _run_lifecycle(config, graph, memory_store, result, *,
     return booked
 
 
+def _product_of(signal) -> str:
+    """The trade row's product: the signal's (the scalper's INTRADAY), else CNC."""
+    product = getattr(signal, "product", None)
+    value = getattr(product, "value", product)
+    return value if isinstance(value, str) and value else "CNC"
+
+
 def _agent_decision(signal) -> dict:
     """The decision stored on a trade row; a BUY's exit plan (stop-loss, target) too,
     which the dashboard shows on open positions."""
@@ -1623,7 +1751,7 @@ def _build_trade_record(result, config):
     return TradeRecord(
         symbol=trade_symbol,
         exchange="BINANCE" if is_crypto else "NSE",
-        product="SPOT" if is_crypto else "CNC",
+        product="SPOT" if is_crypto else _product_of(result.signal),
         side=result.signal.action,
         quantity=filled_quantity_of(execution, result.signal.quantity or Decimal("1")),
         order_id=order_id,

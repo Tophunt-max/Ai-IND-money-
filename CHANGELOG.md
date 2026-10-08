@@ -26,6 +26,24 @@ All notable changes to SkopaqTrader. The format follows
 
 ### Added
 
+- **Intraday scalping engine** (`skopaq/scalping/`, `docs/trading/scalping.md`). It trades
+  long scalps on live ticks with the INTRADAY product, and runs beside the daily session
+  (`SKOPAQ_SCALP_ENABLED`, off by default) or alone (`skopaq scalp`).
+  - **Strategies:** `vwap_pullback`, `ema_rsi`, `orb` and `range_reversal`, evaluated on
+    1-minute candles seeded from REST history.
+  - **Limits:** trades a day, open scalps, daily loss, a cool-down after a loss, and the
+    kill switch.
+  - **Sizing:** by risk, capped by value and by the safety share cap.
+  - **Charges:** a scalp whose target does not pay its round-trip charges several times
+    over is skipped.
+  - **Exits:** stop and target, then breakeven at 1 R and a one-ATR trail, a time stop,
+    and a flatten at 15:10.
+  - **Backtest:** `skopaq scalp-backtest SYMBOL --days N` runs the same strategy and exit
+    code on past 1-minute candles.
+  - **Dashboard:** a Scalper card (P&L after charges, per strategy, open scalps with
+    Close, the day's trades) and a Scalping settings card.
+  - `TradingSignal.product` now carries INTRADAY through the Executor and onto trade rows.
+    The swing monitor and CLOSING manage CNC rows only.
 - **Control center in the dashboard** (new **Control** page, admin actions). From the page
   you can:
   - pause or resume new BUYs;

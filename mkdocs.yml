@@ -65,6 +65,7 @@ nav:
     - Options Selling: trading/options-selling.md
     - GTT Orders: trading/gtt-orders.md
     - Swing Trading: trading/swing-trading.md
+    - Intraday Scalping: trading/scalping.md
     - Live Trading: trading/live-trading.md
   - Telegram Bot:
     - Setup: telegram/setup.md

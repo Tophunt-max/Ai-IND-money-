@@ -679,3 +679,52 @@ async def test_slow_notification_does_not_hold_up_the_session(daemon):
 
     assert report.errors == ["x"]
     assert loop.time() - began < 2
+
+
+# ── The scalper beside the session ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_scalper_runs_beside_the_session_and_reports(daemon, config):
+    from skopaq.scalping.engine import ScalpReport, ScalpTrade
+
+    config.scalp_enabled = True
+    config.ws_price_feed_enabled = False
+    seen = {}
+
+    class FakeScalper:
+        def __init__(self, cfg, executor, client, router, **kw):
+            seen["max_qty"] = kw.get("max_qty")
+
+        async def run(self, stop):
+            seen["stopped_before"] = stop.is_set()
+            report = ScalpReport()
+            report.trades.append(ScalpTrade("TCS", "orb", 5, 100, 101, 3.5, "SCALP TARGET",
+                                            "09:40", "09:50"))
+            return report
+
+    daemon._router = MagicMock()
+    daemon._rules = MagicMock(max_lots_per_position=5)
+    with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock), \
+         patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
+         patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=[]), \
+         patch("skopaq.scalping.engine.ScalpEngine", FakeScalper), \
+         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
+         patch.object(daemon, "_notify_report", new_callable=AsyncMock):
+        report = await daemon.run_session()
+
+    assert seen == {"max_qty": 5, "stopped_before": False}
+    assert report.scalp_pnl == 3.5 and "orb" in report.scalp_summary
+    assert "Scalper: 1 trade(s)" in daemon._log_report(report)
+
+
+@pytest.mark.asyncio
+async def test_no_scalper_unless_enabled_or_in_a_dry_run(daemon, config):
+    config.scalp_enabled = MagicMock()          # not a real True
+    with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock), \
+         patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
+         patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=[]), \
+         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
+         patch.object(daemon, "_notify_report", new_callable=AsyncMock):
+        report = await daemon.run_session()
+    assert report.scalp_summary == ""

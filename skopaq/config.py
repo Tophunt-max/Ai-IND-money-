@@ -38,6 +38,19 @@ _LENIENT_FIELDS = (
     "ws_price_feed_enabled",
     "ws_order_feed_enabled",
     "ws_tick_max_age_seconds",
+    "scalp_enabled",
+    "scalp_candle_seconds",
+    "scalp_risk_per_trade_pct",
+    "scalp_max_position_value_inr",
+    "scalp_max_trades_per_day",
+    "scalp_max_open",
+    "scalp_max_daily_loss_inr",
+    "scalp_cooldown_minutes",
+    "scalp_max_hold_minutes",
+    "scalp_min_reward_to_cost",
+    "scalp_rest_poll_seconds",
+    "scalp_rr",
+    "scalp_orb_minutes",
 )
 
 
@@ -197,6 +210,28 @@ class SkopaqConfig(BaseSettings):
     monitor_partial_booking_pct: float = 0.5
     # Plans (with their high-water mark and what was booked) survive a monitor restart
     exit_plan_dir: str = "~/.skopaq/exit_plans"
+    # ── Scalper (skopaq/scalping/): intraday scalps on live ticks, INTRADAY product ──
+    # Runs inside the daemon session when enabled (or alone: skopaq scalp)
+    scalp_enabled: bool = False
+    scalp_symbols: str = ("RELIANCE,HDFCBANK,ICICIBANK,INFY,TCS,SBIN,AXISBANK,KOTAKBANK,LT,"
+                          "BHARTIARTL")
+    scalp_strategies: str = "vwap_pullback,ema_rsi,orb,range_reversal"  # priority order
+    scalp_candle_seconds: int = 60
+    scalp_risk_per_trade_pct: float = 0.0025   # 0.25 % of equity at risk per scalp
+    scalp_max_position_value_inr: float = 50_000.0
+    scalp_max_trades_per_day: int = 10
+    scalp_max_open: int = 2
+    scalp_max_daily_loss_inr: float = 2_000.0  # no new scalps once the day lost this
+    scalp_cooldown_minutes: float = 5.0        # after a losing scalp
+    scalp_entry_start: str = "09:30"
+    scalp_entry_end: str = "14:45"
+    scalp_flatten_at: str = "15:10"            # before the broker's intraday square-off
+    scalp_max_hold_minutes: float = 30.0       # time stop without profit
+    scalp_rr: float = 1.5                      # target = rr × risk (ORB / range: their own)
+    scalp_min_reward_to_cost: float = 2.0      # target profit ≥ this × round-trip charges
+    scalp_orb_minutes: int = 15
+    scalp_rest_poll_seconds: float = 3.0       # batched REST quotes when the feed is down
+
     # Dashboard control: status, stop/start requests and commands (shared home volume)
     control_dir: str = "~/.skopaq/control"
 
