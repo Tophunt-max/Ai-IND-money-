@@ -35,8 +35,10 @@ export function useApi<T = any>(path: string | null, intervalMs?: number) {
 
 export interface Job {
   id: string;
-  kind: "analyze" | "trade" | "scan";
+  kind: "analyze" | "trade" | "scan" | "backtest" | "montecarlo" | "settle";
   symbol: string;
+  by?: string;
+  params?: { days: number; stop_loss_pct: number; target_pct: number; simulations: number };
   status: "queued" | "running" | "done" | "failed";
   created_at: number;
   started_at: number | null;

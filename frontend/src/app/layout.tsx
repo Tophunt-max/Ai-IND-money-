@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from "next";
 
 import AuthGate from "@/components/AuthGate";
-import Nav from "@/components/Nav";
 import PwaRegister from "@/components/PwaRegister";
+import Shell from "@/components/Shell";
 
 import "./globals.css";
 
@@ -20,17 +20,17 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#030712",
+  viewportFit: "cover",
+  themeColor: "#05070d",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-gray-950 text-gray-100 min-h-screen">
+      <body className="min-h-screen">
         <PwaRegister />
         <AuthGate>
-          <Nav />
-          <main className="max-w-6xl mx-auto px-4 md:px-6 py-6 pb-24 md:pb-10">{children}</main>
+          <Shell>{children}</Shell>
         </AuthGate>
       </body>
     </html>

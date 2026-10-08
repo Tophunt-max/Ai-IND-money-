@@ -1,3 +1,54 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-ink-950 text-gray-100 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "tnum";
+    background-image:
+      radial-gradient(60rem 30rem at 10% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+      radial-gradient(50rem 25rem at 100% 0%, rgba(16, 185, 129, 0.07), transparent 60%);
+    background-attachment: fixed;
+  }
+  ::selection {
+    @apply bg-brand-500/40 text-white;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #283049 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-600;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply rounded-2xl border border-white/[0.06] bg-ink-900/70 shadow-card backdrop-blur-xl;
+  }
+  .field {
+    @apply w-full rounded-xl border border-white/[0.08] bg-ink-850 px-3.5 py-2.5 text-sm text-gray-100
+      placeholder:text-gray-500 outline-none transition
+      focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/20;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium text-gray-400;
+  }
+  .link {
+    @apply text-brand-300 hover:text-brand-400 transition-colors;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}

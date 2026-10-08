@@ -1,10 +1,14 @@
 "use client";
 
+import {
+  ChevronRight, History, LogOut, OctagonX, Play, PlugZap, Server, Settings, ShieldCheck,
+  SlidersHorizontal, Smartphone, User,
+} from "lucide-react";
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 
 import { useAuth } from "@/components/AuthGate";
-import { Badge, Button, Card, Empty, ErrorBox, Loading, PageTitle } from "@/components/ui";
+import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, Segmented, Skeleton } from "@/components/ui";
 import { api, BACKEND_URL, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { supabase } from "@/lib/supabase";
@@ -30,8 +34,6 @@ function device(ua: string | null): string {
 
 function Account() {
   const { user, isAdmin, signOut } = useAuth();
-  const [scope, setScope] = useState<"mine" | "all">("mine");
-  const logins = useApi<{ logins: Login[] }>(`/api/dashboard/auth/logins?limit=30&scope=${scope}`);
   const [pw, setPw] = useState("");
   const [pwMsg, setPwMsg] = useState<string | null>(null);
   const [pwErr, setPwErr] = useState<string | null>(null);
@@ -54,62 +56,61 @@ function Account() {
 
   if (!user) return null;
   return (
-    <>
-      <Card title="👤 Account" right={<Badge tone={isAdmin ? "ok" : "neutral"}>{user.role.toUpperCase()}</Badge>}>
-        <dl className="text-sm space-y-2">
-          <div className="flex justify-between gap-3"><dt className="text-gray-500">Email</dt><dd className="break-all">{user.email}</dd></div>
-          {user.name && <div className="flex justify-between"><dt className="text-gray-500">Name</dt><dd>{user.name}</dd></div>}
-          <div className="flex justify-between"><dt className="text-gray-500">Signed in with</dt><dd>{user.provider || user.via}</dd></div>
-        </dl>
-        {!isAdmin && (
-          <p className="text-xs text-gray-500 mt-3">View-only: you can see everything, but not run analyses, trades, scans, chat or the kill switch.</p>
-        )}
-        {user.provider === "email" && (
-          <form onSubmit={changePassword} className="flex gap-2 mt-4">
-            <input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
-              placeholder="New password" className="flex-1 bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm" />
-            <Button type="submit" variant="ghost" disabled={!pw}>Change</Button>
-          </form>
-        )}
-        {pwMsg && <p className="text-sm text-green-400 mt-2">{pwMsg}</p>}
-        <ErrorBox error={pwErr} />
-        <div className="grid grid-cols-2 gap-2 mt-4">
-          <Button variant="ghost" onClick={() => signOut(false)}>Logout</Button>
-          <Button variant="danger" onClick={logoutAll}>Logout all devices</Button>
+    <Card title="Account" icon={User} right={<Badge tone={isAdmin ? "ok" : "neutral"}>{user.role.toUpperCase()}</Badge>}>
+      <div className="mb-5 flex items-center gap-4">
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-brand-500 to-cyan-400 text-lg font-semibold uppercase text-white">
+          {(user.name || user.email).slice(0, 1)}
         </div>
-      </Card>
+        <div className="min-w-0">
+          <div className="truncate font-medium text-white">{user.name || user.email}</div>
+          <div className="truncate text-xs text-gray-500">{user.email} · {user.provider || user.via}</div>
+        </div>
+      </div>
+      {!isAdmin && <p className="mb-4 text-xs text-gray-500">View-only: you can see everything, but not run analyses, trades, scans, chat or the kill switch.</p>}
+      {user.provider === "email" && (
+        <form onSubmit={changePassword} className="flex gap-2">
+          <input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
+            placeholder="New password" className="field" />
+          <Button type="submit" variant="ghost" disabled={!pw}>Change</Button>
+        </form>
+      )}
+      {pwMsg && <p className="mt-2 text-sm text-emerald-300">{pwMsg}</p>}
+      <ErrorBox error={pwErr} />
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <Button variant="ghost" icon={LogOut} onClick={() => signOut(false)}>Logout</Button>
+        <Button variant="ghost" onClick={logoutAll} className="text-rose-300">Logout all devices</Button>
+      </div>
+    </Card>
+  );
+}
 
-      <Card
-        title="🕒 Login history"
-        right={isAdmin && (
-          <select value={scope} onChange={(e) => setScope(e.target.value as "mine" | "all")}
-            className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs">
-            <option value="mine">Mine</option>
-            <option value="all">All users</option>
-          </select>
-        )}
-      >
-        <ErrorBox error={logins.error} />
-        {logins.loading && !logins.data ? <Loading /> : (logins.data?.logins.length || 0) === 0 ? (
-          <Empty>No logins recorded yet.</Empty>
-        ) : (
-          <div className="divide-y divide-gray-800">
-            {logins.data!.logins.map((l, i) => (
-              <div key={i} className="py-2 flex items-start justify-between gap-3 text-sm">
-                <div>
-                  <div>{device(l.user_agent)} {l.provider && <span className="text-xs text-gray-500">· {l.provider}</span>}</div>
-                  <div className="text-xs text-gray-500">{scope === "all" && `${l.email} · `}IP {l.ip || "?"}</div>
-                </div>
-                <div className="text-right shrink-0">
-                  <Badge tone={l.status === "ok" ? "ok" : "error"}>{l.status === "ok" ? "Login" : "Denied"}</Badge>
-                  <div className="text-xs text-gray-500 mt-1">{when(l.created_at)}</div>
-                </div>
+function LoginHistory() {
+  const { isAdmin } = useAuth();
+  const [scope, setScope] = useState<"mine" | "all">("mine");
+  const logins = useApi<{ logins: Login[] }>(`/api/dashboard/auth/logins?limit=30&scope=${scope}`);
+  return (
+    <Card title="Login history" icon={History}
+      right={isAdmin && <Segmented size="sm" value={scope} onChange={setScope} options={[{ value: "mine", label: "Mine" }, { value: "all", label: "All users" }]} />}>
+      <ErrorBox error={logins.error} />
+      {logins.loading && !logins.data ? <Skeleton className="h-24" /> : (logins.data?.logins.length || 0) === 0 ? (
+        <Empty>No logins recorded yet.</Empty>
+      ) : (
+        <div className="-mx-1 max-h-80 divide-y divide-white/[0.04] overflow-y-auto">
+          {logins.data!.logins.map((l, i) => (
+            <div key={i} className="flex items-start justify-between gap-3 px-1 py-2.5 text-sm">
+              <div className="min-w-0">
+                <div className="text-gray-200">{device(l.user_agent)} {l.provider && <span className="text-xs text-gray-500">· {l.provider}</span>}</div>
+                <div className="truncate text-xs text-gray-500">{scope === "all" && `${l.email} · `}IP {l.ip || "?"}</div>
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    </>
+              <div className="shrink-0 text-right">
+                <Badge tone={l.status === "ok" ? "ok" : "error"}>{l.status === "ok" ? "Login" : "Denied"}</Badge>
+                <div className="mt-1 text-[11px] text-gray-500">{when(l.created_at)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -152,101 +153,74 @@ export default function SettingsPage() {
   };
 
   const k = ks.data;
-  return (
-    <div className="space-y-5">
-      <PageTitle title="Settings" />
-      <Account />
+  const links = [
+    { href: "/broker", label: "Broker connections", text: "INDstocks token, Kite login", icon: PlugZap },
+    ...(isAdmin ? [{ href: "/settings/environment", label: "Environment", text: "Mode, keys, live trading", icon: SlidersHorizontal }] : []),
+  ];
 
-      <Card
-        title="Kill switch"
-        right={k && <Badge tone={k.halted ? "error" : "ok"}>{k.halted ? "HALTED" : "Active"}</Badge>}
-      >
+  return (
+    <div className="space-y-6">
+      <PageTitle title="Settings" icon={Settings} subtitle="Account, safety and connections" />
+
+      <Card title="Kill switch" icon={ShieldCheck}
+        className={k?.halted ? "border-rose-500/30" : ""}
+        right={k && <Badge tone={k.halted ? "error" : "ok"} dot>{k.halted ? "HALTED" : "Trading active"}</Badge>}>
         <ErrorBox error={ks.error || error} />
-        {msg && <div className="text-sm text-blue-300 mb-3">{msg}</div>}
-        {!k ? (
-          <Loading />
-        ) : k.halted ? (
+        {msg && <Notice tone="info" className="mb-4">{msg}</Notice>}
+        {!k ? <Skeleton className="h-16" /> : k.halted ? (
           <div className="space-y-3">
-            <p className="text-sm text-red-300">{k.text}</p>
+            <Notice tone="error" icon={OctagonX} title="All new BUYs are blocked">{k.text}</Notice>
             {k.since && <p className="text-xs text-gray-500">Since {when(k.since)} · source: {k.source}</p>}
-            {!isAdmin ? (
-              <p className="text-xs text-gray-500">Only an admin can resume trading.</p>
-            ) : k.source === "env" ? (
-              <p className="text-xs text-yellow-400">
-                Set by SKOPAQ_TRADING_HALTED in ENV_FILE: remove it there and redeploy to resume
-                (it cannot be changed from the Environment page).
-              </p>
-            ) : (
-              <Button onClick={() => act("/api/dashboard/kill-switch/resume")} disabled={busy}>
-                {busy ? "..." : "Resume trading"}
-              </Button>
-            )}
+            {!isAdmin ? <p className="text-xs text-gray-500">Only an admin can resume trading.</p>
+              : k.source === "env" ? <p className="text-xs text-amber-300">Set by SKOPAQ_TRADING_HALTED in ENV_FILE: remove it there and redeploy to resume.</p>
+              : <Button icon={Play} variant="success" loading={busy} onClick={() => act("/api/dashboard/kill-switch/resume")}>Resume trading</Button>}
           </div>
         ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-gray-400">
-              Trading is active. Halting rejects every new BUY in the scheduler, chat, Telegram and
-              CLI. Selling (closing positions) stays allowed.
-            </p>
-            {isAdmin ? (<>
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Reason (optional)"
-              maxLength={300}
-              className="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm"
-            />
-            <Button variant="danger" onClick={halt} disabled={busy}>
-              {busy ? "..." : "🛑 Halt trading"}
-            </Button>
-            </>) : <p className="text-xs text-gray-500">Only an admin can halt trading.</p>}
+          <div className="space-y-4">
+            <p className="text-sm text-gray-400">Halting rejects every new BUY in the scheduler, chat, Telegram and CLI. Selling (closing positions) stays allowed.</p>
+            {isAdmin ? (
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" maxLength={300} className="field" />
+                <Button variant="danger" icon={OctagonX} loading={busy} onClick={halt} className="shrink-0">Halt trading</Button>
+              </div>
+            ) : <p className="text-xs text-gray-500">Only an admin can halt trading.</p>}
           </div>
         )}
       </Card>
 
-      <Card title="Connection">
-        <dl className="text-sm space-y-2">
-          <div className="flex justify-between gap-3">
-            <dt className="text-gray-500">Backend</dt>
-            <dd className="break-all text-right">{BACKEND_URL}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-gray-500">Version</dt>
-            <dd>{status.data?.version || "—"}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-gray-500">Mode</dt>
-            <dd>{status.data?.mode?.toUpperCase() || "—"}</dd>
-          </div>
-        </dl>
-        <p className="text-xs text-gray-500 mt-4">
-          {isAdmin ? (
-            <>Mode, keys and live trading: <Link href="/settings/environment" className="text-blue-400">⚙️ Environment</Link>{" "}
-              (overrides ENV_FILE). Login and API access settings stay in the ENV_FILE GitHub secret.</>
-          ) : (
-            <>Mode, keys and live trading are changed by an admin.</>
-          )}
-        </p>
-      </Card>
-
-      <Card title="More">
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          {isAdmin && (
-            <Link href="/settings/environment" className="border border-gray-800 rounded p-3 hover:bg-gray-900 col-span-2">⚙️ Environment (mode, keys, live trading)</Link>
-          )}
-          <Link href="/scheduler" className="border border-gray-800 rounded p-3 hover:bg-gray-900">⏰ Scheduler & logs</Link>
-          <Link href="/scanner" className="border border-gray-800 rounded p-3 hover:bg-gray-900">🔎 Scanner</Link>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Account />
+        <div className="space-y-5">
+          <Card title="Connections" icon={Server}>
+            <KV items={[
+              ["Backend", <span key="b" className="break-all text-xs">{BACKEND_URL}</span>],
+              ["Version", status.data?.version || "—"],
+              ["Mode", status.data ? <Badge key="m" tone={status.data.mode === "live" ? "error" : "warning"} dot>{status.data.mode.toUpperCase()}</Badge> : "—"],
+            ]} />
+            <div className="mt-4 space-y-2">
+              {links.map((l) => (
+                <Link key={l.href} href={l.href} className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 transition hover:border-brand-500/30">
+                  <l.icon className="h-5 w-5 text-brand-300" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-gray-100">{l.label}</div>
+                    <div className="text-xs text-gray-500">{l.text}</div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-gray-600" />
+                </Link>
+              ))}
+            </div>
+          </Card>
+          <Card title="Install as an app" icon={Smartphone}>
+            <ul className="space-y-1.5 text-sm text-gray-400">
+              <li><b className="text-gray-200">Android</b> (Chrome): ⋮ menu → Install app</li>
+              <li><b className="text-gray-200">iPhone</b> (Safari): Share → Add to Home Screen</li>
+              <li><b className="text-gray-200">Computer</b> (Chrome/Edge): install icon in the address bar</li>
+            </ul>
+          </Card>
         </div>
-      </Card>
+      </div>
 
-      <Card title="📱 Install as an app">
-        <ul className="text-sm text-gray-400 space-y-1 list-disc pl-5">
-          <li>Android (Chrome): ⋮ menu → <b>Install app</b> / <b>Add to Home screen</b></li>
-          <li>iPhone (Safari): Share → <b>Add to Home Screen</b></li>
-          <li>Computer (Chrome/Edge): install icon in the address bar</li>
-        </ul>
-      </Card>
-
+      <LoginHistory />
     </div>
   );
 }

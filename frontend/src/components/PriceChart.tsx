@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import Chart from "@/components/Chart";
-import { ErrorBox, Loading } from "@/components/ui";
+import { ErrorBox, Loading, Segmented } from "@/components/ui";
 import { inr } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 
@@ -26,18 +26,9 @@ export default function PriceChart({ symbol, initial = "3mo" }: { symbol: string
 
   return (
     <div>
-      <div className="flex gap-1 flex-wrap mb-3">
-        {RANGES.map((r) => (
-          <button
-            key={r}
-            onClick={() => setRange(r)}
-            className={`px-2.5 py-1 rounded text-xs ${
-              range === r ? "bg-gray-700 text-white" : "text-gray-400 hover:text-white"
-            }`}
-          >
-            {r.toUpperCase()}
-          </button>
-        ))}
+      <div className="mb-4">
+        <Segmented size="sm" value={range} onChange={setRange}
+          options={RANGES.map((r) => ({ value: r as string, label: r.toUpperCase() }))} />
       </div>
       <ErrorBox error={error} />
       {loading && !data ? (

@@ -16,7 +16,8 @@ jobs, the kill switch and chat need ``admin``.
 - ``POST /api/dashboard/kill-switch/resume``  lift the dashboard/CLI halt
 - ``GET  /api/dashboard/settings/env``        SKOPAQ_* settings and their source (admin)
 - ``POST /api/dashboard/settings/env``        set / remove dashboard overrides (admin)
-- ``POST /api/dashboard/jobs``                start an ``analyze``, paper ``trade`` or ``scan`` job
+- ``POST /api/dashboard/jobs``                start an ``analyze``, paper ``trade``, ``scan``,
+  ``backtest``, ``montecarlo`` or ``settle`` job
 - ``GET  /api/dashboard/jobs``                recent jobs
 - ``GET  /api/dashboard/jobs/{id}``           one job (poll until done)
 - ``GET  /api/dashboard/market/{quotes,indices,history,watchlist}``  Yahoo Finance prices
@@ -503,9 +504,17 @@ _lock = asyncio.Lock()
 
 
 class JobRequest(BaseModel):
-    kind: Literal["analyze", "trade", "scan"]
+    kind: Literal["analyze", "trade", "scan", "backtest", "montecarlo", "settle"]
     symbol: str = ""
     max_candidates: int = Field(5, ge=1, le=20)
+    # backtest / montecarlo
+    days: int = Field(365, ge=60, le=1825)
+    stop_loss_pct: float = Field(3.0, gt=0, le=50)
+    target_pct: float = Field(6.0, gt=0, le=100)
+    simulations: int = Field(1000, ge=100, le=10000)
+
+
+_SYMBOL_KINDS = ("analyze", "trade", "backtest", "montecarlo")
 
 
 def _analysis_dict(result) -> dict[str, Any]:
@@ -565,6 +574,21 @@ async def _run_job(job: dict[str, Any]) -> None:
                 job["status"] = "failed" if result.error else "done"
                 if result.error:
                     job["error"] = result.error
+            elif job["kind"] in ("backtest", "montecarlo", "settle"):
+                from skopaq.api import dashboard_tools as tools
+
+                p = job["params"]
+                if job["kind"] == "backtest":
+                    result = await asyncio.to_thread(
+                        tools.run_backtest_job, job["symbol"], p["days"],
+                        p["stop_loss_pct"], p["target_pct"])
+                elif job["kind"] == "montecarlo":
+                    result = await asyncio.to_thread(
+                        tools.run_montecarlo_job, job["symbol"], p["days"], p["simulations"])
+                else:
+                    result = await asyncio.to_thread(tools.run_settle_job)
+                job["result"] = result
+                job["status"] = "done"
             else:
                 candidates = await asyncio.to_thread(
                     asyncio.run, cli._run_scan(job["max_candidates"]))
@@ -585,15 +609,20 @@ def _public(job: dict[str, Any]) -> dict[str, Any]:
 @router.post("/jobs", status_code=202)
 async def start_job(body: JobRequest, user: DashboardUser = Depends(require_admin)) -> dict:
     if any(j["status"] in ("queued", "running") for j in _jobs.values()):
-        raise HTTPException(409, "Another analysis or scan is still running: wait for it")
+        raise HTTPException(409, "Another job (analysis, scan, backtest, settle) is still "
+                                 "running: wait for it")
     symbol = body.symbol.strip().upper()
-    if body.kind in ("analyze", "trade") and not _SYMBOL.match(symbol):
+    if body.kind in _SYMBOL_KINDS and not _SYMBOL.match(symbol):
         raise HTTPException(422, "Give an NSE symbol, e.g. RELIANCE or TCS")
     if body.kind == "trade" and SkopaqConfig().trading_mode != "paper":
         raise HTTPException(403, "Dashboard trades are paper only (the server is in live mode)")
     job = {
-        "id": uuid.uuid4().hex[:12], "kind": body.kind, "symbol": symbol,
+        "id": uuid.uuid4().hex[:12], "kind": body.kind,
+        "symbol": symbol if body.kind in _SYMBOL_KINDS else "",
         "max_candidates": body.max_candidates, "status": "queued",
+        "params": {"days": body.days, "stop_loss_pct": body.stop_loss_pct,
+                   "target_pct": body.target_pct, "simulations": body.simulations},
+        "by": user.email,
         "created_at": time.time(), "started_at": None, "finished_at": None,
         "result": None, "error": None,
     }
