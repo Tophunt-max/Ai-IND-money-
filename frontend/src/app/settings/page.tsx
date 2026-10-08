@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useState, type FormEvent } from "react";
 
 import { useAuth } from "@/components/AuthGate";
+import ModeSwitch, { useModeChanged } from "@/components/ModeSwitch";
 import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, Segmented, Skeleton } from "@/components/ui";
 import { api, BACKEND_URL, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -127,6 +128,7 @@ export default function SettingsPage() {
   const { isAdmin } = useAuth();
   const ks = useApi<Halt>("/api/dashboard/kill-switch");
   const status = useApi<{ version: string; mode: string }>("/api/status");
+  useModeChanged(status.reload);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -161,6 +163,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <PageTitle title="Settings" icon={Settings} subtitle="Account, safety and connections" />
+
+      <ModeSwitch />
 
       <Card title="Kill switch" icon={ShieldCheck}
         className={k?.halted ? "border-rose-500/30" : ""}
