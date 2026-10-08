@@ -9,7 +9,7 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 | Dashboard | Total P&L with the 90-day chart, kill-switch and token banners, today's auto-trading session, open positions, system health | `/api/dashboard/overview`, `/pnl-history`, `/scheduler`, `/api/status` |
 | Portfolio | INDstocks equity positions, F&O positions, holdings, funds (incl. option-buy and futures balances) and today's order book. Read only | `/api/dashboard/portfolio` |
 | **Control** | Run the engine: pause/resume new BUYs, auto sessions on/off, **start a session now** (or, live, a monitor), **stop** the running session, live positions (LTP, P&L, stop, target, high) with **Close** / **Close all** and stop/target edits, **manual orders** (live: type LIVE), today's order book with **Cancel**, exit & risk settings. Streams every 2 s (admin actions only; each is logged and sent to Telegram) | `/api/dashboard/control*` |
-| Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y) | `/api/dashboard/market/*` |
+| Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y), live from INDstocks (Yahoo only as a fallback) | `/api/dashboard/market/*` |
 | Analyze | Full multi-agent analysis (`skopaq analyze`), or analysis + **paper** trade (`skopaq trade`, refused unless the server is in paper mode), 2–5 min | `/api/dashboard/jobs` |
 | Scanner | One scan of the watchlist (`skopaq scan`), and the background scanner's status and candidates | `/api/dashboard/jobs`, `/scanner/status` |
 | Options | INDstocks expiries, option chain (with Delta) and a rule-based option-selling idea (short put / call / strangle). Needs the INDstocks token; places nothing | `/api/dashboard/options/expiries`, `/options/chain`, `/options/suggest` |
@@ -45,9 +45,23 @@ monitor runs has no automatic stop or target until one does: the page says so �
 **Start monitor**. The reverse proxy must not buffer the stream (the API sends
 `X-Accel-Buffering: no`; Caddy streams `text/event-stream` as is).
 
-Prices, charts and unrealized P&L come from Yahoo Finance (`skopaq/broker/yahoo_quotes.py`)
-and can lag NSE by a few minutes. Paper fills use the same price when INDstocks has no
-token; live orders never do.
+Market data comes from INDstocks (INDmoney) whenever the server has a valid token
+(`skopaq/broker/live_quotes.py`):
+
+- **Stock quotes** come from `/market/quotes/full`.
+- **Index quotes** come from the index instruments file. NIFTY 50 is `NIDX_40000001`; the
+  code that answers is found once and remembered.
+- **Charts** come from `/market/historical`: 5-minute candles for 1D, 15-minute for 5D,
+  daily up to 1Y, and weekly for 5Y.
+- **Refresh:** while NSE is open, the Market page refreshes every 5 s and the 1D chart
+  every 10 s.
+- **The badge** on each quote and chart says **LIVE · INDstocks** or **Delayed · Yahoo
+  Finance**.
+
+Yahoo Finance (`skopaq/broker/yahoo_quotes.py`, which can lag NSE by several minutes) is
+used only without a token, for symbols INDstocks cannot resolve, and when INDstocks fails.
+Set the token, or turn on TOTP so it renews daily ([Go live](go-live.md) §2). Paper fills
+use Yahoo only when INDstocks has no token; live orders never do.
 
 The dashboard is a PWA: on a phone, "Add to Home screen" / "Install app" opens it full screen.
 The service worker caches the app shell only, never API responses.

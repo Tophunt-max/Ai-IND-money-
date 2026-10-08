@@ -68,8 +68,10 @@ function Market() {
   useEffect(() => setInput(symbol), [symbol]);
 
   const open = useMarketOpen();
-  const every = open ? 15000 : 60000;
-  const indices = useApi<{ indices: (Quote & { name: string })[] }>("/api/dashboard/market/indices", every);
+  // INDstocks is live: every 5 s while NSE is open (Yahoo lags anyway: 15 s)
+  const [liveSource, setLiveSource] = useState(false);
+  const every = open ? (liveSource ? 5000 : 15000) : 60000;
+  const indices = useApi<{ indices: (Quote & { name: string })[]; source?: string }>("/api/dashboard/market/indices", every);
   const watch = useApi<{ symbols: string[] }>("/api/dashboard/market/watchlist");
   const quote = useApi<{ quotes: Record<string, Quote>; errors: Record<string, string> }>(
     symbol ? `/api/dashboard/market/quotes?symbols=${encodeURIComponent(symbol)}` : null,
@@ -78,8 +80,12 @@ function Market() {
   const quoteAgo = useAgo(quote.updatedAt);
   const indicesAgo = useAgo(indices.updatedAt);
   const q = symbol ? quote.data?.quotes[symbol] : undefined;
+  const indicesLive = (indices.data?.indices || []).some((i) => i.source === "indstocks");
+  useEffect(() => setLiveSource(indicesLive || q?.source === "indstocks"), [indicesLive, q?.source]);
   const qErr = symbol ? quote.data?.errors[symbol] : undefined;
   const isIndex = symbol.startsWith("^");
+  // Index levels are points, not rupees
+  const fmt = (v: number | null) => (isIndex ? (v == null ? "—" : v.toLocaleString("en-IN", { maximumFractionDigits: 2 })) : inr(v));
 
   const go = (s: string) => {
     const v = s.trim().toUpperCase();
@@ -92,14 +98,17 @@ function Market() {
 
   return (
     <div className="space-y-6">
-      <PageTitle title="Market" icon={LineChart} subtitle="Live NSE quotes from INDstocks when the token is set; indices and charts from Yahoo Finance"
+      <PageTitle title="Market" icon={LineChart} subtitle="Live quotes, indices and charts from INDstocks (INDmoney) when the token is set; Yahoo Finance only as a fallback"
         right={<Link href="/scanner"><Button variant="ghost" icon={Radar}>Scanner</Button></Link>} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {(indices.data?.indices || []).map((i) => (
           <button key={i.name} onClick={() => go(i.symbol)}
             className={`surface p-4 text-left transition hover:border-brand-500/30 ${symbol === i.symbol ? "ring-1 ring-brand-500/40" : ""}`}>
-            <div className="text-xs font-medium text-gray-400">{i.name}</div>
+            <div className="flex items-center justify-between gap-2 text-xs font-medium text-gray-400">
+              <span>{i.name}</span>
+              <span className={`text-[10px] ${i.source === "indstocks" ? "text-emerald-400" : "text-amber-300/80"}`}>{i.source === "indstocks" ? "LIVE" : "Delayed"}</span>
+            </div>
             <div className="mt-1 flex items-end justify-between gap-2">
               <div className="num text-xl font-semibold text-white"><Flash value={i.ltp}>{i.ltp?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}</Flash></div>
               <Change q={i} />
@@ -110,7 +119,7 @@ function Market() {
       </div>
       <div className="-mt-3 flex items-center gap-2 text-[11px] text-gray-500">
         <span className={`h-1.5 w-1.5 rounded-full ${open ? "animate-pulse bg-emerald-400" : "bg-gray-600"}`} />
-        {open ? `NSE open · auto-refresh every ${every / 1000}s` : "NSE closed · refresh every minute"} · updated {indicesAgo}
+        {open ? `NSE open · auto-refresh every ${every / 1000}s` : "NSE closed · refresh every minute"} · {indicesLive ? "INDstocks live" : "Yahoo Finance (no INDstocks token?)"} · updated {indicesAgo}
       </div>
       <ErrorBox error={indices.error} />
 
@@ -145,14 +154,14 @@ function Market() {
                 <div>
                   <div className="text-sm font-medium text-gray-400">{symbol}</div>
                   <div className="num mt-1 text-4xl font-semibold tracking-tight text-white">
-                    <Flash value={q.ltp}>{isIndex ? q.ltp?.toLocaleString("en-IN") : inr(q.ltp)}</Flash>
+                    <Flash value={q.ltp}>{fmt(q.ltp)}</Flash>
                   </div>
                   <div className="mt-2"><Change q={q} big /></div>
                 </div>
                 <div className="flex flex-col items-end gap-1.5 text-right text-xs text-gray-500">
                   {q.source === "indstocks"
                     ? <Badge tone="ok" dot>LIVE · INDstocks</Badge>
-                    : <Badge tone="warning" dot>Delayed · Yahoo Finance</Badge>}
+                    : <Link href="/broker"><Badge tone="warning" dot>Delayed · Yahoo Finance — set the INDstocks token</Badge></Link>}
                   <span>As of {when(q.as_of)}</span>
                   <span>Updated {quoteAgo} · every {every / 1000}s</span>
                 </div>
@@ -160,10 +169,10 @@ function Market() {
             ) : null}
             {q && (
               <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <StatCard title="Open" value={inr(q.open)} />
-                <StatCard title="High" value={inr(q.high)} tone="ok" />
-                <StatCard title="Low" value={inr(q.low)} tone="error" />
-                <StatCard title="Prev close" value={inr(q.prev_close)} />
+                <StatCard title="Open" value={fmt(q.open)} />
+                <StatCard title="High" value={fmt(q.high)} tone="ok" />
+                <StatCard title="Low" value={fmt(q.low)} tone="error" />
+                <StatCard title="Prev close" value={fmt(q.prev_close)} />
               </div>
             )}
             <div className="mt-6"><PriceChart symbol={symbol} /></div>

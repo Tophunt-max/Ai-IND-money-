@@ -239,29 +239,33 @@ async def market_quotes(symbols: str = Query(..., max_length=400)) -> dict:
 
 @router.get("/market/indices")
 async def market_indices() -> dict:
-    from skopaq.broker import yahoo_quotes
+    """NIFTY 50, Bank NIFTY and India VIX: INDstocks live with a token, else Yahoo."""
+    from skopaq.broker import live_quotes, yahoo_quotes
 
-    quotes, errors = await asyncio.to_thread(
-        yahoo_quotes.get_quotes, list(yahoo_quotes.INDICES.values()))
+    quotes, errors = await live_quotes.get_quotes(list(yahoo_quotes.INDICES.values()))
     return {"indices": [{"name": name, **quotes[t]} for name, t in yahoo_quotes.INDICES.items()
-                        if t in quotes], "errors": errors}
+                        if t in quotes], "errors": errors,
+            "source": live_quotes.source_label(quotes)}
 
 
 @router.get("/market/history")
 async def market_history(symbol: str, range: str = "3mo") -> dict:  # noqa: A002
-    from skopaq.broker import yahoo_quotes
+    """Chart candles: INDstocks with a token (live, the current candle included), else
+    Yahoo Finance with today's candle moved to the live price when one is known."""
+    from skopaq.broker import live_quotes, yahoo_quotes
 
     if range not in yahoo_quotes.RANGES:
         raise HTTPException(422, f"range must be one of {', '.join(yahoo_quotes.RANGES)}")
     try:
-        yahoo_quotes.normalize(symbol)
-        data = await asyncio.to_thread(yahoo_quotes.get_history, symbol, range)
+        data = await live_quotes.get_history(symbol, range)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Price history unavailable: {exc}") from exc
     if not data["candles"]:
         raise HTTPException(404, f"No price history for {symbol}")
+    if data.get("source") == "indstocks":
+        return {**data, "live": True, "ltp": data["candles"][-1]["c"]}
     return await _with_live_candle(data)
 
 
@@ -272,7 +276,7 @@ async def _with_live_candle(data: dict[str, Any]) -> dict[str, Any]:
 
     data = {**data, "candles": [dict(c) for c in data["candles"]], "live": False}
     symbol = data.get("symbol", "")
-    if not symbol or symbol.startswith("^"):
+    if not symbol:
         return data
     try:
         quotes, _ = await live_quotes.get_quotes([symbol])

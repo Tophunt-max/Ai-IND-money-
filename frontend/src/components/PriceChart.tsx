@@ -1,7 +1,7 @@
 "use client";
 
 import { CandlestickChart, LineChart } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import CandleChart, { type Candle } from "@/components/CandleChart";
 import Chart from "@/components/Chart";
@@ -17,6 +17,7 @@ interface History {
   interval: string;
   candles: Candle[];
   live?: boolean;
+  source?: "indstocks" | "yahoo";
 }
 
 /** Price chart of one symbol: candles or line, range buttons, refreshed automatically. */
@@ -26,12 +27,16 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
   const open = useMarketOpen();
   // While NSE is open: intraday charts every 15 s, daily ones every minute (today's candle
   // follows the live price). Closed: every 5 minutes.
-  const every = open ? (INTRADAY.has(range) ? 15000 : 60000) : 300000;
+  // INDstocks charts are live: the 1D chart every 10 s
+  const [fast, setFast] = useState(false);
+  const every = open ? (INTRADAY.has(range) ? (fast ? 10000 : 15000) : 60000) : 300000;
   const { data, error, loading, updatedAt } = useApi<History>(
     symbol ? `/api/dashboard/market/history?symbol=${encodeURIComponent(symbol)}&range=${range}` : null,
     every,
   );
   const ago = useAgo(updatedAt);
+  const live = data?.source === "indstocks";
+  useEffect(() => setFast(live), [live]);
   const intraday = INTRADAY.has(range);
   const isIndex = symbol.startsWith("^");
   const format = (v: number) => (isIndex ? v.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : inr(v));
@@ -51,7 +56,7 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
             <span className={`h-1.5 w-1.5 rounded-full ${open ? "animate-pulse bg-emerald-400" : "bg-gray-600"}`} />
-            {open ? (data?.live ? "Live" : "Auto") : "Market closed"} · {ago}
+            {open ? (data?.live ? "Live" : "Auto") : "Market closed"} · {live ? "INDstocks" : data ? "Yahoo (delayed)" : ""} · {ago}
           </span>
           <Segmented size="sm" value={kind} onChange={setKind} options={[
             { value: "candle", label: <CandlestickChart className="h-4 w-4" aria-label="Candles" /> },
