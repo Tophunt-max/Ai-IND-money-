@@ -53,7 +53,7 @@ export function useApi<T = any>(path: string | null, intervalMs?: number) {
 
 export interface Job {
   id: string;
-  kind: "analyze" | "trade" | "scan" | "backtest" | "montecarlo" | "settle";
+  kind: "scan" | "swing_train" | "backtest" | "montecarlo";
   symbol: string;
   by?: string;
   params?: { days: number; stop_loss_pct: number; target_pct: number; simulations: number };
@@ -65,7 +65,7 @@ export interface Job {
   error: string | null;
 }
 
-/** Start an analyze/scan job and poll it every 3 s until it finishes. */
+/** Start a scan/training/backtest job and poll it every 3 s until it finishes. */
 export function useJob() {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -224,21 +224,29 @@ class ExitPlanner:
         return round(entry * (1 - self.hard_stop_pct), 2)
 
     def make(self, symbol: str, mode: str, entry: float, qty: int,
-             stop: Optional[float] = None, *, source: str = "default") -> ExitPlan:
+             stop: Optional[float] = None, *, source: str = "default",
+             target_rr: Optional[float] = None) -> ExitPlan:
+        """``target_rr``: the signal's own R-multiple target (a swing setup's), used when
+        the configured target mode is off."""
         stop_loss = self._stop_for(entry, stop)
+        target = self.target_for(entry, stop_loss, qty)
+        if target is None and isinstance(target_rr, (int, float)) and target_rr > 0:
+            t = round(entry + float(target_rr) * (entry - stop_loss), 2)
+            target = t if t > entry else None
         return ExitPlan(
             symbol=symbol.upper(), mode=mode, entry_price=round(float(entry), 2),
-            stop_loss=stop_loss, target=self.target_for(entry, stop_loss, qty),
+            stop_loss=stop_loss, target=target,
             initial_qty=max(1, int(qty)), partial_fraction=self.partial_fraction,
             high_water_mark=float(entry), source=source,
         )
 
     def plan_for_entry(self, symbol: str, mode: str, entry: float, qty: int,
-                       stop: Optional[float] = None) -> ExitPlan:
+                       stop: Optional[float] = None, *,
+                       target_rr: Optional[float] = None) -> ExitPlan:
         """A new plan for a filled BUY (replaces today's plan of the symbol: the newest
         BUY sets the stop and the target of the whole position). Shares already held
         from before are added by :meth:`plan_for_position`, which sees what is held."""
-        plan = self.make(symbol, mode, entry, qty, stop, source="signal")
+        plan = self.make(symbol, mode, entry, qty, stop, source="signal", target_rr=target_rr)
         self.save(plan)
         logger.info("Exit plan %s: entry %.2f, stop %.2f, target %s, book %s of %d",
                     plan.symbol, plan.entry_price, plan.stop_loss,

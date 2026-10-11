@@ -1,6 +1,6 @@
-"""More dashboard endpoints: broker connection, broker portfolio, scanner status, AI
-learning and memory, the option chain, plus the backtest / Monte Carlo / settle job
-runners used by ``POST /api/dashboard/jobs`` (``skopaq/api/dashboard.py``).
+"""More dashboard endpoints: broker connection, broker portfolio, the swing model,
+learning statistics, the option chain, plus the backtest / Monte Carlo job runners used
+by ``POST /api/dashboard/jobs`` (``skopaq/api/dashboard.py``).
 
 INDstocks is the only broker. Everything here **reads** except setting / clearing the
 INDstocks token (admin). No endpoint places, modifies or cancels an order.
@@ -9,14 +9,14 @@ INDstocks token (admin). No endpoint places, modifies or cancels an order.
 - ``POST   /api/dashboard/broker/indstocks-token``  store today's INDstocks token (admin)
 - ``DELETE /api/dashboard/broker/indstocks-token``  delete the stored token (admin)
 - ``GET    /api/dashboard/portfolio``               positions (equity, F&O), holdings, funds
-- ``GET    /api/dashboard/scanner/status``          background scanner status (not drained)
+- ``GET    /api/dashboard/swing``                   the swing model registry and settings
+- ``POST   /api/dashboard/swing/{v}/promote``       shadow → champion (admin)
+- ``POST   /api/dashboard/swing/rollback``          previous champion back (admin)
 - ``GET    /api/dashboard/learning``                win rates, calibration, sectors, timing
 - ``GET    /api/dashboard/learning/symbol``         one symbol's track record
-- ``GET    /api/dashboard/memory``                  agent memories and reflections for a query
 - ``GET    /api/dashboard/options/expiries``        upcoming F&O expiries of an underlying
 - ``GET    /api/dashboard/options/chain``           option chain with IV and Greeks
 - ``GET    /api/dashboard/options/suggest``         an option-selling idea (no order)
-- ``POST   /api/dashboard/llm/check``               test the custom AI endpoint (admin)
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ import asyncio
 import io
 import logging
 import math
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -229,25 +228,85 @@ async def portfolio() -> dict:
             "fetched_at": datetime.now(timezone.utc).isoformat()}
 
 
-# ── Scanner ───────────────────────────────────────────────────────────────────
+# ── Swing model (skopaq/swing) ────────────────────────────────────────────────
 
 
-@router.get("/scanner/status")
-async def scanner_status() -> dict:
-    """The background scanner (SKOPAQ_SCANNER_ENABLED): status and last candidates."""
-    from skopaq.api import server
+def _swing_registry():
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.model import swing_registry
+
+    return swing_registry(model_dir(SkopaqConfig()))
+
+
+@router.get("/swing")
+async def swing_status() -> dict:
+    from skopaq.swing.model import SWING_GATES
 
     config = SkopaqConfig()
-    engine = server._scanner_engine
-    if engine is None:
-        return {"enabled": config.scanner_enabled, "running": False, "last_candidates": []}
-    status = _jsonable(engine.status)
-    status["enabled"] = config.scanner_enabled
-    status["last_candidates"] = [c.to_dict() for c in getattr(engine, "_last_candidates", [])]
-    return status
+    reg = _swing_registry()
+
+    def read() -> dict[str, Any]:
+        champ, shadow = reg.champion(), reg.shadow()
+        versions = []
+        for v in reversed(reg.versions()[-15:]):
+            rep = v.get("report") or {}
+            versions.append({k: v.get(k) for k in ("version", "state", "created_at",
+                                                   "gate_failures", "shadow_since",
+                                                   "approved_by")}
+                            | {"model_kind": rep.get("model_kind"), "model": rep.get("model"),
+                               "baseline": rep.get("baseline"), "threshold": rep.get("threshold"),
+                               "brier": rep.get("brier"), "brier_base_rate": rep.get("brier_base_rate"),
+                               "by_setup": rep.get("by_setup"), "setups": rep.get("setups"),
+                               "test_from": rep.get("first_test_date"),
+                               "test_to": rep.get("last_test_date")})
+        paper = config.trading_mode != "live"
+        active = champ or (shadow if paper else None)
+        return {"mode": config.trading_mode, "champion": champ["version"] if champ else None,
+                "shadow": shadow["version"] if shadow else None,
+                "active": active["version"] if active else None,
+                "rules_only": paper and config.swing_rules_only,
+                "shadow_days": SWING_GATES.shadow_days, "versions": versions,
+                "history": list(reversed(reg.history(30))),
+                "config": {"symbols": config.swing_symbols or "NIFTY 50",
+                           "model_kind": config.swing_model_kind,
+                           "target_rr": config.swing_target_rr,
+                           "train_days": config.swing_train_days,
+                           "max_trades": config.daemon_max_trades_per_session,
+                           "min_net_rr": config.swing_min_net_rr}}
+
+    return _jsonable(await asyncio.to_thread(read))
 
 
-# ── Learning & memory ─────────────────────────────────────────────────────────
+class SwingReason(BaseModel):
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
+@router.post("/swing/{version}/promote")
+async def swing_promote(version: str, body: SwingReason,
+                        user: DashboardUser = Depends(require_admin)) -> dict:
+    import re
+
+    from skopaq.swing.model import SWING_GATES
+
+    if not re.match(r"^[A-Za-z0-9_\-]{3,80}$", version):
+        raise HTTPException(422, "Not a model version")
+    try:
+        await asyncio.to_thread(_swing_registry().promote, version, approved_by=user.email,
+                                reason=body.reason, gates=SWING_GATES)
+    except KeyError:
+        raise HTTPException(404, "No such swing model") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True, "champion": version}
+
+
+@router.post("/swing/rollback")
+async def swing_rollback(body: SwingReason, user: DashboardUser = Depends(require_admin)) -> dict:
+    to = await asyncio.to_thread(_swing_registry().rollback, by=user.email, reason=body.reason)
+    return {"ok": True, "champion": to}
+
+
+# ── Learning statistics ─────────────────────────────────────────────────────────
 
 
 def _learning() -> dict[str, Any]:
@@ -287,40 +346,6 @@ async def learning_symbol(symbol: str = Query(..., min_length=1, max_length=25))
                                                  symbol.strip().upper()))
     except Exception as exc:
         raise HTTPException(502, f"Symbol stats unavailable: {exc}") from exc
-
-
-def _supabase():
-    config = SkopaqConfig()
-    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
-        raise HTTPException(503, "Supabase is not configured on the server")
-    from supabase import create_client
-
-    return config, create_client(config.supabase_url,
-                                 config.supabase_service_key.get_secret_value())
-
-
-@router.get("/memory")
-async def memory(q: str = Query(..., min_length=2, max_length=500)) -> dict:
-    """Past agent lessons (BM25 over the decision log) and trade reflections for *q*."""
-    config, client = _supabase()
-
-    def read() -> dict[str, Any]:
-        from skopaq.memory.reflection import recall
-        from skopaq.memory.store import MemoryStore
-
-        out: dict[str, Any] = {"memories": {}, "reflections": [], "errors": {}}
-        try:
-            store = MemoryStore(client, max_entries=config.reflection_max_memory_entries)
-            out["memories"] = store.recall(q, n_matches=3)
-        except Exception as exc:
-            out["errors"]["memories"] = str(exc)
-        try:
-            out["reflections"] = recall(client, q, limit=10)
-        except Exception as exc:
-            out["errors"]["reflections"] = str(exc)
-        return out
-
-    return _jsonable(await asyncio.to_thread(read))
 
 
 # ── Options (INDstocks) ───────────────────────────────────────────────────────
@@ -390,49 +415,7 @@ async def option_suggest(
             "expiry": _jsonable(chain.expiry), "trade": _jsonable(trade) if trade else None}
 
 
-# ── Custom AI endpoint check ──────────────────────────────────────────────────
-
-
-@router.post("/llm/check")
-async def llm_check(user: DashboardUser = Depends(require_admin)) -> dict:
-    """List the custom endpoint's models and send it one tiny prompt (admin). The key is
-    never returned."""
-    import httpx
-
-    from skopaq.llm.model_tier import _create_llm, custom_endpoint
-
-    custom = await asyncio.to_thread(custom_endpoint)
-    if custom is None:
-        raise HTTPException(422, "Set SKOPAQ_CUSTOM_LLM_BASE_URL, SKOPAQ_CUSTOM_LLM_API_KEY and "
-                                 "SKOPAQ_CUSTOM_LLM_MODEL first (Environment page)")
-    out: dict[str, Any] = {"base_url": custom["base_url"], "model": custom["model"],
-                           "judge_model": custom["judge_model"], "models": None,
-                           "models_error": None, "ok": False, "reply": None, "error": None}
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(f"{custom['base_url']}/models",
-                                 headers={"Authorization": f"Bearer {custom['api_key']}"})
-        if r.status_code == 200:
-            data = r.json().get("data", [])
-            out["models"] = sorted(str(m.get("id")) for m in data if isinstance(m, dict))[:200]
-        else:
-            out["models_error"] = f"HTTP {r.status_code}: {r.text[:200]}"
-    except Exception as exc:
-        out["models_error"] = str(exc)[:300]
-
-    started = time.monotonic()
-    try:
-        llm = await asyncio.to_thread(_create_llm, "custom", custom["model"])
-        msg = await asyncio.wait_for(llm.ainvoke("Reply with exactly: OK"), 60)
-        text = msg.content if isinstance(msg.content, str) else str(msg.content)
-        out.update(ok=True, reply=text.strip()[:200],
-                   seconds=round(time.monotonic() - started, 1))
-    except Exception as exc:
-        out["error"] = str(exc)[:600].replace(custom["api_key"], "***")
-    return out
-
-
-# ── Job runners (backtest, Monte Carlo, settle) ───────────────────────────────
+# ── Job runners (backtest, Monte Carlo) ───────────────────────────────────────
 
 
 def _setup_dataflow() -> None:
@@ -556,16 +539,3 @@ def run_montecarlo_job(symbol: str, days: int, simulations: int) -> dict[str, An
                      "count": c} for i, c in enumerate(counts)]
     return _finite({"symbol": symbol, "days": days, "trades": len(bt.trades),
                     "result": data, "histogram": hist})
-
-
-def run_settle_job() -> dict[str, Any]:
-    """Settle past decisions whose holding window has traded (``skopaq settle``).
-    Makes LLM reflection calls and writes the decision log; places no orders."""
-    from skopaq.cli import main as cli
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
-    config = SkopaqConfig()
-    graph = SkopaqTradingGraph(cli._build_upstream_config(config), executor=None,
-                               memory_store=cli._create_memory_store(config))
-    return {"settled": graph.settle_due()}
-

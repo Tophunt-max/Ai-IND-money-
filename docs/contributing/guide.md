@@ -1,6 +1,6 @@
 # Contributing Guide
 
-SkopaqTrader is built on vendored TradingAgents (Apache 2.0) with a custom `skopaq/` layer. Contributions to the `skopaq/` layer are welcome.
+SkopaqTrader is the `skopaq/` package plus a vendored data layer from TradingAgents (Apache 2.0, `tradingagents/dataflows/` only). Contributions to the `skopaq/` layer are welcome.
 
 ## Getting Started
 
@@ -29,7 +29,7 @@ cp .env.example .env
 ### Step 3: Run Tests
 
 ```bash
-# Unit tests (no API keys needed, 1,400+ tests)
+# Unit tests (no API keys needed, 1,700+ tests)
 python3 -m pytest tests/unit/ -x -q
 
 # Specific test file
@@ -61,7 +61,7 @@ Branch naming conventions:
 
 Follow these guidelines:
 
-- **Edit `skopaq/` only** -- Avoid modifying `tradingagents/` unless absolutely necessary
+- **Edit `skopaq/` only** -- Avoid modifying `tradingagents/dataflows/` unless absolutely necessary
 - **Write tests** -- Every new feature needs unit tests in `tests/unit/`
 - **Type hints** -- Use type annotations on all function signatures
 - **Docstrings** -- Document all public functions and classes
@@ -95,24 +95,25 @@ Know where to put your code:
 
 | Directory | What Goes Here |
 |-----------|---------------|
-| `skopaq/agents/` | AI agent logic (sell analyst, etc.) |
+| `skopaq/adaptive/` | Adaptive AI: feature expansion, outlier detection, adaptive retraining, hyperparameter search, RL |
 | `skopaq/api/` | FastAPI endpoints |
 | `skopaq/broker/` | INDstocks broker client, F&O helpers, paper engine |
 | `skopaq/cli/` | CLI commands and display |
 | `skopaq/db/` | Database clients and repositories |
 | `skopaq/execution/` | Order execution, safety, monitoring |
-| `skopaq/graph/` | LangGraph pipeline wrapper |
-| `skopaq/llm/` | LLM tiering, caching, env bridging |
-| `skopaq/memory/` | Agent memory and reflection |
+| `skopaq/learning/` | Model registry (champion / shadow / candidate), datasets, evaluation, track-record reports |
 | `skopaq/options/` | Options chain (INDstocks), strategies |
 | `skopaq/risk/` | Risk management (ATR sizing, regime) |
-| `skopaq/scanner/` | Market scanner engine |
+| `skopaq/scalping/` | Intraday scalper and F&O engine, their rules, costs and backtests |
+| `skopaq/scanner/` | Watchlists (`watchlist.py`, NIFTY 50) |
+| `skopaq/strategy/` | Signal contract, `SignalGate`, evidence and the signal journal |
+| `skopaq/swing/` | Swing book: daily setups, the swing model, the swing engine and its data |
 
 ## Testing Patterns
 
 ### Unit Tests
 
-- Mock all external dependencies (broker APIs, LLM providers)
+- Mock all external dependencies (broker APIs, Supabase, Telegram)
 - No API keys needed
 - Fast execution (< 30 seconds for full suite)
 
@@ -145,15 +146,15 @@ async def test_async_function():
 
     ```python
     # Correct
-    @patch("skopaq.cli.main._run_scan")
+    @patch("skopaq.broker.token_manager.TokenManager")
 
     # Wrong — this patches a different reference
-    @patch("skopaq.execution.daemon._run_scan")
+    @patch("skopaq.execution.daemon.TokenManager")
     ```
 
 ## Upstream Changes
 
-If you must modify `tradingagents/`:
+Only `tradingagents/dataflows/` (the market, news and fundamentals data vendors behind `route_to_vendor`) is vendored from TradingAgents. If you must modify it:
 
 1. Keep changes minimal and surgical
 2. Document in `UPSTREAM_CHANGES.md`

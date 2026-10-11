@@ -263,7 +263,7 @@ export default function ControlPage() {
                 <div className="mt-5">
                   <KV cols={3} items={[
                     ["Phase", c.session.phase],
-                    ["Scanned / analysed", `${c.session.candidates_scanned} / ${c.session.candidates_analyzed}`],
+                    ["Swing ideas / tried", `${c.session.candidates_scanned} / ${c.session.candidates_analyzed}`],
                     ["BUYs / rejected", `${c.session.trades_opened} / ${c.session.trades_rejected}`],
                     ["Exits", String(c.session.sells_executed)],
                     ["Unconfirmed", String(c.session.orders_unconfirmed)],

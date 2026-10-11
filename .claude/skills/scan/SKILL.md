@@ -1,53 +1,25 @@
 ---
 name: scan
-description: Scan market for trading opportunities using Claude's reasoning + live quotes. No external LLM API calls needed.
-argument-hint: "[max_candidates]"
+description: Today's swing ideas from the Adaptive AI — daily setups ranked by the swing model (no orders).
+argument-hint: "[max_ideas]"
 user-invocable: true
-allowed-tools: mcp__skopaq__get_quote mcp__skopaq__get_historical WebSearch
+allowed-tools: mcp__skopaq__swing_ideas mcp__skopaq__get_quote
 ---
 
-# Scan Market — Claude-Native Scanner
+# Swing scan (Adaptive AI)
 
-You ARE the scanner. Use your own reasoning to identify the best trading candidates from live market data.
+Call `mcp__skopaq__swing_ideas` with limit=$ARGUMENTS (default 10). It reads a year of daily candles for each symbol in the configured universe (NIFTY 50 by default), finds the setup on the last closed bar and keeps it when the swing model's probability clears its validated threshold.
 
-**IMPORTANT**: Use MCP tools (`mcp__skopaq__*`) for market data. Do NOT write Python/Bash code to call broker APIs directly.
+**IMPORTANT**: Use MCP tools (`mcp__skopaq__*`) for data. Do NOT write Python/Bash code to call broker APIs directly. Do not add symbols or rank them yourself — the list is the Adaptive AI's.
 
-## Your Task
+## Output
 
-Find the top trading opportunities (default: 5, or $ARGUMENTS if specified).
+| # | Symbol | Setup | P(win) | Entry | Stop | Target |
+|---|--------|-------|--------|-------|------|--------|
 
-### Step 1: Get Market Pulse
-- `WebSearch` for "NSE top gainers today" and "India stock market movers today"
-- This gives you the universe of active stocks to evaluate
+Optionally call `mcp__skopaq__get_quote` for the top 3 to show the live price against the entry.
 
-### Step 2: Fetch Live Data
-For each promising symbol from Step 1, call MCP tool:
-- `mcp__skopaq__get_quote` with symbol=SYMBOL — current price, change%, volume
+- No ideas and `model` is null → no swing model trained yet: suggest `skopaq swing-train`.
+- No ideas with a model → nothing cleared the threshold today (or there was no market data). That is a valid answer.
 
-Focus on symbols with:
-- Change% > 1% (either direction — momentum)
-- Unusual volume (significantly above average)
-- Price near key levels
-
-### Step 3: Quick Technical Check
-For the top candidates, call:
-- `mcp__skopaq__get_historical` — last 2 days of 15-min candles
-
-Look for:
-- Breakout patterns (price above recent range)
-- Volume confirmation (rising volume on moves)
-- Trend alignment (direction consistent across timeframes)
-
-### Step 4: Rank and Present
-
-Present results as a ranked table:
-
-| Rank | Symbol | LTP (₹) | Change% | Volume | Signal | Score | Reason |
-|------|--------|---------|---------|--------|--------|-------|--------|
-
-Score each 0-100 based on:
-- Technical setup strength (40%)
-- Volume confirmation (30%)
-- News/catalyst (30%)
-
-Highlight any score > 80 as a strong pick.
+Nothing is bought by this skill. The trading session takes the same ideas through the signal gate, the position sizer and the safety checker.

@@ -31,8 +31,8 @@ def _validate_calls() -> list[tuple[str, int, ast.Call]]:
 
 def test_every_safety_validate_call_passes_sell_context():   # T11
     calls = _validate_calls()
-    # The Executor, MCP check_safety and place_order, and chat check_safety
-    assert len(calls) >= 4, calls
+    # The Executor, MCP check_safety and place_order
+    assert len(calls) >= 3, calls
 
     missing = [f"{path}:{line}" for path, line, node in calls
                if "sell_context" not in {kw.arg for kw in node.keywords}]

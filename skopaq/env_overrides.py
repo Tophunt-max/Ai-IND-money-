@@ -106,7 +106,6 @@ _HELP: dict[str, str] = {
     "scheduler_start": "IST HH:MM, first daemon launch",
     "scheduler_last_start": "IST HH:MM, end of the catch-up window",
     "scheduler_deadline": "IST HH:MM, a session still running is stopped",
-    "scheduler_settle_at": "IST HH:MM, settle past decisions; empty = off",
     "scheduler_preflight": "IST HH:MM, token check before the session; empty = off",
     "nse_holidays": "Extra NSE closures, comma-separated YYYY-MM-DD",
     "indstocks_token": "INDstocks API token (or `skopaq token set`)",
@@ -117,8 +116,11 @@ _HELP: dict[str, str] = {
     "telegram_bot_token": "Telegram bot token from @BotFather",
     "telegram_allowed_chat_ids": "Comma-separated chat IDs allowed to use the bot",
     "daemon_max_trades_per_session": "Max BUY orders per daily session",
-    "daemon_max_candidates_to_analyze": "Top N scanner picks analysed per session",
-    "scanner_max_candidates": "Candidates the scanner returns",
+    "daemon_max_candidates_to_analyze": "Top N swing ideas tried per session",
+    "swing_symbols": "Swing universe (comma-separated); empty = NIFTY 50",
+    "swing_target_rr": "Swing exit-plan target, in R (2 = 1:2)",
+    "swing_rules_only": "Paper only: trade the setups without a swing model",
+    "swing_model_kind": "Model library of `skopaq swing-train`",
     "risk_per_trade_pct": "Fraction of equity risked per trade (0.01 = 1%)",
     "min_confidence_pct": "Reject signals below this confidence; 0 = off",
     "max_sector_concentration_pct": "Max fraction of the portfolio in one sector",
@@ -169,13 +171,6 @@ _HELP: dict[str, str] = {
     "monitor_target_inr": "inr mode: target = this much profit on the whole position (₹)",
     "monitor_partial_booking_pct": ("Share sold at the target (0.5 = half, 1 = all); the rest "
                                     "trails from breakeven"),
-    "custom_llm_base_url": "OpenAI-compatible AI gateway, e.g. https://codecraftapi.com/v1",
-    "custom_llm_api_key": "API key of that gateway",
-    "custom_llm_model": "Model for analysts, debaters and trader (as the gateway names it)",
-    "custom_llm_judge_model": "Model for the judges and chat; empty = the model above",
-    "google_api_key": "Gemini (most agents)",
-    "anthropic_api_key": "Claude (judges)",
-    "openrouter_api_key": "OpenRouter (Grok, Perplexity)",
 }
 
 _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -183,15 +178,14 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Scheduler", ("scheduler_", "nse_holidays")),
     ("Broker (INDstocks)", ("indstocks_", "order_", "ws_")),
     ("Telegram", ("telegram_",)),
-    ("Daemon, scanner & monitor", ("daemon_", "scanner_", "monitor_")),
+    ("Daemon & monitor", ("daemon_", "monitor_")),
+    ("Swing book (Adaptive AI)", ("swing_",)),
     ("Scalper", ("scalp_",)),
     ("F&O", ("fno_",)),
     ("Risk & sizing", ("position_sizing", "risk_per_trade", "atr_", "min_confidence",
                        "max_shares_per_order", "max_lots_per_order",
                        "confidence_sizing", "max_sector", "regime_")),
-    ("AI models & keys", ("custom_llm_", "google_", "anthropic_", "perplexity_", "xai_", "openrouter_",
-                          "typesafe_", "jev_", "ollama_", "langcache_", "max_debate",
-                          "max_risk", "selected_analysts", "reflection_")),
+    ("Adaptive AI & models", ("adaptive_", "rl_", "model_", "block_model")),
 )
 
 _lock = threading.Lock()  # os.environ updates

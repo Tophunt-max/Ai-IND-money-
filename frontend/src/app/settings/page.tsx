@@ -67,7 +67,7 @@ function Account() {
           <div className="truncate text-xs text-gray-500">{user.email} · {user.provider || user.via}</div>
         </div>
       </div>
-      {!isAdmin && <p className="mb-4 text-xs text-gray-500">View-only: you can see everything, but not run analyses, trades, scans, chat or the kill switch.</p>}
+      {!isAdmin && <p className="mb-4 text-xs text-gray-500">View-only: you can see everything, but not run scans, model training, trades or the kill switch.</p>}
       {user.provider === "email" && (
         <form onSubmit={changePassword} className="flex gap-2">
           <input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
@@ -150,7 +150,7 @@ export default function SettingsPage() {
   };
 
   const halt = () => {
-    if (!confirm("Stop all new BUY orders everywhere (scheduler, chat, Telegram)? Sells stay allowed.")) return;
+    if (!confirm("Stop all new BUY orders everywhere (scheduler, scalper, Telegram)? Sells stay allowed.")) return;
     act("/api/dashboard/kill-switch/halt", { reason: reason.trim() || "halted from the dashboard" });
   };
 
@@ -181,7 +181,7 @@ export default function SettingsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <p className="text-sm text-gray-400">Halting rejects every new BUY in the scheduler, chat, Telegram and CLI. Selling (closing positions) stays allowed.</p>
+            <p className="text-sm text-gray-400">Halting rejects every new BUY in the scheduler, scalper, F&O engine, Telegram and CLI. Selling (closing positions) stays allowed.</p>
             {isAdmin ? (
               <div className="flex flex-col gap-2 sm:flex-row">
                 <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" maxLength={300} className="field" />

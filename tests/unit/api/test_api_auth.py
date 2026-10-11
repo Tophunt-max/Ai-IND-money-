@@ -1,15 +1,12 @@
-"""Optional bearer-token guard (SKOPAQ_API_TOKEN) and CORS origin parsing."""
+"""The open health route, the removed Kite routes and CORS origin parsing."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 
-from skopaq.api import auth
 from skopaq.api.auth import cors_origins
 
 
@@ -21,11 +18,6 @@ def client():
     return TestClient(app)
 
 
-def _token(monkeypatch, value: str) -> None:
-    # Patch the config read so a developer .env cannot leak in.
-    monkeypatch.setattr(auth, "SkopaqConfig", lambda: SimpleNamespace(api_token=SecretStr(value)))
-
-
 def test_kite_routes_are_gone(client):
     """INDstocks is the only broker: the Kite OAuth/token/postback routes no longer exist."""
     for method, path in (("get", "/api/kite/login"), ("get", "/api/kite/callback"),
@@ -34,53 +26,7 @@ def test_kite_routes_are_gone(client):
         assert getattr(client, method)(path).status_code == 404, path
 
 
-def test_chat_endpoints_are_refused_without_a_configured_token(client, monkeypatch):
-    """Fail closed: the chat endpoints run tools (trade_stock), so with no
-    SKOPAQ_API_TOKEN they are disabled (they used to be open)."""
-    _token(monkeypatch, "")
-
-    def teapot(_session_id):
-        raise HTTPException(418, "reached the endpoint")
-
-    monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", teapot)
-    body = {"tool": "get_quote", "args": {"symbol": "TCS"}}
-    response = client.post("/api/chat/tool", json=body)
-    assert response.status_code == 503
-    assert client.post("/api/chat/message", json={"message": "hi"}).status_code == 503
-
-
-@pytest.mark.parametrize(
-    "headers",
-    [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Basic s3cret"},
-     {"Authorization": "s3cret"}],
-)
-def test_chat_tool_needs_the_bearer_token(client, monkeypatch, headers):
-    _token(monkeypatch, "s3cret")
-    body = {"tool": "get_quote", "args": {"symbol": "TCS"}}
-    response = client.post("/api/chat/tool", json=body, headers=headers)
-    assert response.status_code == 401
-    assert response.headers["www-authenticate"] == "Bearer"
-
-
-def test_chat_tool_endpoint_is_guarded(client, monkeypatch):
-    _token(monkeypatch, "s3cret")
-    body = {"tool": "get_quote", "args": {"symbol": "TCS"}}
-    assert client.post("/api/chat/tool", json=body).status_code == 401
-    assert client.post(
-        "/api/chat/tool", json=body, headers={"Authorization": "Bearer wrong"}
-    ).status_code == 401
-
-    def teapot(_session_id):
-        raise HTTPException(418, "reached the endpoint")
-
-    monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", teapot)
-    response = client.post("/api/chat/tool", json=body,
-                           headers={"Authorization": "bearer s3cret"})  # scheme is case-insensitive
-    assert response.status_code == 418
-
-
-def test_health_stays_open(client, monkeypatch):
-    _token(monkeypatch, "s3cret")
+def test_health_stays_open(client):
     assert client.get("/health").status_code == 200
 
 

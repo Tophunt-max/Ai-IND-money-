@@ -541,7 +541,7 @@ class _LiveDesk:
         result = await self.executor.execute_signal(signal)
         if result.success:
             try:
-                await cli._record_exit(self.config, None, None, signal, result)
+                await cli._record_exit(self.config, signal, result)
             except Exception:
                 logger.warning("Trade row of %s not written", signal.symbol, exc_info=True)
         return result

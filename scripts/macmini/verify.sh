@@ -31,7 +31,7 @@ for arg in "$@"; do
                        is unreadable; refused on a trading day 09:00-15:45 IST unless
                        --force)
   --unit-tests         run tests/unit inside the image (without .env or the stack's volumes)
-  --dry-run-daemon     docker compose run --rm daemon --dry-run (makes scanner LLM calls)
+  --dry-run-daemon     docker compose run --rm daemon --dry-run (reads market data; no orders)
 EOF
             exit 0 ;;
         *) echo "unknown option: $arg (see -h)" >&2; exit 2 ;;
@@ -145,15 +145,10 @@ if [ ! -f .env ]; then
 fi
 pass ".env" "present"
 
-if has_key SKOPAQ_GOOGLE_API_KEY || has_key GOOGLE_API_KEY; then
-    pass "LLM key" "Gemini key set"
-else
-    fail "LLM key" "set SKOPAQ_GOOGLE_API_KEY (most agents run on Gemini)"
-fi
 if has_key SKOPAQ_SUPABASE_URL && has_key SKOPAQ_SUPABASE_SERVICE_KEY; then
     pass "Supabase" "URL and service key set"
 else
-    warn "Supabase" "SKOPAQ_SUPABASE_URL / SKOPAQ_SUPABASE_SERVICE_KEY not set: no shared kill switch, P&L history or memory"
+    warn "Supabase" "SKOPAQ_SUPABASE_URL / SKOPAQ_SUPABASE_SERVICE_KEY not set: no shared kill switch or P&L history"
 fi
 if has_key SKOPAQ_TELEGRAM_BOT_TOKEN && has_key SKOPAQ_TELEGRAM_CHAT_ID; then
     pass "Telegram" "bot token and chat id set"
@@ -279,16 +274,17 @@ print("unwritable=%s" % ",".join(bad))
     JUNK="$(in_svc api sh -c 'ls /app | grep "^=" || true' 2>/dev/null)"
     if [ -z "$JUNK" ]; then pass "image files" "no stray /app/=* files"; else warn "image files" "stray files in /app: $JUNK"; fi
 
-    GRAPH="$(in_svc api python -c '
-from skopaq.cli.main import _build_upstream_config
+    SWING="$(in_svc api python -c '
 from skopaq.config import SkopaqConfig
-from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-SkopaqTradingGraph(_build_upstream_config(SkopaqConfig()), None)._ensure_graph()
-print("GRAPH_OK")
+from skopaq.swing.model import load_active
+model, state = load_active(SkopaqConfig(), paper=True)
+print("SWING_OK", state, getattr(model, "version", "") or "-")
 ' 2>&1)"
-    case "$GRAPH" in
-        *GRAPH_OK*) pass "analysis graph" "initialises as uid ${UID_IN:-?}" ;;
-        *) fail "analysis graph" "$(printf '%s\n' "$GRAPH" | tail -n 1)" ;;
+    case "$SWING" in
+        *"SWING_OK none"*) warn "swing model" "none trained: run skopaq swing-train (no swing entries until then)" ;;
+        *"SWING_OK unloadable"*) fail "swing model" "the active bundle failed its integrity check" ;;
+        *SWING_OK*) pass "swing model" "$(printf '%s\n' "$SWING" | sed -n 's/^SWING_OK //p')" ;;
+        *) fail "swing model" "$(printf '%s\n' "$SWING" | tail -n 1)" ;;
     esac
 
     if SCHED="$(in_svc scheduler python -m skopaq.cli.main schedule --check 2>&1)"; then
@@ -348,25 +344,6 @@ print(json.load(opener.open("http://127.0.0.1:8000/health", timeout=5)).get("tok
         pass "INDstocks token" "valid"
     else
         warn "INDstocks token" "not valid: set today's token (docker compose exec api skopaq token set <TOKEN>)"
-    fi
-
-    if [ "$(env_val SKOPAQ_OLLAMA_ENABLED)" = true ]; then
-        if curl -fsS -m 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
-            pass "Ollama (host)" "localhost:11434 answers"
-        else
-            fail "Ollama (host)" "localhost:11434 does not answer: start Ollama"
-        fi
-        OLLAMA_IN="$(in_svc api python -c '
-import os, urllib.request
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-opener.open(os.environ["SKOPAQ_OLLAMA_BASE_URL"] + "/api/tags", timeout=5)
-print("OLLAMA_OK")
-' 2>&1 | tail -n 1)"
-        if [ "$OLLAMA_IN" = OLLAMA_OK ]; then
-            pass "Ollama (containers)" "reachable through host.docker.internal"
-        else
-            fail "Ollama (containers)" "unreachable from containers: $OLLAMA_IN"
-        fi
     fi
 fi
 

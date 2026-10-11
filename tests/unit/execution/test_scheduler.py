@@ -50,7 +50,6 @@ def _config(tmp_path: Path, **overrides) -> SimpleNamespace:
         scheduler_start="09:15",
         scheduler_last_start="11:30",
         scheduler_deadline="15:45",
-        scheduler_settle_at="18:30",
         scheduler_preflight="08:45",
         scheduler_poll_seconds=1,
         scheduler_kill_after_seconds=300,
@@ -92,9 +91,7 @@ def test_from_config_rejects_bad_order_and_mode(tmp_path):
     assert "SKOPAQ_SCHEDULER_MODE" in message  # every problem in one error
 
 
-def test_from_config_rejects_settle_before_deadline_and_bad_holidays(tmp_path):
-    with pytest.raises(ValueError, match="SETTLE_AT"):
-        _settings(tmp_path, scheduler_settle_at="15:00")
+def test_from_config_rejects_bad_holidays(tmp_path):
     with pytest.raises(ValueError, match="not-a-date"):
         _settings(tmp_path, nse_holidays="not-a-date")
 
@@ -107,8 +104,7 @@ def test_from_config_preflight(tmp_path):
 
 
 def test_from_config_defaults(tmp_path):
-    settings = _settings(tmp_path, scheduler_settle_at="", scheduler_state_dir="~/sched")
-    assert settings.settle_at is None
+    settings = _settings(tmp_path, scheduler_state_dir="~/sched")
     assert settings.state_dir == Path.home() / "sched"
     assert settings.log_dir == tmp_path / "logs"
     assert settings.heartbeat_file is None
@@ -192,7 +188,7 @@ def test_a_mistyped_confirm_live_skips_the_session_and_says_why(tmp_path):
         (MONDAY, "09:15", "daemon"),
         (MONDAY, "11:29", "daemon"),
         (MONDAY, "11:30", None),
-        (MONDAY, "18:30", "settle"),
+        (MONDAY, "18:30", None),
         (HOLIDAY, "18:30", None),
     ],
 )
@@ -207,7 +203,6 @@ def test_due_job_runs_each_job_once_a_day(tmp_path):
     day = _at(MONDAY, "09:15").date()
     state.mark_started("daemon", day)
     assert due_job(_at(MONDAY, "09:20"), settings, state) is None
-    state.mark_started("settle", day)
     assert due_job(_at(MONDAY, "19:00"), settings, state) is None
 
 
@@ -379,20 +374,6 @@ def test_run_forever_alerts_a_missing_holiday_list(tmp_path):
     assert len(rec.alerts) == 1
     assert "no NSE holiday list for 2027" in rec.alerts[0]
     assert launched == []
-
-
-def test_run_forever_runs_settle(tmp_path):
-    settings = _settings(tmp_path)
-    rec, stop, launched = Recorder(), threading.Event(), []
-    SchedulerState(settings.state_dir).mark_started("daemon", MONDAY_DATE)
-    SchedulerState(settings.state_dir).record_exit("daemon", MONDAY_DATE, 0)
-    run_forever(
-        settings, clock=lambda: _at(MONDAY, "18:31"),
-        runner=lambda cmd, **kw: launched.append(cmd) or JobResult(0),
-        alert=rec.alert, ping=rec.ping, sleep=_stop_after(stop, 2), stop=stop,
-    )
-    assert [cmd[3:] for cmd in launched] == [["settle"]]
-    assert rec.alerts == []
 
 
 def test_a_second_scheduler_never_runs_beside_the_first(tmp_path):

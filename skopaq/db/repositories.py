@@ -179,7 +179,7 @@ class TradeRepository:
         """Find the most recent BUY trade for *symbol* that hasn't been closed.
 
         Used by ``TradeLifecycleManager`` to link a SELL trade back to its
-        opening BUY for P&L calculation and reflection triggering. ``is_paper``
+        opening BUY for P&L calculation. ``is_paper``
         limits it to paper or live rows (a live SELL closes live rows only);
         None keeps any row, as paper always has.
         """

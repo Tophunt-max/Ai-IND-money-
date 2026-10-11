@@ -14,15 +14,15 @@
       "mcp__skopaq__gather_fundamentals_data",
       "mcp__skopaq__gather_social_data",
       "mcp__skopaq__gather_all_analysis_data",
-      "mcp__skopaq__recall_agent_memories",
-      "mcp__skopaq__quick_decision",
       "mcp__skopaq__halt_trading",
       "mcp__skopaq__performance_report",
+      "mcp__skopaq__swing_ideas",
+      "mcp__skopaq__swing_idea",
+      "Bash(skopaq swing-status)",
       "Bash(python3 -m pytest tests/unit/ -x -q)",
       "Bash(python3 -m pytest tests/unit/ -x -v)",
       "Bash(skopaq status)",
-      "Bash(skopaq version)",
-      "Bash(skopaq chat --help)"
+      "Bash(skopaq version)"
     ],
     "deny": []
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import type { LucideIcon } from "lucide-react";
-import { Brain, CheckCheck, Dices, FlaskConical, ListChecks, NotebookPen, Radar, RefreshCw } from "lucide-react";
+import { Dices, FlaskConical, GraduationCap, ListChecks, Radar, RefreshCw } from "lucide-react";
 import Link from "next/link";
 
 import { Badge, Button, Card, Empty, ErrorBox, PageTitle, Skeleton } from "@/components/ui";
@@ -9,12 +9,10 @@ import { when } from "@/lib/api";
 import { useApi, type Job } from "@/lib/hooks";
 
 const KINDS: Record<Job["kind"], { label: string; icon: LucideIcon; href: (j: Job) => string }> = {
-  analyze: { label: "Analysis", icon: Brain, href: (j) => `/analyze?symbol=${j.symbol}` },
-  trade: { label: "Analysis + paper trade", icon: NotebookPen, href: (j) => `/analyze?symbol=${j.symbol}&trade=1` },
-  scan: { label: "Market scan", icon: Radar, href: () => "/scanner" },
+  scan: { label: "Swing scan", icon: Radar, href: () => "/scanner" },
+  swing_train: { label: "Swing model training", icon: GraduationCap, href: () => "/learning" },
   backtest: { label: "Backtest", icon: FlaskConical, href: () => "/backtest" },
   montecarlo: { label: "Monte Carlo", icon: Dices, href: () => "/backtest" },
-  settle: { label: "Settle decisions", icon: CheckCheck, href: () => "/scheduler" },
 };
 
 const TONE = { queued: "neutral", running: "info", done: "ok", failed: "error" } as const;
@@ -31,7 +29,7 @@ export default function JobsPage() {
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <PageTitle title="Jobs" icon={ListChecks} subtitle="Analyses, scans, backtests and settles started from the dashboard (one at a time)"
+      <PageTitle title="Jobs" icon={ListChecks} subtitle="Swing scans, model training and backtests started from the dashboard (one at a time)"
         right={<Button variant="ghost" icon={RefreshCw} onClick={reload}>Refresh</Button>} />
       <ErrorBox error={error} />
       <Card padded={false}>
@@ -42,7 +40,7 @@ export default function JobsPage() {
         ) : (
           <div className="divide-y divide-white/[0.04]">
             {jobs.map((j) => {
-              const k = KINDS[j.kind] || KINDS.analyze;
+              const k = KINDS[j.kind] || KINDS.scan;
               const Icon = k.icon;
               return (
                 <Link key={j.id} href={k.href(j)} className="flex items-center gap-4 px-3 sm:px-4 py-4 transition hover:bg-white/[0.02]">

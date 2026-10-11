@@ -8,25 +8,24 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 |---|---|---|
 | Dashboard | Total P&L with the 90-day chart, kill-switch and token banners, today's auto-trading session, open positions, system health | `/api/dashboard/overview`, `/pnl-history`, `/scheduler`, `/api/status` |
 | Portfolio | INDstocks equity positions, F&O positions, holdings, funds (incl. option-buy and futures balances) and today's order book. Read only | `/api/dashboard/portfolio` |
-| **Control** | Run the engine: pause/resume new BUYs, auto sessions on/off, **start a session now** (or, live, a monitor), **stop** the running session, live positions (LTP, P&L, stop, target, high) with **Close** / **Close all** and stop/target edits, **manual orders** (live: type LIVE), today's order book with **Cancel**, exit & risk settings. Streams every 2 s (admin actions only; each is logged and sent to Telegram) | `/api/dashboard/control*` |
+| **Trade desk** (`/control`) | Run the engine: pause/resume new BUYs, auto sessions on/off, **start a session now** (or, live, a monitor), **stop** the running session, live positions (LTP, P&L, stop, target, high) with **Close** / **Close all** and stop/target edits, **manual orders** (live: type LIVE), today's order book with **Cancel**, exit & risk settings. Streams every 2 s (admin actions only; each is logged and sent to Telegram) | `/api/dashboard/control*` |
 | Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y), live from INDstocks (Yahoo only as a fallback) | `/api/dashboard/market/*` |
-| Analyze | Full multi-agent analysis (`skopaq analyze`), or analysis + **paper** trade (`skopaq trade`, refused unless the server is in paper mode), 2–5 min | `/api/dashboard/jobs` |
-| Scanner | One scan of the watchlist (`skopaq scan`), and the background scanner's status and candidates | `/api/dashboard/jobs`, `/scanner/status` |
+| Swing scanner | One swing scan (`skopaq scan`, a `scan` job): today's setups scored by the swing model, with entry / stop / target and P(win), and the swing model's state. Places nothing | `/api/dashboard/jobs`, `/swing` |
 | Options | INDstocks expiries, option chain (with Delta) and a rule-based option-selling idea (short put / call / strangle). Needs the INDstocks token; places nothing | `/api/dashboard/options/expiries`, `/options/chain`, `/options/suggest` |
+| Signals & risk | Every journalled signal (QUALIFIED / REJECTED / EXPIRED) with its evidence and rejection reason, risk limits, and reconciliation blockers to resolve | `/api/dashboard/signals`, `/risk`, `/control/reconcile` |
 | Trades | Trades from Supabase (current mode, paper, live, all), with totals and a symbol filter | `/api/dashboard/trades` |
-| Track record | AI calls vs NIFTY, closed trades, calibration (`skopaq report`) | `/api/dashboard/report` |
-| AI learning | Signal-tracker insights (calibration, sectors, regimes, hours, stops; needs `DATABASE_URL`), one symbol's record, agent memory search (Supabase) | `/api/dashboard/learning[/symbol]`, `/memory` |
+| Track record | Journalled signals by strategy, top rejection reasons, closed trades, calibration (`skopaq report`) | `/api/dashboard/report` |
+| AI learning | Swing model (champion / shadow / candidates, **Promote**, **Rollback**, **Train swing model** as a `swing_train` job), model registry, strategy builder, Adaptive AI, RL agents, regime drift, signal-tracker insights (needs `DATABASE_URL`) and one symbol's record | `/api/dashboard/swing*`, `/learning/*`, `/jobs` |
 | Backtest | RSI mean-reversion backtest (equity curve, trades) and Monte Carlo of its trades; CPU only, no orders | `/api/dashboard/jobs` |
-| Scheduler | `skopaq schedule --check` plan, the last 10 days' sessions, logs, **Settle now** (`skopaq settle`) | `/api/dashboard/scheduler[/log]`, `/jobs` |
-| Jobs | Every analysis, scan, backtest and settle started from the dashboard (kept in memory) | `/api/dashboard/jobs` |
-| AI chat | The AI chat agent (paper trades in paper mode) | `/api/dashboard/chat` |
+| Scheduler | `skopaq schedule --check` plan, the last 10 days' sessions, logs | `/api/dashboard/scheduler[/log]` |
+| Jobs | Every swing scan, swing training, backtest and Monte Carlo started from the dashboard (kinds `scan`, `swing_train`, `backtest`, `montecarlo`; kept in memory) | `/api/dashboard/jobs` |
 | Broker | INDstocks token: health, expiry, **set today's token** or delete it (admin; like `skopaq token set`), and an info card on equity and F&O at INDstocks | `/api/dashboard/broker[/indstocks-token]` |
 | Settings | Kill switch, account, login history, links | `/api/dashboard/kill-switch*` |
 | Environment (admin) | View and change `SKOPAQ_*` settings: trading mode, live switch, scheduler, keys (see below) | `/api/dashboard/settings/env` |
 
-## Control (admin)
+## Trade desk (admin)
 
-The Control page talks to the trading processes through files in `SKOPAQ_CONTROL_DIR`
+The Trade desk page talks to the trading processes through files in `SKOPAQ_CONTROL_DIR`
 (`~/.skopaq/control` on the shared home volume, `skopaq/execution/control.py`):
 
 | Action | How it reaches the engine |
@@ -76,8 +75,9 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
 - **Only listed emails** get in: `SKOPAQ_DASHBOARD_USERS=me@x.com:admin,friend@y.com:viewer`.
   Anyone else (even with a Supabase account) sees "Access denied". The email must be
   confirmed.
-- **Roles**: `admin` does everything; `viewer` sees every page but cannot run analyses,
-  paper trades, scans, chat or the kill switch (the API answers 403).
+- **Roles**: `admin` does everything; `viewer` sees every page but cannot start jobs
+  (scans, training, backtests), trade, promote models or use the kill switch (the API
+  answers 403).
 - The API checks every token with Supabase (cached 60 s), so **Logout all devices**
   (Settings) ends every session within a minute.
 - **Login history** (Settings): each new session, and each refused account, is stored in
@@ -85,8 +85,7 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
 - **Failed logins**: the login screen pauses for 5 minutes after 5 wrong passwords;
   the API refuses an IP for 10 minutes after 20 rejected tokens (429). Supabase rate-limits
   sign-ins too.
-- `SKOPAQ_API_TOKEN`, if set, still works as an admin bearer token (scripts, Telegram/OpenClaw
-  bridge); it is no longer typed into the dashboard.
+- `SKOPAQ_API_TOKEN`, if set, still works as an admin bearer token (scripts); it is no longer typed into the dashboard.
 - Set `SKOPAQ_CORS_ORIGINS` to the dashboard's URL so no other site can call the API from a
   browser. The reverse proxy exposes only the paths the dashboard uses.
 
@@ -117,7 +116,7 @@ Logins use **Supabase Auth** (`skopaq/api/dashboard_auth.py`, `frontend/src/comp
 
    ```
    35-154-11-165.sslip.io {
-       @dashboard path /health /api/status /api/dashboard/* /api/chat/*
+       @dashboard path /health /api/status /api/dashboard/*
        handle @dashboard {
            reverse_proxy 127.0.0.1:8000
        }
@@ -174,4 +173,4 @@ Settings → **⚙️ Environment** lets an admin change `SKOPAQ_*` settings wit
 | Login history error | The `SUPABASE_DB_URL` secret is missing, or the last **Database migrations** run failed (Actions tab) |
 | "Backend not reachable" | Caddy not running, the path not in the Caddyfile, or `SKOPAQ_CORS_ORIGINS` not your Vercel URL |
 | Database error on the dashboard | `SKOPAQ_SUPABASE_URL` / `SKOPAQ_SUPABASE_SERVICE_KEY` wrong |
-| Analyze fails with "API key not valid" | `SKOPAQ_GOOGLE_API_KEY` wrong |
+| Swing scanner says "No swing model" | Train one (**Train swing model** on AI learning, or `skopaq swing-train`); paper can also set `SKOPAQ_SWING_RULES_ONLY=true` |

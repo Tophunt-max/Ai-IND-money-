@@ -20,8 +20,9 @@ ticks / REST → CandleBuilder (closed bars only)
   → signal journal outcome           → learning dataset → candidate → shadow → champion
 ```
 
-Indicators, sizing, risk checks, order states and money are deterministic code. An LLM can add
-evidence to the swing pipeline, but cannot set prices or skip any check below.
+Indicators, sizing, risk checks, order states and money are deterministic code. There is no
+LLM: the Adaptive AI's models (e.g. the swing model) only decide which qualified setups to
+take; they cannot set prices or skip any check below.
 
 ## Signal contract
 
@@ -105,9 +106,8 @@ gross/unrealized/net P&L, slippage, broker-confirmed charges and discrepancies.
 
 ## Learning lifecycle
 
-There are three separate things:
+There are two separate things:
 
-- **Agent memory** is prompt context; it changes no weights.
 - **Statistical learning** is `learning/tracker.py` and `report.py`.
 - **Model training**:
   1. `dataset.py` builds point-in-time features from journal or backtest evidence. Labels
@@ -134,17 +134,18 @@ To train a candidate (no orders; INDstocks token needed for candles):
 skopaq learn-train --symbols RELIANCE,TCS --days 20 --journal
 ```
 
-> **Not yet wired:** the champion's probability is not used to gate live entries. That stays
-> off until a model has passed the gates and the shadow period on real data.
+The swing book has its own registry (`skopaq swing-train`, `skopaq/swing/model.py`, same
+candidate → shadow → champion flow): its model **does** gate swing entries (paper: champion,
+else shadow; live: champion only; no model, no swing entries). For the scalper and F&O
+engine the champion's probability gates entries only with the model gate on (below).
 
 ## API hardening
 
-- `/api/chat/*` returns 503 without `SKOPAQ_API_TOKEN` (it used to be open).
-- `trade_stock` is never auto-approved in live mode: `/message` refuses it and `/tool`
-  returns 403.
+- `SKOPAQ_API_TOKEN`, if set, is accepted as an admin bearer token (`dashboard_auth.py`);
+  everyone else logs in through Supabase Auth.
 - Errors no longer echo exception text.
-- `/api/status`, `/api/portfolio` and `/api/scanner/*` need a login. `/api/scanner/candidates`
-  drains a queue, so it needs an admin.
+- `/api/status` and `/api/portfolio` need a login; jobs, orders, model promotions and the
+  kill switch need an admin.
 - In live mode, `/docs` is off by default. The API also refuses to start without dashboard
   auth, or with `CORS=*`.
 - The login lockout trusts only `SKOPAQ_TRUSTED_PROXY_HOPS` entries of `X-Forwarded-For`.
@@ -187,8 +188,10 @@ skopaq learn-train --symbols RELIANCE,TCS --days 20 --journal
 
 - **Scalper:** qualified per setup.
 - **F&O engine:** qualified on the premium, with option-specific stop bounds and spread.
-- **Swing (AI) pipeline:** BUYs are qualified on daily candles before the executor. The
-  LLM's levels are used, else the exit planner's defaults.
+- **Swing (Adaptive AI) book:** BUYs are qualified on daily candles before the executor.
+  The stop is the setup's ATR stop; the target is the configured `SKOPAQ_MONITOR_TARGET_MODE`
+  target, or, when that gives none (`off`), the setup's R-multiple target
+  (`SKOPAQ_SWING_TARGET_RR`, passed as the signal's `agent_state["target_rr"]`).
 
 All three journal their decision, execution and outcome (swing: decision and execution).
 Spread and liquidity limits (`SKOPAQ_SCALP_MAX_SPREAD_PCT`, `SKOPAQ_SCALP_MAX_PARTICIPATION`)

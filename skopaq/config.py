@@ -194,48 +194,15 @@ class SkopaqConfig(BaseSettings):
     # only lower the immutable ceiling SafetyRules.max_consecutive_losses (4)
     max_consecutive_losses: int = 4
 
-    # ── LLM API Keys ───────────────────────────────────────────────────
-    google_api_key: SecretStr = SecretStr("")  # Gemini Flash (scanner)
-    anthropic_api_key: SecretStr = SecretStr("")  # Claude Sonnet (analysis)
-    perplexity_api_key: SecretStr = SecretStr("")  # Sonar (news)
-    xai_api_key: SecretStr = SecretStr("")  # Grok (sentiment)
-    openrouter_api_key: SecretStr = SecretStr("")  # OpenRouter (Grok + Perplexity)
-    typesafe_api_key: SecretStr = SecretStr("")  # TypeSafe Jev (post screening, decisions)
-
-    # ── Custom OpenAI-compatible LLM endpoint (skopaq/llm/model_tier.py) ──
-    # Any gateway speaking the OpenAI Chat Completions API (e.g. CodeCraft API). With base
-    # URL, key and model set, every agent role uses it first; the providers above stay as
-    # fallbacks when it is not configured.
-    custom_llm_base_url: str = ""
-    custom_llm_api_key: SecretStr = SecretStr("")
-    custom_llm_model: str = ""  # analysts, researchers, trader, debaters, sell analyst
-    custom_llm_judge_model: str = ""  # research / portfolio manager, chat; "" = custom_llm_model
-
-    # ── TypeSafe Jev (calibrated decisions; skopaq/llm/jev.py) ─────────
-    jev_enabled: bool = False  # Jev confidence on entries + exit gate
-    jev_model: str = "jev-1.13.0"  # pinned: thresholds are tuned per version
-    jev_min_confidence: float = 0.6  # act on a Jev answer at or above this
-    jev_min_catalyst_score: float = 0.0  # scanner: drop below this (0-3); 0 ranks only
-    jev_timeout_seconds: float = 5.0
-    # TypeSafe-compatible API root; "" = api.typesafe.ai. OpenRouter serves Jev
-    # at https://openrouter.ai/api (OpenRouter key, SKOPAQ_JEV_MODEL=jev-1.13;
-    # not confirmed to be the same build as jev-1.13.0).
-    jev_base_url: str = ""
-
     # ── Cloudflare Tunnel ───────────────────────────────────────────────
     cf_tunnel_id: str = ""
-
-    # ── Scanner ────────────────────────────────────────────────────────
-    scanner_enabled: bool = False
-    scanner_cycle_seconds: int = 30
-    scanner_max_candidates: int = 5
 
     # ── API Server ──────────────────────────────────────────────────────
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
     # ── API access ───────────────────────────────────────────────────────
-    # When set, /api/chat/* require Bearer auth (and it works as an admin dashboard login)
+    # An admin bearer token for the API and the dashboard (scripts, the MCP server)
     api_token: SecretStr = SecretStr("")
     cors_origins: str = "*"  # comma-separated browser origins; "" = none (live: no "*")
     # Proxies in front of the API whose X-Forwarded-For entry is trusted (0 = none)
@@ -246,16 +213,6 @@ class SkopaqConfig(BaseSettings):
     api_docs_enabled: Optional[bool] = None
     # Web dashboard logins (Supabase Auth): "me@x.com:admin,friend@y.com:viewer"
     dashboard_users: str = ""
-
-    # ── Reflection / Memory ─────────────────────────────────────────────
-    reflection_enabled: bool = True
-    reflection_max_memory_entries: int = 50
-
-    # ── Upstream Agent Tuning ─────────────────────────────────────────
-    max_debate_rounds: int = 1
-    max_risk_discuss_rounds: int = 1
-    selected_analysts: str = "market,social,news,fundamentals"
-    google_thinking_level: str = ""
 
     # ── Risk-Adjusted Position Sizing ─────────────────────────────────
     position_sizing_enabled: bool = True
@@ -274,7 +231,6 @@ class SkopaqConfig(BaseSettings):
     monitor_poll_interval_seconds: int = 10
     monitor_hard_stop_pct: float = 0.04  # 4% hard stop (safety tier)
     monitor_eod_exit_minutes_before_close: int = 10  # sell at 15:20 IST
-    monitor_ai_interval_cycles: int = 6  # AI every 6 polls (~60s)
     monitor_trailing_stop_enabled: bool = False
     monitor_trailing_stop_pct: float = 0.02  # 2% trail from high-water
     monitor_resync_cycles: int = 3  # live: re-read broker book/positions every N polls [1, 60]
@@ -332,12 +288,18 @@ class SkopaqConfig(BaseSettings):
     fno_min_net_rr: float = 1.0                # F&O qualification, on the premium
     fno_slippage_pct: float = 0.001            # assumed adverse premium slippage per side
     fno_qualification_enabled: bool = True
-    # Swing (AI) BUYs: qualified on daily candles before the executor
+    # ── Swing book (skopaq/swing/): daily setups + the swing model (Adaptive AI) ──
+    # Every swing BUY is qualified on daily candles before the executor
     swing_qualification_enabled: bool = True
     swing_min_net_rr: float = 1.0
     swing_slippage_pct: float = 0.001
     swing_notional_inr: float = 100_000.0       # sizes the charge estimate only
-    swing_model_gate_enabled: bool = False
+    swing_symbols: str = ""                     # empty: NIFTY 50
+    swing_target_rr: float = 2.0                # the exit plan's target, in R
+    swing_model_kind: str = "lightgbm"
+    swing_train_days: int = 1825                # daily history per training run
+    # Paper only: rank the setups without a swing model (no model = no swing trades)
+    swing_rules_only: bool = False
     # Refuse entries while the champion adaptive model says the market is unlike its
     # training data (Dissimilarity Index above its threshold)
     block_model_outliers: bool = False
@@ -432,13 +394,9 @@ class SkopaqConfig(BaseSettings):
 
     # ── Daemon (autonomous session) ──────────────────────────────────
     daemon_max_trades_per_session: int = 3  # Max BUY orders per day
-    daemon_max_candidates_to_analyze: int = 5  # Top N scanner picks to analyze
+    daemon_max_candidates_to_analyze: int = 5  # Top N swing ideas to try
     daemon_pre_open_minutes: int = 5  # Start N minutes before 9:15
     daemon_scan_delay_after_open_seconds: int = 60  # Wait for prices to settle
-    daemon_min_profit_threshold_pct: float = 0.5  # Min P&L% for AI sell
-    daemon_min_profit_threshold_inr: float = (
-        150.0  # Min absolute profit (INR, covers ~₹120 brokerage)
-    )
     daemon_session_log_dir: str = "logs/daemon"  # Session log directory
     daemon_heartbeat_interval_seconds: int = 300  # Heartbeat log interval (5 min)
 
@@ -452,7 +410,6 @@ class SkopaqConfig(BaseSettings):
     scheduler_start: str = "09:15"  # IST, first daemon launch (scan follows the scan delay)
     scheduler_last_start: str = "11:30"  # IST, end of the catch-up window if the host was down
     scheduler_deadline: str = "15:45"  # IST, SIGTERM a session still running (EOD exit is 15:20)
-    scheduler_settle_at: str = "18:30"  # IST, `skopaq settle` backstop; "" = off
     # IST, alert if the INDstocks token is missing or expires before the session ends; "" = off
     scheduler_preflight: str = "08:45"
     scheduler_poll_seconds: str = "30"
@@ -465,13 +422,6 @@ class SkopaqConfig(BaseSettings):
 
     # ── Regime Detection ──────────────────────────────────────────────
     regime_detection_enabled: bool = False  # Off until tested with live data
-
-    # ── Semantic Cache (Redis LangCache) ────────────────────────────────
-    langcache_enabled: bool = False
-    langcache_api_key: SecretStr = SecretStr("")
-    langcache_server_url: str = ""
-    langcache_cache_id: str = ""
-    langcache_threshold: float = 0.90  # Cosine similarity threshold (0–1)
 
     # ── Asset Class ──────────────────────────────────────────────────────
     asset_class: Literal["equity", "crypto"] = "equity"
@@ -494,11 +444,6 @@ class SkopaqConfig(BaseSettings):
     # ── WebSocket ───────────────────────────────────────────────────────────
     ws_reconnect_enabled: bool = True
     ws_reconnect_delay_seconds: float = 5.0
-
-    # ── Ollama (Local LLM Fallback) ──────────────────────────────────────────
-    ollama_enabled: bool = False        # Opt-in: set True to use local models
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = ""              # Auto-detect if empty
 
     # ── Telegram Bot ────────────────────────────────────────────────────────
     telegram_bot_token: SecretStr = SecretStr("")

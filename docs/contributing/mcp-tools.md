@@ -1,6 +1,6 @@
 # Adding MCP Tools
 
-MCP tools are defined in `skopaq/mcp_server.py` using the `@mcp.tool()` decorator from FastMCP. Each tool is an async function that returns a JSON string.
+MCP tools are defined in `skopaq/mcp_server.py` using the `@mcp.tool()` decorator from FastMCP (26 today). Each tool is an async function that returns a string, normally JSON.
 
 ## Anatomy of a Tool
 
@@ -144,7 +144,7 @@ async def test_get_option_greeks():
 
 After adding your tool:
 
-1. Update `tests/unit/chat/test_mcp_server.py` -- add tool name to the expected set
+1. Update `tests/unit/test_mcp_server.py` -- raise the expected count (26 today) and assert the new name
 2. Add to `.claude/settings.json` permissions if it should be auto-allowed
 3. Run tests: `python3 -m pytest tests/unit/ -x -q`
 
@@ -225,7 +225,8 @@ return json.dumps({
 | `place_*` | `place_order` | Actions that create something |
 | `gather_*` | `gather_market_data` | Fetch raw data for analysis |
 | `check_*` | `check_safety` | Validation tools |
-| `suggest_*` | `suggest_option_trade` | AI recommendations |
+| `suggest_*` | `suggest_option_trade` | Recommendations (no orders) |
+| `swing_*` | `swing_ideas`, `swing_idea` | The Adaptive AI's swing book |
 
 ## File Reference
 

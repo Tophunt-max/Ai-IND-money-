@@ -36,7 +36,7 @@ await notify("Order filled: BUY 10x RELIANCE @ Rs 2,485")
 | `notify_order_alert()` | CRITICAL/WARNING alert about a live order | `severity`, `title`, `text`, `order_ids` |
 | `notify_gtt_event()` | GTT / smart order placed/triggered/cancelled (not called yet) | `event`, `symbol`, `trigger_price`, `trigger_id` |
 | `notify_position_alert()` | Position monitoring alerts | `symbol`, `ltp`, `entry`, `pnl`, `alert_type` |
-| `notify_market_scan()` | Scanner results | `results` (list of quote dicts) |
+| `notify_market_scan()` | Quote list (top movers; not the swing scanner) | `results` (list of quote dicts) |
 | `notify_options_trade()` | Options recommendation | `trade_text` |
 | `notify_eod_summary()` | End-of-day portfolio summary | `portfolio_text` |
 
@@ -90,7 +90,7 @@ What each means and what to do: [Live Trading](../trading/live-trading.md#fill-c
 
 ### Market Scan
 
-Sent at 09:25 IST (scheduled) or on demand:
+The Telegram bot's 09:25 IST job (quotes only, not the swing scanner):
 
 ```
 Market Scan

@@ -5,8 +5,9 @@ Usage examples::
     skopaq token set <token>          # Store INDstocks API token
     skopaq token status               # Check token health
     skopaq status                     # System health overview
-    skopaq analyze RELIANCE           # Run agent analysis (no execution)
-    skopaq trade RELIANCE             # Analyze + execute
+    skopaq scan                       # Today's swing ideas (no orders)
+    skopaq swing-train                # Train the swing model (Adaptive AI)
+    skopaq daemon --once              # One trading session (swing + scalper + F&O)
     skopaq serve                      # Start FastAPI backend
 """
 
@@ -23,40 +24,28 @@ import typer
 from skopaq import __version__
 from skopaq.cli.theme import console
 from skopaq.cli.display import (
-    display_analyze_result,
-    display_analyze_start,
     display_daemon_report,
     display_daemon_start,
     display_error,
     display_info,
-    display_legacy_memories,
-    display_monitor_ai_decision,
     display_report,
     display_monitor_result,
     display_monitor_start,
     display_monitor_tick,
-    display_scan_results,
-    display_scan_start,
     display_serve_banner,
     display_status,
     display_success,
     display_token_health,
     display_token_set,
-    display_trade_result,
-    display_trade_start,
     display_version,
     display_welcome,
 )
 
 logger = logging.getLogger(__name__)
 
-# `skopaq trade` (live), stopped while a confirmed fill's trade row is being written: wait
-# this long for the write before the process exits
-_PERSIST_WAIT_S = 30.0
-
 app = typer.Typer(
     name="skopaq",
-    help="SkopaqTrader — AI algorithmic trading platform for Indian equities.",
+    help="SkopaqTrader — Adaptive-AI algorithmic trading for Indian equities.",
     no_args_is_help=True,
 )
 
@@ -75,8 +64,6 @@ def _apply_dashboard_settings() -> None:
 token_app = typer.Typer(help="INDstocks API token management.")
 app.add_typer(token_app, name="token")
 
-memory_app = typer.Typer(help="Agent memory stored in Supabase.")
-app.add_typer(memory_app, name="memory")
 
 
 @token_app.command("set")
@@ -196,23 +183,10 @@ def status() -> None:
     mgr = TokenManager()
     health = mgr.get_health()
 
-    # Detect configured LLMs
-    llms = []
-    if config.google_api_key.get_secret_value():
-        llms.append("Gemini")
-    if config.anthropic_api_key.get_secret_value():
-        llms.append("Claude")
-    if config.perplexity_api_key.get_secret_value():
-        llms.append("Perplexity")
-    if config.xai_api_key.get_secret_value():
-        llms.append("Grok")
-    if config.openrouter_api_key.get_secret_value():
-        llms.append("OpenRouter")
-
     from skopaq.execution import kill_switch
 
     display_welcome()
-    display_status(__version__, config, health, llms, halt=kill_switch.status())
+    display_status(__version__, config, health, halt=kill_switch.status())
 
 
 @app.command("ticks")
@@ -341,7 +315,7 @@ async def _run_scalp(config):
             await feed.start()
         engine = ScalpEngine(
             config, Executor(router, safety), client, router, feed=feed, control=control,
-            on_trade=lambda signal, execution: _record_exit(config, None, None, signal,
+            on_trade=lambda signal, execution: _record_exit(config, signal,
                                                             execution),
             max_qty=safety.max_shares)
         try:
@@ -422,7 +396,7 @@ async def _run_fno(config):
             await feed.start()
         engine = FnoEngine(
             config, Executor(router, safety), client, router, feed=feed, control=control,
-            on_trade=lambda signal, execution: _record_exit(config, None, None, signal,
+            on_trade=lambda signal, execution: _record_exit(config, signal,
                                                             execution),
             max_lots=safety.max_lots, max_position_pct=rules.max_position_pct)
         try:
@@ -914,6 +888,141 @@ def rl_rollback(
     console.print(f"RL champion is now {prev}")
 
 
+def _swing_symbols(config, symbols: str) -> list[str]:
+    raw = symbols or getattr(config, "swing_symbols", "") or ""
+    names = [x.strip().upper() for x in str(raw).split(",") if x.strip()]
+    if names:
+        return names
+    from skopaq.scanner.watchlist import NIFTY_50
+
+    return list(NIFTY_50)
+
+
+@app.command("scan")
+def scan(
+    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_SWING_SYMBOLS, else NIFTY 50)."),
+    limit: int = typer.Option(10, help="Ideas shown."),
+) -> None:
+    """Today's swing ideas: daily setups ranked by the swing model (no orders)."""
+    from rich.table import Table
+
+    from skopaq.config import SkopaqConfig
+    from skopaq.swing.engine import SwingEngine
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
+    ideas = asyncio.run(engine.scan(_swing_symbols(config, symbols), limit))
+    console.print(f"Swing model: {getattr(engine.model, 'version', None) or 'none'} "
+                  f"({engine.model_state}){' · rules only' if engine.rules_only else ''}")
+    if not ideas:
+        console.print("No qualifying setup today." if engine.model or engine.rules_only else
+                      "No swing model yet: run `skopaq swing-train` (paper: "
+                      "SKOPAQ_SWING_RULES_ONLY=true ranks the setups without one).")
+        return
+    table = Table(header_style="bold magenta")
+    for col in ("Symbol", "Setup", "Entry", "Stop", "Target", "P(win)", "Why"):
+        table.add_column(col)
+    for i in ideas:
+        table.add_row(i.symbol, i.setup.name, f"{i.setup.entry:.2f}", f"{i.setup.stop:.2f}",
+                      f"{i.setup.target:.2f}", "—" if i.prob is None else f"{i.prob:.2f}",
+                      i.setup.reason)
+    console.print(table)
+
+
+@app.command("swing-train")
+def swing_train(
+    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_SWING_SYMBOLS, else NIFTY 50)."),
+    days: int = typer.Option(0, help="Calendar days of daily history (default SKOPAQ_SWING_TRAIN_DAYS)."),
+    model: str = typer.Option("", help="lightgbm | xgboost | catboost | random_forest | "
+                                       "extra_trees | linear | mlp (default SKOPAQ_SWING_MODEL_KIND)."),
+) -> None:
+    """Train the swing model on years of daily setups (net of delivery charges), test it
+    on the latest unseen dates and register it as a candidate (gates passed: shadow)."""
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.data import history
+    from skopaq.swing.engine import params_from
+    from skopaq.swing.model import SwingTrainConfig, swing_registry, train_and_register
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    n_days = days or int(config.swing_train_days)
+    hist = {}
+    for sym in _swing_symbols(config, symbols):
+        try:
+            hist[sym] = history(sym, n_days)
+        except Exception as exc:
+            console.print(f"[yellow]{sym}: no history ({exc})[/yellow]")
+    cfg = SwingTrainConfig(model_kind=model or config.swing_model_kind, params=params_from(config))
+    registry = swing_registry(model_dir(config))
+    try:
+        out = train_and_register(hist, cfg, registry=registry)
+    except (ValueError, ImportError) as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    rep = out["report"]
+    console.print(f"Swing model {out['version']} ({cfg.model_kind}) — state {out['state']}")
+    console.print(f"  {rep['setups']} setups on {len(hist)} symbols · test {rep['first_test_date']}"
+                  f" → {rep['last_test_date']} · threshold P ≥ {rep['threshold']}")
+    console.print(f"  test, every setup: {rep['baseline']}")
+    console.print(f"  test, model's:     {rep['model']}")
+    console.print(f"  Brier {rep['brier']:.4f} vs base rate {rep['brier_base_rate']:.4f}")
+    for fail in out.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
+@app.command("swing-status")
+def swing_status() -> None:
+    """The swing registry: champion, shadow and recent models."""
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.model import swing_registry
+
+    reg = swing_registry(model_dir(SkopaqConfig()))
+    champ, shadow = reg.champion(), reg.shadow()
+    console.print(f"champion: {champ['version'] if champ else None}")
+    console.print(f"shadow:   {shadow['version'] if shadow else None}")
+    for v in reg.versions()[-10:]:
+        m = (v.get("report") or {}).get("model") or {}
+        console.print(f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
+                      f"{m.get('trades')} PF {m.get('profit_factor')}")
+
+
+@app.command("swing-promote")
+def swing_promote(
+    version: str = typer.Argument(..., help="The shadow model's version."),
+    approved_by: str = typer.Option(..., "--by", help="Your name (recorded)."),
+    reason: str = typer.Option(..., help="Why (recorded)."),
+) -> None:
+    """Shadow → champion after the shadow days (the only model live swing trades use)."""
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.model import SWING_GATES, swing_registry
+
+    try:
+        swing_registry(model_dir(SkopaqConfig())).promote(
+            version, approved_by=approved_by, reason=reason, gates=SWING_GATES)
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]Not promoted:[/red] {exc}")
+        raise typer.Exit(2)
+    console.print(f"{version} is the swing champion (previous one kept for rollback)")
+
+
+@app.command("swing-rollback")
+def swing_rollback(
+    by: str = typer.Option(..., help="Your name (recorded)."),
+    reason: str = typer.Option(..., help="Why (recorded)."),
+) -> None:
+    """Make the previous swing champion the champion again."""
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.model import swing_registry
+
+    prev = swing_registry(model_dir(SkopaqConfig())).rollback(by=by, reason=reason)
+    console.print(f"Swing champion is now {prev}")
+
+
 @app.command("charges-reconcile")
 def charges_reconcile(
     file: str = typer.Argument(..., help="The broker's contract-note CSV export."),
@@ -961,11 +1070,10 @@ def charges_reconcile(
 def report(
     days: int = typer.Option(90, help="How many days back to include."),
 ) -> None:
-    """Track record: AI calls vs NIFTY, closed trades, confidence calibration.
+    """Track record: the engines' signals, closed trades, confidence calibration.
 
-    Read from the decision log and the trades table (paper or live, per
-    SKOPAQ_TRADING_MODE). Forward results only: backtests of an LLM on past
-    dates are contaminated by what the model already knows.
+    Read from the signal journal and the trades table (paper or live, per
+    SKOPAQ_TRADING_MODE). Forward results only.
     """
     from skopaq.config import SkopaqConfig
     from skopaq.learning.report import build_report
@@ -1022,240 +1130,7 @@ def resume(
 # ── Analyze ──────────────────────────────────────────────────────────────────
 
 
-@app.command("analyze")
-def analyze(
-    symbol: str = typer.Argument(..., help="Stock symbol to analyze (e.g., RELIANCE)."),
-    date: str = typer.Option("", help="Trade date (YYYY-MM-DD). Defaults to today."),
-) -> None:
-    """Run agent analysis for a symbol (no execution)."""
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    display_analyze_start(symbol, date)
-    result = asyncio.run(_run_analyze(symbol, date))
-
-    if result.error:
-        display_error(result.error)
-        raise typer.Exit(code=1)
-
-    display_analyze_result(result)
-
-
-async def _run_analyze(symbol: str, trade_date: str):
-    """Helper to run async analysis."""
-    from skopaq.broker.paper_engine import PaperEngine
-    from skopaq.config import SkopaqConfig
-    from skopaq.execution.executor import Executor
-    from skopaq.execution.order_router import OrderRouter
-    from skopaq.execution.safety_checker import SafetyChecker
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
-    config = SkopaqConfig()
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
-    router = OrderRouter(config, paper)
-    safety = SafetyChecker(
-        max_sector_concentration_pct=config.max_sector_concentration_pct,
-    )
-    from skopaq.execution.pnl_history import seed_safety_checker
-    seed_safety_checker(safety, config)
-    executor = Executor(router, safety)
-
-    # Build upstream config (uses upstream defaults + our keys)
-    upstream_config = _build_upstream_config(config)
-
-    # For crypto, translate BTCUSDT → BTC-USD for yfinance-based analysis
-    if config.asset_class == "crypto":
-        from skopaq.broker.crypto_symbols import to_yfinance_ticker
-        analysis_symbol = to_yfinance_ticker(symbol)
-        logger.info("Crypto: %s → analysis as %s", symbol, analysis_symbol)
-    else:
-        analysis_symbol = symbol
-
-    # Load persisted memories so agents have context from past trades
-    memory_store = _create_memory_store(config)
-
-    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
-    graph = SkopaqTradingGraph(
-        upstream_config, executor,
-        selected_analysts=analysts,
-        memory_store=memory_store,
-    )
-    return await graph.analyze(analysis_symbol, trade_date)
-
-
 # ── Trade ────────────────────────────────────────────────────────────────────
-
-
-@app.command("trade")
-def trade(
-    symbol: str = typer.Argument(..., help="Stock symbol to trade (e.g., RELIANCE)."),
-    date: str = typer.Option("", help="Trade date (YYYY-MM-DD). Defaults to today."),
-) -> None:
-    """Analyze and execute a trade for a symbol."""
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    from skopaq.config import SkopaqConfig
-    config = SkopaqConfig()
-
-    # Double-confirmation gate for LIVE mode — real money at stake
-    if config.trading_mode == "live":
-        typer.echo(
-            "\n  ⚠  LIVE TRADING MODE — real orders will be placed on INDstocks.\n"
-            f"     Symbol: {symbol}    Date: {date}\n"
-        )
-        if not typer.confirm("  Proceed with LIVE execution?", default=False):
-            typer.echo("  Aborted.")
-            raise typer.Exit()
-
-    display_trade_start(symbol, date, config.trading_mode)
-    result = asyncio.run(_run_trade(symbol, date))
-
-    if result.error:
-        display_error(result.error)
-        raise typer.Exit(code=1)
-
-    display_trade_result(result)
-
-
-async def _run_trade(symbol: str, trade_date: str):
-    """Helper to run async trade.
-
-    For paper mode, this function:
-        1. Uses relaxed safety rules (no market-hours or stop-loss gate).
-        2. Fetches a real-time quote from INDstocks and injects it into the
-           paper engine so ``execute_order()`` can simulate a fill.
-        3. Wires the trade lifecycle manager for auto-reflection on SELL.
-    """
-    from skopaq.broker.paper_engine import PaperEngine
-    from skopaq.config import SkopaqConfig
-    from skopaq.constants import (
-        CRYPTO_PAPER_SAFETY_RULES, CRYPTO_SAFETY_RULES,
-        PAPER_SAFETY_RULES, SAFETY_RULES,
-    )
-    from skopaq.execution.executor import Executor
-    from skopaq.execution.order_router import OrderRouter
-    from skopaq.execution.safety_checker import SafetyChecker
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
-    from skopaq.risk.position_sizer import PositionSizer
-
-    config = SkopaqConfig()
-    is_crypto = config.asset_class == "crypto"
-
-    # Paper engine — crypto uses % brokerage + USDT capital
-    if is_crypto:
-        paper = PaperEngine(
-            initial_capital=config.initial_paper_capital,
-            brokerage_pct=0.001,         # 0.1% Binance spot fee
-            currency_label="USDT",
-        )
-    else:
-        paper = PaperEngine(initial_capital=config.initial_paper_capital)
-
-    # Choose safety rules based on trading mode + asset class
-    if is_crypto:
-        rules = CRYPTO_PAPER_SAFETY_RULES if config.trading_mode == "paper" else CRYPTO_SAFETY_RULES
-    else:
-        rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
-
-    # Wire live broker client when in live mode
-    live_client = None
-    if config.trading_mode == "live":
-        from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.token_manager import TokenManager
-
-        token_mgr = TokenManager()
-        live_client = INDstocksClient(config, token_mgr)
-
-    router = OrderRouter(config, paper, live_client=live_client)
-    safety = SafetyChecker(
-        rules=rules,
-        max_sector_concentration_pct=config.max_sector_concentration_pct,
-    )
-    from skopaq.execution.pnl_history import seed_safety_checker
-    seed_safety_checker(safety, config)
-
-    # ATR-based position sizer (optional — also works for crypto via yfinance)
-    sizer = None
-    if config.position_sizing_enabled:
-        sizer = PositionSizer(
-            risk_per_trade_pct=config.risk_per_trade_pct,
-            atr_multiplier=config.atr_multiplier,
-            atr_period=config.atr_period,
-        )
-
-    from skopaq.execution.exit_plan import planner_from_config
-
-    executor = Executor(router, safety, position_sizer=sizer,
-                        exit_planner=planner_from_config(config))
-
-    # For paper mode, inject a real-time quote so the fill simulation has a price.
-    if config.trading_mode == "paper":
-        if is_crypto:
-            await _inject_crypto_quote(config, paper, symbol)
-        else:
-            await _inject_paper_quote(config, paper, symbol)
-
-    # Compute regime and calendar scales for position sizing
-    # (India VIX + NSE calendar are irrelevant for crypto — skip)
-    if is_crypto:
-        regime_scale, calendar_scale = 1.0, 1.0
-    else:
-        regime_scale, calendar_scale = _compute_risk_scales(config, trade_date)
-
-    upstream_config = _build_upstream_config(config)
-
-    # For crypto, translate BTCUSDT → BTC-USD for yfinance-based analysis
-    if is_crypto:
-        from skopaq.broker.crypto_symbols import to_yfinance_ticker
-        analysis_symbol = to_yfinance_ticker(symbol)
-        # Store the original Binance symbol for trade record building
-        upstream_config["_trade_symbol"] = symbol
-        logger.info("Crypto: %s → analysis as %s", symbol, analysis_symbol)
-    else:
-        analysis_symbol = symbol
-
-    # Load persisted memories + wire lifecycle manager
-    memory_store = _create_memory_store(config)
-    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
-    graph = SkopaqTradingGraph(
-        upstream_config, executor,
-        selected_analysts=analysts,
-        memory_store=memory_store,
-    )
-
-    # Open live client context if wired (INDstocksClient requires async with)
-    if live_client is not None:
-        await live_client.__aenter__()
-
-    persist: Optional[asyncio.Future] = None
-    try:
-        result = await graph.analyze_and_execute(
-            analysis_symbol, trade_date,
-            regime_scale=regime_scale,
-            calendar_scale=calendar_scale,
-        )
-        # Post-execution: persist the trade (its P&L feeds the loss limits) and, when
-        # reflection is on, link BUY/SELL and reflect — first, before the client is closed
-        # and the alerts drained. Live, the fill is final at the broker: a Ctrl+C meanwhile
-        # must not lose its row, so the write runs to the end (shielded, awaited below)
-        persist = asyncio.ensure_future(_run_lifecycle(
-            config, _reflection_graph(config, graph, memory_store), memory_store, result))
-        await (asyncio.shield(persist) if live_client is not None else persist)
-    finally:
-        if live_client is not None:
-            if persist is not None and not persist.done():
-                await asyncio.wait({persist}, timeout=_PERSIST_WAIT_S)   # cancelled meanwhile
-            await live_client.__aexit__(None, None, None)
-            # Order alerts are sent in the background: let them go out before exiting
-            from skopaq.execution.order_alerts import get_alerter
-
-            drain = getattr(get_alerter(), "drain", None)
-            if drain is not None:
-                await drain()
-
-    return result
 
 
 async def _inject_paper_quote(config, paper, symbol: str) -> None:
@@ -1301,240 +1176,10 @@ async def _inject_paper_quote(config, paper, symbol: str) -> None:
     logger.warning("No quote for %s — paper fill may fail", symbol)
 
 
-async def _inject_crypto_quote(config, paper, symbol: str) -> None:
-    """Fetch a real quote from Binance and inject it into the paper engine.
-
-    The paper engine requires a Quote in its ``_quotes`` cache before
-    ``execute_order()`` can simulate a fill.  Uses the Binance public
-    24hr ticker endpoint (no authentication needed).
-    """
-    from skopaq.broker.binance_client import BinanceClient
-    from skopaq.broker.crypto_symbols import to_binance_pair
-
-    pair = to_binance_pair(symbol)
-    client = BinanceClient(base_url=config.binance_base_url)
-
-    try:
-        async with client:
-            quote = await client.get_quote(pair)
-            paper.update_quote(quote)
-            logger.info(
-                "Injected crypto quote: %s LTP=%.2f bid=%.2f ask=%.2f",
-                pair, quote.ltp, quote.bid, quote.ask,
-            )
-    except Exception as exc:
-        logger.warning(
-            "Could not fetch crypto quote for %s — paper fill may fail: %s",
-            pair, exc,
-        )
-
-
 # ── Scan ──────────────────────────────────────────────────────────────────────
 
 
-@app.command("scan")
-def scan(
-    max_candidates: int = typer.Option(5, help="Max candidates to return."),
-) -> None:
-    """Run a single scanner cycle on the NIFTY 50 watchlist."""
-    display_scan_start()
-    candidates = asyncio.run(_run_scan(max_candidates))
-    display_scan_results(candidates)
-
-
-async def _run_scan(max_candidates: int):
-    """Helper to run async scanner with real providers.
-
-    Wires up:
-    - quote_fetcher:  INDstocks batch quotes (equity) or stub (crypto)
-    - llm_screener:   Gemini 3 Flash  (technical screening)
-    - news_screener:  Perplexity Sonar (news-aware screening)
-    - social_screener: Grok            (social sentiment screening)
-    - jev:            catalyst scoring of the candidates (when enabled)
-    """
-    from langchain_core.messages import HumanMessage
-
-    from skopaq.config import SkopaqConfig
-    from skopaq.llm import bridge_env_vars, build_llm_map, extract_text
-    from skopaq.llm.jev import get_jev
-    from skopaq.scanner import ScannerEngine, Watchlist
-
-    config = SkopaqConfig()
-
-    # Bridge SKOPAQ_ env vars → standard env vars
-    bridge_env_vars(config)
-
-    # Build per-role LLM map
-    llm_map = build_llm_map()
-
-    # Activate semantic cache (saves $$)
-    from skopaq.llm.cache import init_langcache
-    cache = init_langcache(config)
-    if cache:
-        from langchain_core.globals import set_llm_cache
-        set_llm_cache(cache)
-        logger.info("Scanner: semantic cache enabled")
-
-    # ── Quote fetcher ────────────────────────────────────────────────
-    is_crypto = config.asset_class == "crypto"
-
-    if is_crypto:
-        from skopaq.broker.crypto_symbols import CRYPTO_TOP_20
-        watchlist = Watchlist(symbols=CRYPTO_TOP_20)
-
-        async def quote_fetcher(symbols: list[str]) -> list[dict]:
-            """Crypto stub — no real-time quotes wired yet."""
-            return []
-    else:
-        watchlist = Watchlist()
-
-        async def quote_fetcher(symbols: list[str]) -> list[dict]:
-            """Batch-fetch INDstocks quotes for equity symbols."""
-            from skopaq.broker.client import INDstocksClient
-            from skopaq.broker.scrip_resolver import resolve_scrip_code
-            from skopaq.broker.token_manager import TokenManager
-
-            token_mgr = TokenManager()
-            async with INDstocksClient(config, token_mgr) as client:
-                # Resolve all symbols → scrip codes (instruments CSV cached 1h)
-                resolved: list[tuple[str, str]] = []
-                for sym in symbols:
-                    try:
-                        code = await resolve_scrip_code(client, sym)
-                        resolved.append((sym, code))
-                    except ValueError:
-                        logger.debug("Scrip resolve failed: %s", sym)
-
-                if not resolved:
-                    return []
-
-                syms, codes = zip(*resolved)
-                raw_quotes = await client.get_quotes(list(codes), symbols=list(syms))
-
-                return [
-                    {
-                        "symbol": q.symbol,
-                        "ltp": q.ltp,
-                        "open": q.open,
-                        "high": q.high,
-                        "low": q.low,
-                        "close": q.close,
-                        "volume": q.volume,
-                    }
-                    for q in raw_quotes
-                ]
-
-    # ── LLM screener factories ───────────────────────────────────────
-
-    async def _invoke_llm(role: str, prompt: str) -> str:
-        """Invoke a LangChain LLM by role and return normalised text."""
-        llm = llm_map.get(role, llm_map.get("_default"))
-        if llm is None:
-            return "[]"
-        msg = HumanMessage(content=prompt)
-        if hasattr(llm, "ainvoke"):
-            response = await llm.ainvoke([msg])
-        else:
-            import asyncio as _aio
-            response = await _aio.to_thread(lambda: llm.invoke([msg]))
-        return extract_text(response.content)
-
-    async def llm_screener(prompt: str) -> str:
-        return await _invoke_llm("market_analyst", prompt)
-
-    async def news_screener(prompt: str) -> str:
-        return await _invoke_llm("news_analyst", prompt)
-
-    async def social_screener(prompt: str) -> str:
-        return await _invoke_llm("social_analyst", prompt)
-
-    # ── Run scanner ──────────────────────────────────────────────────
-    scanner = ScannerEngine(
-        watchlist=watchlist,
-        max_candidates=max_candidates,
-        quote_fetcher=quote_fetcher,
-        llm_screener=llm_screener,
-        news_screener=news_screener,
-        social_screener=social_screener,
-        jev=get_jev(),
-    )
-    return await scanner.scan_once()
-
-
 # ── Monitor ─────────────────────────────────────────────────────────────────
-
-
-@app.command("settle")
-def settle() -> None:
-    """Settle past decisions whose holding window has traded, for every ticker."""
-    from skopaq.config import SkopaqConfig
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
-    config = SkopaqConfig()
-    try:
-        graph = SkopaqTradingGraph(
-            _build_upstream_config(config),
-            executor=None,
-            memory_store=_create_memory_store(config),
-        )
-        settled = graph.settle_due()
-    except Exception as exc:
-        # Settling writes an LLM reflection per decision, so it needs the LLM keys.
-        display_error(f"Settling failed: {exc}")
-        raise typer.Exit(1)
-    display_success(f"Settled {settled} past decision(s).")
-
-
-@memory_app.command("legacy")
-def memory_legacy(
-    export: str = typer.Option("", "--export", help="Write the rows to this JSON file."),
-    delete: bool = typer.Option(
-        False, "--delete", help="Delete the rows from Supabase (exports them first)."
-    ),
-    yes: bool = typer.Option(False, "--yes", help="Delete without asking for confirmation."),
-) -> None:
-    """Show, export or delete the per-agent memories from before the v0.5.1 sync.
-
-    Upstream replaced them with the decision log. Until deleted they are
-    still searched by the recall_agent_memories MCP tool.
-    """
-    import json
-    from pathlib import Path
-
-    from skopaq.config import SkopaqConfig
-
-    config = SkopaqConfig()
-    store = _create_memory_store(config, require_reflection=False)
-    if store is None:
-        display_error("Supabase is not configured (SKOPAQ_SUPABASE_URL / SERVICE_KEY).")
-        raise typer.Exit(1)
-
-    records = store.legacy_records()
-    if not records:
-        display_info("No legacy memory rows in Supabase.")
-        return
-    display_legacy_memories(records)
-
-    if delete and not export:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        export = f"legacy-memories-{stamp}.json"
-    if export:
-        payload = {
-            "exported_at": datetime.now(timezone.utc).isoformat(),
-            "rows": [r.model_dump(mode="json") for r in records],
-        }
-        Path(export).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        display_success(f"Exported {len(records)} row(s) to {export}")
-
-    if not delete:
-        return
-    if not yes and not typer.confirm(
-        f"Delete {len(records)} legacy row(s) from Supabase? This cannot be undone."
-    ):
-        display_info("Nothing deleted.")
-        return
-    deleted = store.delete_legacy(records)
-    display_success(f"Deleted {deleted} legacy row(s). Backup: {export}")
 
 
 @app.command("monitor")
@@ -1542,9 +1187,8 @@ def monitor(
     poll_interval: int = typer.Option(0, help="Poll interval in seconds (0 = use config)."),
     stop_loss: float = typer.Option(0.0, help="Hard stop-loss % override (0 = use config)."),
     eod_exit_minutes: int = typer.Option(0, help="EOD exit minutes override (0 = use config)."),
-    no_ai: bool = typer.Option(False, "--no-ai", help="Disable AI sell analyst (rule-based only)."),
 ) -> None:
-    """Monitor open positions and auto-sell using AI + safety rules."""
+    """Monitor open positions and auto-sell on their exit rules (stop, target, trail, EOD)."""
     from skopaq.config import SkopaqConfig
 
     config = SkopaqConfig()
@@ -1557,17 +1201,14 @@ def monitor(
     if eod_exit_minutes > 0:
         config.monitor_eod_exit_minutes_before_close = eod_exit_minutes
 
-    ai_enabled = not no_ai
-
     display_monitor_start(
         mode=config.trading_mode,
         poll_interval=config.monitor_poll_interval_seconds,
         stop_pct=config.monitor_hard_stop_pct,
         eod_minutes=config.monitor_eod_exit_minutes_before_close,
-        ai_enabled=ai_enabled,
     )
 
-    result = asyncio.run(_run_monitor(config, ai_enabled))
+    result = asyncio.run(_run_monitor(config))
     display_monitor_result(result)
     # Live: positions still open, a failed exit or an unconfirmed order at the end is
     # rc 4, which the scheduler turns into a "check the broker" alert
@@ -1577,7 +1218,7 @@ def monitor(
         raise typer.Exit(POSITIONS_LEFT_EXIT_CODE)
 
 
-async def _run_monitor(config, ai_enabled: bool):
+async def _run_monitor(config):
     """Async helper to run the position monitor."""
     import signal as sig
 
@@ -1615,24 +1256,6 @@ async def _run_monitor(config, ai_enabled: bool):
     exit_planner = planner_from_config(config)
     executor = Executor(router, safety, exit_planner=exit_planner)
 
-    # Build LLM for sell analyst (if AI enabled)
-    llm = None
-    if ai_enabled:
-        try:
-            from skopaq.llm import bridge_env_vars, build_llm_map
-
-            bridge_env_vars(config)
-            llm_map = build_llm_map()
-            llm = llm_map.get("sell_analyst", llm_map.get("_default"))
-            if llm:
-                logger.info("Sell analyst LLM ready")
-            else:
-                logger.warning("No LLM available for sell_analyst — AI tier disabled")
-                ai_enabled = False
-        except Exception:
-            logger.warning("Failed to build LLM map — AI tier disabled", exc_info=True)
-            ai_enabled = False
-
     # Graceful shutdown via Ctrl+C or SIGTERM (docker stop)
     stop_event = asyncio.Event()
 
@@ -1659,12 +1282,10 @@ async def _run_monitor(config, ai_enabled: bool):
             client=client,
             router=router,
             config=config,
-            llm=llm,
             stop_event=stop_event,
-            ai_enabled=ai_enabled,
-            # No analysis graph here: record the exit and its P&L, no reflection.
-            on_exit=lambda signal, execution: _record_exit(config, None, None, signal, execution),
-            on_late_fill=lambda tracked, conf: _record_late_fill(config, None, None, tracked,
+            # Record the exit and its P&L
+            on_exit=lambda signal, execution: _record_exit(config, signal, execution),
+            on_late_fill=lambda tracked, conf: _record_late_fill(config, tracked,
                                                                  conf),
             exit_planner=exit_planner,
             price_feed=price_feed,
@@ -1838,37 +1459,6 @@ def schedule(
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
 
-@app.command("chat")
-def chat(
-    live: bool = typer.Option(False, "--live", help="Start in live trading mode."),
-    confirm_live: bool = typer.Option(
-        False, "--confirm-live", help="Skip live-mode confirmation prompt.",
-    ),
-) -> None:
-    """Interactive AI trading assistant (Claude Code-style REPL)."""
-    from skopaq.config import SkopaqConfig
-
-    config = SkopaqConfig()
-
-    if live:
-        if not confirm_live:
-            typer.echo(
-                "\n  WARNING: Live mode uses REAL money on INDstocks/Binance.\n"
-            )
-            if not typer.confirm("  Start in LIVE mode?", default=False):
-                typer.echo("  Starting in paper mode instead.")
-                live = False
-
-        if live:
-            config.trading_mode = "live"
-
-    from skopaq.chat.repl import run_repl
-    from skopaq.chat.session import ChatSession
-
-    session = ChatSession(config)
-    asyncio.run(run_repl(session))
-
-
 # ── Serve ────────────────────────────────────────────────────────────────────
 
 
@@ -1952,114 +1542,24 @@ def _compute_risk_scales(config, trade_date: str) -> tuple[float, float]:
     return regime_scale, calendar_scale
 
 
-def _build_upstream_config(config) -> dict:
-    """Build config dict for upstream TradingAgentsGraph from SkopaqConfig."""
-    from pathlib import Path
-    from skopaq.llm import bridge_env_vars, build_llm_map
-    from skopaq.llm.model_tier import GEMINI_FLASH
-
-    # Bridge SKOPAQ_ env vars → standard env vars (GOOGLE_API_KEY, etc.)
-    bridge_env_vars(config)
-
-    project_dir = str(Path.cwd())
-    is_crypto = config.asset_class == "crypto"
-
-    upstream = {
-        "results_dir": str(Path(project_dir) / "results"),
-        "data_cache_dir": str(Path(project_dir) / ".cache" / "data"),
-        "llm_provider": "google",  # Default to Gemini (cheapest)
-        "deep_think_llm": GEMINI_FLASH,
-        "quick_think_llm": GEMINI_FLASH,
-        "backend_url": None,
-        "max_debate_rounds": config.max_debate_rounds,
-        "max_risk_discuss_rounds": config.max_risk_discuss_rounds,
-        "google_thinking_level": config.google_thinking_level or None,
-        "max_recur_limit": 100,
-        "asset_class": config.asset_class,
-        # Data vendor routing — crypto uses yfinance everywhere (no INDstocks)
-        "data_vendors": {
-            "core_stock_apis": "yfinance" if is_crypto else "indstocks,yfinance",
-            "technical_indicators": "yfinance",
-            "fundamental_data": "yfinance",
-            "news_data": "yfinance",
-        },
-        # Crypto: no suffix (BTC-USD works as-is); Equity: .NS for NSE
-        "yfinance_symbol_suffix": "" if is_crypto else ".NS",
-    }
-
-    # Build per-role LLM map (multi-model tiering)
-    try:
-        upstream["llm_map"] = build_llm_map(upstream)
-    except Exception:
-        logger.warning("Failed to build LLM map — falling back to single-model", exc_info=True)
-
-    # Activate semantic LLM cache (Redis LangCache)
-    from skopaq.llm.cache import init_langcache
-    cache = init_langcache(config)
-    if cache:
-        from langchain_core.globals import set_llm_cache
-        set_llm_cache(cache)
-        logger.info(
-            "Semantic cache enabled (threshold=%.2f)",
-            config.langcache_threshold,
-        )
-
-    return upstream
-
-
-def _create_memory_store(config, require_reflection: bool = True):
-    """Create a MemoryStore if reflection is enabled and Supabase is configured.
-
-    Returns None if either condition is not met (graceful degradation).
-    ``require_reflection=False`` skips the reflection check (memory admin).
-    """
-    if require_reflection and not config.reflection_enabled:
-        return None
-
-    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
-        logger.debug("Supabase not configured — agent memory disabled")
-        return None
-
-    try:
-        from supabase import create_client
-        from skopaq.memory.store import MemoryStore
-
-        client = create_client(
-            config.supabase_url,
-            config.supabase_service_key.get_secret_value(),
-        )
-        return MemoryStore(client, max_entries=config.reflection_max_memory_entries)
-    except Exception:
-        logger.warning("Failed to initialise MemoryStore — continuing without memory", exc_info=True)
-        return None
-
-
-def _reflection_graph(config, graph, memory_store):
-    """The graph to reflect with, or ``None`` when reflection is off."""
-    if config.reflection_enabled and memory_store is not None:
-        return graph
-    return None
-
-
-async def _record_exit(config, graph, memory_store, signal, execution, *,
+async def _record_exit(config, signal, execution, *,
                        rollback_unbooked: bool = False) -> bool:
-    """Persist an exit that did not come from an analysis (monitor, EOD close).
+    """Persist an exit (monitor, EOD close, dashboard close) as a trade row.
 
-    It goes through the same lifecycle as an analysed trade, so the opening
+    It goes through the same booking as an entry, so the opening
     BUY row is closed with its realized P&L, which the loss limits read back
     (``skopaq.execution.pnl_history``). False when it was not booked
     (``_run_lifecycle``, which ``rollback_unbooked`` is passed to).
     """
     from datetime import timedelta
 
-    from skopaq.graph.skopaq_graph import AnalysisResult
+    from skopaq.execution.trade_booking import TradeResult
 
     ist_today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
-    result = AnalysisResult(
+    result = TradeResult(
         symbol=signal.symbol, trade_date=ist_today, signal=signal, execution=execution,
     )
-    return await _run_lifecycle(config, _reflection_graph(config, graph, memory_store),
-                                memory_store, result, rollback_unbooked=rollback_unbooked)
+    return await _run_lifecycle(config, result, rollback_unbooked=rollback_unbooked)
 
 
 def _trade_repository(config):
@@ -2090,7 +1590,7 @@ def _delta_price(avg_now, filled_now, avg_before, filled_before):
     return price.quantize(Decimal("0.0001")) if price > 0 else avg_now
 
 
-async def _record_late_fill(config, graph, memory_store, tracked, conf) -> bool:
+async def _record_late_fill(config, tracked, conf) -> bool:
     """Persist a live fill the broker confirmed after its order had been reported.
 
     The monitor or CLOSING resumed the order (``tracked``) and read its final state
@@ -2158,7 +1658,7 @@ async def _record_late_fill(config, graph, memory_store, tracked, conf) -> bool:
             broker_message=f"late fill of {tracked.order_id}",
         )
         # Not booked: its SELL row is removed again, as the next booking writes its own
-        booked = await _record_exit(config, graph, memory_store, signal, execution,
+        booked = await _record_exit(config, signal, execution,
                                     rollback_unbooked=True)
         return booked is not False
 
@@ -2222,14 +1722,12 @@ async def _record_late_fill(config, graph, memory_store, tracked, conf) -> bool:
         return False
 
 
-async def _run_lifecycle(config, graph, memory_store, result, *,
-                         rollback_unbooked: bool = False) -> bool:
-    """Run trade lifecycle tracking (BUY/SELL linkage + auto-reflection).
+async def _run_lifecycle(config, result, *, rollback_unbooked: bool = False) -> bool:
+    """Book a trade (``skopaq.execution.trade_booking.TradeResult``).
 
     Flow:
         1. Persist the trade to Supabase (so find_open_buy() works for future SELLs)
-        2. Run lifecycle manager (BUY/SELL linkage + reflection; ``graph=None``
-           links and records P&L without reflecting)
+        2. Book the BUY → SELL linkage and the realized P&L
 
     Silently does nothing if Supabase is not configured (True: nothing to write).
     Returns False when the trade was not booked: a BUY's row could not be inserted, the
@@ -2246,7 +1744,7 @@ async def _run_lifecycle(config, graph, memory_store, result, *,
     try:
         from supabase import create_client
         from skopaq.db.repositories import TradeRepository
-        from skopaq.memory.lifecycle import TradeLifecycleManager
+        from skopaq.execution.trade_booking import TradeLifecycleManager
 
         client = create_client(
             config.supabase_url,
@@ -2256,7 +1754,7 @@ async def _run_lifecycle(config, graph, memory_store, result, *,
 
         # Step 1: Persist the trade BEFORE lifecycle processing.
         # This is the critical link — without it, find_open_buy() never finds
-        # BUYs and the entire self-evolution loop is broken.
+        # BUYs and their P&L is never booked.
         trade_record = _build_trade_record(result, config)
         saved = None
         if trade_record is not None:
@@ -2277,8 +1775,8 @@ async def _run_lifecycle(config, graph, memory_store, result, *,
                     exc_info=True,
                 )
 
-        # Step 2: Run lifecycle (BUY/SELL linkage + reflection)
-        lifecycle = TradeLifecycleManager(trade_repo, graph, memory_store)
+        # Step 2: BUY/SELL linkage and the realized P&L
+        lifecycle = TradeLifecycleManager(trade_repo)
         if await lifecycle.on_trade(result) is False:
             booked = False                    # a SELL that closed no BUY row
             if rollback_unbooked and saved is not None:
@@ -2332,7 +1830,7 @@ def _agent_decision(signal) -> dict:
 
 
 def _build_trade_record(result, config):
-    """Convert an AnalysisResult into a TradeRecord for Supabase persistence.
+    """Convert a TradeResult into a TradeRecord for Supabase persistence.
 
     Returns None if the result doesn't represent a successful execution
     (e.g., HOLD signals, failed orders, or analysis-only runs).
@@ -2355,12 +1853,12 @@ def _build_trade_record(result, config):
 
     execution = result.execution
 
-    # Build model_signals dict from cache/timing metadata
+    # model_signals: the engine's evidence (swing setup, model score, signal id)
     model_signals = {}
-    if result.cache_hits or result.cache_misses:
-        model_signals["cache_hits"] = result.cache_hits
-        model_signals["cache_misses"] = result.cache_misses
-    if result.duration_seconds:
+    evidence = getattr(result, "evidence", None)
+    if isinstance(evidence, dict) and evidence:
+        model_signals["swing"] = {k: v for k, v in evidence.items() if v is not None}
+    if getattr(result, "duration_seconds", 0):
         model_signals["duration_seconds"] = result.duration_seconds
 
     # Live: the row is what the broker confirmed — the filled quantity, the order ids

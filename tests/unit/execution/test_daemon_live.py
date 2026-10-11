@@ -60,7 +60,7 @@ def _config(**overrides) -> MagicMock:
         monitor_poll_interval_seconds=1, monitor_hard_stop_pct=0.04,
         monitor_eod_exit_minutes_before_close=10, monitor_ai_interval_cycles=6,
         monitor_trailing_stop_enabled=False, monitor_trailing_stop_pct=0.02,
-        monitor_resync_cycles=3, reflection_enabled=False, supabase_url="",
+        monitor_resync_cycles=3, supabase_url="",
         scheduler_kill_after_seconds=300, order_shutdown_margin_seconds=60,
     )
     values.update(overrides)
@@ -139,12 +139,12 @@ def alerts(monkeypatch):
 
 async def test_an_unconfirmed_buy_uses_a_trade_slot_without_opening_a_trade():   # T18
     daemon = TradingDaemon(_config(daemon_max_trades_per_session=1))
-    daemon._graph = AsyncMock()
+    daemon._swing = MagicMock()
     daemon._router = MagicMock()
     unconfirmed = ExecutionResult(success=False, mode="live", outcome="open",
                                   order_ids=["EQ-1"], remaining_open=True,
                                   rejection_reason="Order EQ-1 may still be working")
-    daemon._graph.analyze_and_execute = AsyncMock(return_value=MagicMock(
+    daemon._swing.trade = AsyncMock(return_value=MagicMock(
         error=None, signal=MagicMock(action="BUY", confidence=80, quantity=Decimal(10)),
         execution=unconfirmed))
     candidates = [MagicMock(symbol="AAA", urgency="high"),
@@ -164,12 +164,12 @@ async def test_an_unconfirmed_buy_uses_a_trade_slot_without_opening_a_trade():  
 async def test_a_partial_buy_opens_a_trade_for_the_filled_quantity(caplog):
     caplog.set_level(logging.INFO, logger="skopaq.execution.daemon")
     daemon = TradingDaemon(_config())
-    daemon._graph = AsyncMock()
+    daemon._swing = MagicMock()
     daemon._router = MagicMock()
     partial = ExecutionResult(success=True, mode="live", fill_price=100.0, outcome="partial",
                               filled_quantity=Decimal(3), requested_quantity=Decimal(10),
                               order_ids=["EQ-1"])
-    daemon._graph.analyze_and_execute = AsyncMock(return_value=MagicMock(
+    daemon._swing.trade = AsyncMock(return_value=MagicMock(
         error=None, signal=MagicMock(action="BUY", confidence=80, quantity=Decimal(10)),
         execution=partial))
     report = _report()
@@ -188,7 +188,6 @@ def _session(daemon, trade, **patches):
         patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)),
         patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=["TCS"]),
         patch.object(daemon, "_phase_analyze_and_trade", side_effect=trade),
-        patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0),
         patch.object(daemon, "_notify_report", new_callable=AsyncMock),
     )
 
@@ -200,8 +199,8 @@ async def _trade_unconfirmed(candidates, report):
 
 async def test_monitoring_and_closing_run_for_an_unconfirmed_buy():   # T18
     daemon = TradingDaemon(_config())
-    first, second, third, fourth, fifth, sixth = _session(daemon, _trade_unconfirmed)
-    with first, second, third, fourth, fifth, sixth, \
+    first, second, third, fourth, fifth = _session(daemon, _trade_unconfirmed)
+    with first, second, third, fourth, fifth, \
          patch.object(daemon, "_phase_monitor", new_callable=AsyncMock,
                       return_value=MonitorResult()) as monitor, \
          patch.object(daemon, "_phase_close", new_callable=AsyncMock) as close:
@@ -213,8 +212,8 @@ async def test_monitoring_and_closing_run_for_an_unconfirmed_buy():   # T18
 
 async def test_a_failure_with_only_an_unconfirmed_buy_still_runs_closing():   # T18
     daemon = TradingDaemon(_config())
-    first, second, third, fourth, fifth, sixth = _session(daemon, _trade_unconfirmed)
-    with first, second, third, fourth, fifth, sixth, \
+    first, second, third, fourth, fifth = _session(daemon, _trade_unconfirmed)
+    with first, second, third, fourth, fifth, \
          patch.object(daemon, "_phase_monitor", new_callable=AsyncMock,
                       side_effect=RuntimeError("positions unavailable")), \
          patch.object(daemon, "_phase_close", new_callable=AsyncMock) as close:
@@ -234,7 +233,6 @@ async def test_the_session_drains_order_alerts_at_the_end(monkeypatch):
     daemon = TradingDaemon(_config())
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock,
                       side_effect=RuntimeError("token expired")), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         await daemon.run_session()
     assert drained
@@ -534,7 +532,6 @@ async def test_a_stop_during_analyzing_still_sends_the_rejected_buy_notification
          patch.object(d, "_halt_status", return_value=MagicMock(halted=False)), \
          patch.object(d, "_phase_scan", new_callable=AsyncMock, return_value=["TCS"]), \
          patch.object(d, "_phase_analyze_and_trade", side_effect=trade), \
-         patch.object(d, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(d, "_notify_report", new_callable=AsyncMock), \
          patch("skopaq.notifications.notify", slow_notify):
         await d.run_session()

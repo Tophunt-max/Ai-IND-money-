@@ -158,58 +158,38 @@ def _wait(client, job_id):
     raise AssertionError("job did not finish")
 
 
-def test_analyze_job(client, monkeypatch):
-    from skopaq.cli import main as cli
-
-    async def fake_analyze(symbol, date):
-        signal = SimpleNamespace(action="BUY", confidence=72, entry_price=100.0,
-                                 stop_loss=95.0, target=110.0, reasoning="why")
-        return SimpleNamespace(symbol=symbol, trade_date=date, error=None, duration_seconds=3.2,
-                               signal=signal, raw_decision="BUY",
-                               agent_state={"market_report": "up", "n": 3,
-                                            "investment_debate_state": {"judge_decision": "go"}})
-
-    monkeypatch.setattr(cli, "_run_analyze", fake_analyze)
-    r = client.post("/api/dashboard/jobs", json={"kind": "analyze", "symbol": "tcs"}, headers=AUTH)
+def test_scan_job_returns_the_swing_ideas(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_swing_scan_job", lambda limit: {
+        "model": "swing-lightgbm-1", "model_state": "shadow", "threshold": 0.55,
+        "rules_only": False, "ideas": [{"symbol": "SBIN", "setup": "breakout", "limit": limit}]})
+    r = client.post("/api/dashboard/jobs", json={"kind": "scan", "max_candidates": 3}, headers=AUTH)
     assert r.status_code == 202
     job = _wait(client, r.json()["id"])
-    assert job["status"] == "done" and job["symbol"] == "TCS"
-    assert job["result"]["signal"]["action"] == "BUY"
-    assert job["result"]["reports"] == {"market_report": "up",
-                                        "investment_debate_state.judge_decision": "go"}
+    assert job["status"] == "done"
+    assert job["result"]["ideas"] == [{"symbol": "SBIN", "setup": "breakout", "limit": 3}]
     listed = client.get("/api/dashboard/jobs", headers=AUTH).json()["jobs"]
     assert listed[0]["id"] == job["id"] and "result" not in listed[0]
 
 
-def test_analyze_error_marks_the_job_failed(client, monkeypatch):
-    from skopaq.cli import main as cli
+def test_a_failed_training_marks_the_job_failed(client, monkeypatch):
+    def broken():
+        raise ValueError("only 12 historical setups")
 
-    async def broken(symbol, date):
-        return SimpleNamespace(symbol=symbol, trade_date=date, error="API key not valid",
-                               duration_seconds=1, signal=None, raw_decision="", agent_state={})
-
-    monkeypatch.setattr(cli, "_run_analyze", broken)
-    r = client.post("/api/dashboard/jobs", json={"kind": "analyze", "symbol": "TCS"}, headers=AUTH)
+    monkeypatch.setattr(dashboard, "_swing_train_job", broken)
+    r = client.post("/api/dashboard/jobs", json={"kind": "swing_train"}, headers=AUTH)
     job = _wait(client, r.json()["id"])
-    assert job["status"] == "failed" and job["error"] == "API key not valid"
+    assert job["status"] == "failed" and "12 historical setups" in job["error"]
 
 
-def test_scan_job(client, monkeypatch):
-    from skopaq.cli import main as cli
-
-    async def fake_scan(n):
-        return [SimpleNamespace(to_dict=lambda: {"symbol": "SBIN", "reason": "volume"})]
-
-    monkeypatch.setattr(cli, "_run_scan", fake_scan)
-    r = client.post("/api/dashboard/jobs", json={"kind": "scan", "max_candidates": 3}, headers=AUTH)
-    job = _wait(client, r.json()["id"])
-    assert job["status"] == "done"
-    assert job["result"] == {"candidates": [{"symbol": "SBIN", "reason": "volume"}]}
+@pytest.mark.parametrize("kind", ["analyze", "trade", "settle"])
+def test_the_llm_jobs_are_gone(client, kind):
+    r = client.post("/api/dashboard/jobs", json={"kind": kind, "symbol": "TCS"}, headers=AUTH)
+    assert r.status_code == 422
 
 
 @pytest.mark.parametrize("symbol", ["", "rel;rm -rf", "A" * 30])
-def test_analyze_rejects_bad_symbols(client, symbol):
-    r = client.post("/api/dashboard/jobs", json={"kind": "analyze", "symbol": symbol}, headers=AUTH)
+def test_backtest_rejects_bad_symbols(client, symbol):
+    r = client.post("/api/dashboard/jobs", json={"kind": "backtest", "symbol": symbol}, headers=AUTH)
     assert r.status_code == 422
 
 
@@ -221,39 +201,6 @@ def test_one_job_at_a_time(client):
 
 def test_unknown_job(client):
     assert client.get("/api/dashboard/jobs/nope", headers=AUTH).status_code == 404
-
-
-# ── Paper trade jobs ──────────────────────────────────────────────────────────
-
-
-def test_trade_job_runs_skopaq_trade_in_paper(client, monkeypatch):
-    from skopaq.cli import main as cli
-
-    async def fake_trade(symbol, date):
-        signal = SimpleNamespace(action="BUY", confidence=70, entry_price=100.0, stop_loss=95.0,
-                                 target=110.0, reasoning="r", quantity=Decimal("3"))
-        execution = SimpleNamespace(success=True, mode="paper", safety_passed=True,
-                                    rejection_reason="", fill_price=100.5, signal=signal,
-                                    order=SimpleNamespace(order_id="P-1"), brokerage=5.0)
-        return SimpleNamespace(symbol=symbol, trade_date=date, error=None, duration_seconds=1,
-                               signal=signal, raw_decision="BUY", agent_state={},
-                               execution=execution)
-
-    monkeypatch.setattr(cli, "_run_trade", fake_trade)
-    r = client.post("/api/dashboard/jobs", json={"kind": "trade", "symbol": "INFY"}, headers=AUTH)
-    assert r.status_code == 202
-    job = _wait(client, r.json()["id"])
-    ex = job["result"]["execution"]
-    assert job["status"] == "done"
-    assert ex == {"success": True, "mode": "paper", "safety_passed": True, "rejection_reason": "",
-                  "fill_price": 100.5, "quantity": 3.0, "order_id": "P-1", "brokerage": 5.0}
-
-
-def test_trade_job_refused_in_live_mode(client, monkeypatch):
-    monkeypatch.setattr(dashboard, "SkopaqConfig", lambda: _config(trading_mode="live"))
-    r = client.post("/api/dashboard/jobs", json={"kind": "trade", "symbol": "INFY"}, headers=AUTH)
-    assert r.status_code == 403
-    assert dashboard._jobs == {}
 
 
 # ── Market data ───────────────────────────────────────────────────────────────

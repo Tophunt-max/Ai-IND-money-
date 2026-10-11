@@ -1,58 +1,44 @@
 ---
 name: trade
-description: Full trade workflow — Claude analyzes the stock, validates safety, and executes (paper mode) after user confirmation.
+description: Paper-trade the Adaptive AI's swing setup for a stock — checks the setup, validates safety, and executes in paper mode only after the user confirms.
 argument-hint: <SYMBOL>
 user-invocable: true
-allowed-tools: mcp__skopaq__get_quote mcp__skopaq__get_historical mcp__skopaq__get_positions mcp__skopaq__get_funds mcp__skopaq__check_safety mcp__skopaq__place_order WebSearch
+allowed-tools: mcp__skopaq__swing_idea mcp__skopaq__get_quote mcp__skopaq__get_funds mcp__skopaq__check_safety mcp__skopaq__place_order
 ---
 
-# Execute Trade — Claude-Native Analysis + Execution
+# Paper trade an Adaptive AI setup
 
-You ARE the trader. Analyze the stock yourself using live data, then execute if the user confirms.
+**Symbol: $ARGUMENTS**
 
-## Your Task
+The Adaptive AI decides; you never make up a signal or levels.
 
-### Phase 1: Analysis (use /analyze approach)
+### 1. The setup
 
-1. Fetch live quote and historical data for **$ARGUMENTS**
-2. Search for recent news
-3. Run your own technical + fundamental analysis
-4. Generate a BUY/SELL/HOLD signal with confidence
+Call `mcp__skopaq__swing_idea` (symbol=$ARGUMENTS).
 
-### Phase 2: Pre-Trade Validation
+- `idea` is null → no setup today: stop and say so.
+- `model` is set and `prob` < `threshold` → the model does not take it: stop and say so.
+- `model` is null → no trained swing model: say the live system would not trade it; continue only if the user explicitly asks for a paper test.
 
-If your signal is BUY or SELL:
+### 2. Size and safety
 
-1. Call `mcp__skopaq__get_funds` to check available capital
-2. Calculate position size:
-   - Risk 1% of available capital per trade
-   - Stop distance = entry - stop_loss
-   - Quantity = floor(risk_amount / stop_distance)
-3. Call `mcp__skopaq__check_safety` to validate:
-   - symbol, quantity, price, side (BUY or SELL)
-4. If safety check fails, explain why and adjust
+1. `mcp__skopaq__get_funds` — available capital.
+2. Quantity = floor(1% of capital / (entry − stop)), at least 1.
+3. `mcp__skopaq__check_safety` with symbol, quantity, the setup's entry as price, side BUY. If it fails, explain and stop.
 
-### Phase 3: User Confirmation (MANDATORY)
-
-Present the trade plan clearly:
+### 3. Confirmation (MANDATORY)
 
 ```
-TRADE PLAN: BUY RELIANCE
-  Entry:     ₹2,500.00
-  Stop Loss: ₹2,410.00 (-3.6%)
-  Target:    ₹2,700.00 (+8.0%)
-  Quantity:  40 shares
-  Risk:      ₹3,600 (0.36% of capital)
-  R:R Ratio: 2.2:1
-  Mode:      PAPER
-  Safety:    PASSED
+TRADE PLAN: BUY <SYMBOL> (<setup>, P(win) <prob>)
+  Entry / Stop / Target:  ₹… / ₹… / ₹…
+  Quantity:               … shares · risk ₹…
+  Mode:                   PAPER · Safety: PASSED
 ```
 
-**Ask**: "Shall I execute this trade in paper mode? (y/n)"
+Ask: "Execute this in paper mode? (y/n)"
 
-### Phase 4: Execution (only after user says yes)
+### 4. Execute (only after "yes")
 
-Call `mcp__skopaq__place_order` with the confirmed parameters.
+`mcp__skopaq__place_order` with the confirmed parameters. The MCP server's orders always go to the paper engine.
 
 **NEVER execute without explicit user confirmation.**
-Paper mode is always the default.

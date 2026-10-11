@@ -1,7 +1,7 @@
 # Docker Deployment
 
 SkopaqTrader ships as one Docker image for every service: API, Telegram bot, scheduler,
-daemon, chatbot, MCP server and any `skopaq` CLI command. The same image is used by
+daemon, MCP server and any `skopaq` CLI command. The same image is used by
 `docker-compose.yml`, Fly (`fly.toml`, `fly-telegram.toml`) and Railway (`railway.toml`,
 `railway-daemon.toml`).
 
@@ -12,12 +12,11 @@ daemon, chatbot, MCP server and any `skopaq` CLI command. The same image is used
 ## Quick Start
 
 Build the image (native arm64 on Apple Silicon, amd64 elsewhere), then run the API
-server on loopback only, the interactive chatbot, or any `skopaq` CLI command:
+server on loopback only, or any `skopaq` CLI command:
 
 ```bash
 docker build -t skopaqtrader .
 docker run -d --env-file .env -p 127.0.0.1:8000:8000 skopaqtrader api
-docker run -it --env-file .env skopaqtrader chat
 docker run --rm --env-file .env skopaqtrader status
 ```
 
@@ -30,10 +29,10 @@ Built from the root `Dockerfile`:
 - single stage on `python:3.14-slim-trixie`; no apt packages and no compiler (every
   dependency ships CPython 3.14 wheels for linux/arm64 and linux/amd64);
 - dependencies from `pip install -e ".[deploy]"` (Telegram bot with its job queue,
-  Ollama, psycopg2, quantstats, langchain-community);
+  psycopg2, quantstats);
 - runs as the non-root user `skopaq` (uid 1000) with `WORKDIR /home/skopaq`, so
-  relative paths (`results/`, `.cache/`) are writable; `/app` (the code) is read-only
-  for the app;
+  relative paths (session logs, the backtest SQLite fallback) are writable; `/app` (the
+  code) is read-only for the app;
 - `TZ=Asia/Kolkata`, `PYTHONUNBUFFERED=1`;
 - no image-level `HEALTHCHECK`: each compose service defines its own (below), and Fly
   and Railway use their own checks.
@@ -48,15 +47,14 @@ through:
 | `api` | `docker run ... api` | FastAPI backend (honours `$PORT`) | 8000 |
 | `telegram` | `docker run ... telegram` | Telegram bot | none |
 | `scheduler` | `docker run ... scheduler` | One daemon session per NSE trading day | none |
-| `chat` | `docker run -it ... chat` | Interactive chatbot | none |
 | `mcp` | `docker run -i ... mcp` | MCP server (stdio; stdout carries only JSON-RPC) | none |
 | `daemon` | `docker run ... daemon [--dry-run]` | Paper trading session, now | none |
 | `daemon-live` | `docker run ... daemon-live` | Live trading session, now | none |
 | `monitor` | `docker run ... monitor` | Position monitor | none |
-| `scan` | `docker run ... scan` | One-shot market scan | none |
+| `scan` | `docker run ... scan` | Today's swing ideas from the swing model (no orders) | none |
 | `status` | `docker run ... status` | System health check | none |
 | `shell` | `docker run -it ... shell` | Bash shell | none |
-| any `skopaq` command | `docker run ... halt "reason"`, `resume --yes`, `token set <tok>`, `settle`, `report` | Passed to the CLI | none |
+| any `skopaq` command | `docker run ... halt "reason"`, `resume --yes`, `token set <tok>`, `swing-train`, `report` | Passed to the CLI | none |
 | `help` | `docker run ... help` | Lists the services and CLI commands | none |
 
 `python ...`, `bash`, `sh` and absolute paths are executed directly (so Railway's
@@ -71,8 +69,8 @@ through:
 |---------|--------------|
 | `docker compose up -d --build` | api + telegram + scheduler |
 | `docker compose ps` | all three turn "healthy" |
-| `docker compose run --rm chat` | interactive chatbot (profile: interactive) |
-| `docker compose run --rm scan` | one-shot market scan (profile: tools) |
+| `docker compose run --rm scan` | today's swing ideas, no orders (profile: tools) |
+| `docker compose run --rm swing-train` | train a swing model candidate (profile: tools) |
 | `docker compose run --rm daemon --dry-run` | scan-only daemon session now (profile: trading) |
 | `docker compose run --rm daemon` | a full paper session now |
 | `docker compose run --rm -T mcp` | MCP server over stdio (profile: mcp); never `up -d` |
@@ -86,9 +84,8 @@ only; expose it publicly (inbound HTTPS to the API and dashboard) only through a
 
 | Volume | Path | Holds |
 |--------|------|-------|
-| `skopaq-home` | `/home/skopaq/.skopaq/` | INDstocks token (`token.enc`, `token.key`), kill-switch `HALT` file, per-symbol SELL locks (`locks/`), live order journal (`orders/`) |
-| `skopaq-home` | `/home/skopaq/.tradingagents/` | decision log |
-| `skopaq-home` | `/home/skopaq/results/`, `.cache/` | analysis reports, data cache |
+| `skopaq-home` | `/home/skopaq/.skopaq/` | INDstocks token (`token.enc`, `token.key`), kill-switch `HALT` file, per-symbol SELL locks (`locks/`), live order journal (`orders/`), signal journal (`signals/`), models incl. the swing registry (`models/`), exit plans, control files, dashboard overrides |
+| `skopaq-home` | `/home/skopaq/.tradingagents/cache/` | market-data cache |
 | `skopaq-home` | `/home/skopaq/scheduler/`, `logs/daemon/` | scheduler markers, one log per session |
 | `skopaq-data` | `/data/` | nothing (kept for existing installs, currently unused) |
 
@@ -118,7 +115,7 @@ cp .env.example .env
 
 Then fill it in. Compose treats `$` in a value as a variable: write a literal `$` as `$$`.
 
-Essentials: an LLM key (`SKOPAQ_GOOGLE_API_KEY`), Supabase, `SKOPAQ_TELEGRAM_BOT_TOKEN`
+Essentials: Supabase, `SKOPAQ_TELEGRAM_BOT_TOKEN`
 and `SKOPAQ_TELEGRAM_CHAT_ID`, `SKOPAQ_TRADING_MODE=paper`. Settings added for the
 always-on stack:
 
@@ -126,12 +123,11 @@ always-on stack:
 |----------|---------|---------|
 | `SKOPAQ_SCHEDULER_ENABLED` | `true` | `false` keeps the scheduler up but idle |
 | `SKOPAQ_SCHEDULER_MODE` | `paper` | `live` also needs `SKOPAQ_SCHEDULER_CONFIRM_LIVE=true` |
-| `SKOPAQ_SCHEDULER_START` / `_LAST_START` / `_DEADLINE` / `_SETTLE_AT` | `09:15` / `11:30` / `15:45` / `18:30` | IST times |
+| `SKOPAQ_SCHEDULER_START` / `_LAST_START` / `_DEADLINE` | `09:15` / `11:30` / `15:45` | IST times |
 | `SKOPAQ_SCHEDULER_PREFLIGHT` | `08:45` | IST; alert if the INDstocks token is missing or expires before the session ends |
 | `SKOPAQ_SCHEDULER_PING_URL` | empty | dead-man's switch |
 | `SKOPAQ_NSE_HOLIDAYS` | empty | extra NSE closures (`YYYY-MM-DD,...`) |
-| `SKOPAQ_DOCKER_OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama on the host |
-| `SKOPAQ_API_TOKEN` | empty | Bearer token for `/api/chat/*` |
+| `SKOPAQ_API_TOKEN` | empty | Bearer token the dashboard API accepts as an admin (scripts) |
 | `SKOPAQ_CORS_ORIGINS` | `*` | browser origins allowed to call the API |
 
 !!! warning "Never commit .env"

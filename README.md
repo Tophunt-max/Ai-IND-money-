@@ -4,13 +4,10 @@
 
 # SkopaqTrader
 
-**An open-source AI algorithmic trading platform for Indian equities**
-
-Built on [TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) by TauricResearch
+**An open-source algorithmic trading platform for Indian equities — one AI: the Adaptive AI**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white)](https://python.org)
-[![Built with LangGraph](https://img.shields.io/badge/Built_with-LangGraph-grey)](https://langchain-ai.github.io/langgraph/)
 
 </div>
 
@@ -30,230 +27,108 @@ Built on [TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apach
 
 ## Overview
 
-SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/TradingAgents) multi-agent LLM framework with Indian equity market support, multi-model tiering, broker integration, and an experience-driven execution pipeline.
+SkopaqTrader trades NSE stocks and index options through the INDstocks broker with **one decision-maker: the Adaptive AI** — machine-learning models trained on its own market data, signals and trades. There is **no LLM and no API AI**: no API keys for AI providers, no per-call cost, and every model can be retrained, tested on unseen dates, shadowed on paper and promoted by an admin.
 
 **Key capabilities:**
 
-- **Claude Code Integration** — Native MCP server with 29 tools + custom slash commands (`/analyze`, `/quote`, `/scan`, `/portfolio`, `/trade`). Run the full 15-agent analysis pipeline using Claude's own reasoning at zero extra LLM cost.
-- **Interactive AI Chat** — Claude Code-style REPL (`skopaq chat`) with streaming responses, tool panels, human-in-the-loop trade confirmation, and LangGraph checkpointing.
-- **Ollama Local Fallback** — Run analyst roles on local models via Ollama/MLX for offline operation and zero API cost.
-- **Post-Trade Reflection Loop** — Reflection node analyzes past trades and injects history into the analyst context, enabling the system to incorporate lessons from wins and losses over time.
-- **Persistent Agent Memory** — BM25-indexed memory store backed by Supabase for long-term strategic recall across all agent roles.
-- **Multi-agent analysis** — Analyst team (market, news, social, fundamentals), bull/bear researchers, risk manager, and trader agent collaborate via LangGraph.
-- **Multi-model tiering** — Per-role LLM assignment across multiple providers for cost optimization and capability matching. See the [model tiering table](#multi-model-tiering) below for details.
-- **Semantic LLM Caching** — Built-in Redis LangCache provides significant speedup (up to ~45x in our benchmarks) on repeated queries and reduces API costs, with automatic semantic invalidation on memory updates.
-- **Advanced Risk Management** — Features ATR-based position sizing, India VIX/NIFTY SMA market regime detection, NSE event calendar handling (F&O expiry, RBI policy), and sector concentration limits.
-- **Live Algo Trading** — Integrates with the INDstocks broker API for execution on Indian equities (NSE/BSE). Start in paper mode, graduate to live when ready.
-- **Confidence-Scored Position Sizing** — The Portfolio Manager evaluates trades with strict confidence scores (50-100%). Position sizes are dynamically scaled based on this AI confidence level.
-- **Parallel Scanner Engine** — 30-second multi-model screening cycle on the NIFTY 50 watchlist, wired directly to INDstocks batch quotes and 3 LLM screeners (Gemini, Grok, Perplexity) running concurrently.
-- **Safety-First Execution** — Immutable position limits, persistent drawdown tracking, daily loss circuit breakers, and small-account exemptions.
-- **Autonomous Trading Daemon** — Full session orchestrator: PRE_OPEN → SCANNING → ANALYZING → TRADING → MONITORING → CLOSING → REPORTING. Runs unattended on a cron schedule with graceful SIGTERM handling and tighter safety rules.
-- **Three-Tier Position Monitor** — Hard stop-loss, AI sell analyst, and EOD safety net with optional trailing stops and configurable poll intervals.
-- **Min Profit Gate** — Two-layer protection against brokerage-eating-profit: prompt guidance to the sell analyst LLM + hard override in the monitor that blocks sells when net profit (after estimated brokerage) is below threshold.
-- **Crypto Support** — On-chain (Blockchair), DeFi/tokenomics (DeFiLlama/CoinGecko), and funding rate (Binance Futures) analysts activate when `asset_class=crypto`.
-- **Blockchain Infrastructure** — Live Binance trading, WebSocket real-time feeds, gas oracles (ETH/Polygon/Arbitrum/Optimism), whale transaction alerts, and multi-exchange abstraction layer.
+- **Swing book (Adaptive AI)** — daily setups (trend pullback, breakout, oversold bounce) with an ATR stop and an R-multiple target, scored by a swing model trained on the setups' historical outcomes **net of charges**. `skopaq swing-train`, `skopaq scan`.
+- **Intraday scalper & F&O engine** — rule strategies plus adaptive models (LightGBM, XGBoost, CatBoost, random forest, MLP, FT-Transformer) and RL policies (PPO / A2C / DQN) as gates and strategies.
+- **Continual learning with gates** — every model is a candidate until it beats the baseline on unseen data (profit factor, expectancy CI, drawdown, Brier); a shadow until an admin promotes it after the shadow period; rollback any time. Bundles are pickle-free with a SHA-256 manifest.
+- **No-code strategies** — build feature/target specs on the dashboard's AI learning page.
+- **Signal gate** — every entry from every book: net reward/risk after charges, data quality, stop bounds; journalled as QUALIFIED / REJECTED for the learning loop.
+- **Safety first** — immutable `SafetyRules`, ATR position sizing, regime and event-calendar scaling, daily/weekly/monthly loss limits, a kill switch obeyed everywhere, paper by default. No model can change a hard limit.
+- **Live order handling** — fills confirmed against the INDstocks order book, protective exits worked until filled, per-symbol SELL locks, an order journal that survives restarts.
+- **Autonomous daemon + scheduler** — PRE_OPEN → SCANNING → ANALYZING → TRADING → MONITORING → CLOSING → REPORTING, one session per NSE trading day.
+- **Mobile-first dashboard** — trading-style UI: candle charts, watchlist, positions, Trade desk, swing scanner, AI learning, track record.
+- **Telegram & MCP** — alerts, `/ideas`, `/halt`; 26 MCP tools for Claude Code that read data and report the Adaptive AI's output.
 
 <img src="assets/dashboard.png" alt="Skopaq Dashboard" style="max-width: 100%; height: auto;" />
-*Dashboard for monitoring agent workflows, market scanning, and trade execution.*
-
-- **Paper → Live pipeline** — Start paper, graduate to live when ready
 
 > **Reminder:** See the [full disclaimer](#important-legal-disclaimer) at the top. This is a research tool, not a trading recommendation system.
 
-## 🏗️ Technical Architecture
+## 🏗️ Architecture
 
 ```mermaid
 graph TD
     classDef interface fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#fff
-    classDef core fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#fff
-    classDef agent fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+    classDef ai fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#fff
     classDef execution fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
     classDef external fill:#475569,stroke:#334155,stroke-width:2px,color:#fff
 
-    subgraph UI["User Interfaces"]
-        ClaudeCode["Claude Code + MCP"]:::interface
-        ChatREPL["Chat REPL"]:::interface
-        CLI["CLI Interface"]:::interface
-        API["FastAPI Backend"]:::interface
+    subgraph UI["Interfaces"]
+        CLI["CLI / Scheduler"]:::interface
         Dashboard["Next.js Dashboard"]:::interface
+        Telegram["Telegram Bot"]:::interface
+        MCP["MCP (Claude Code)"]:::interface
     end
 
-    subgraph CoreSystem["SkopaqTrader Core"]
-        Orchestrator["SkopaqTradingGraph<br/>System Orchestrator"]:::core
-        DataAgents["Data Analysts<br/>Market / News / Social"]:::agent
-        ResearchAgents["Researchers<br/>Bull / Bear / Debate"]:::agent
-        RiskAgent["Portfolio Manager<br/>Evaluation"]:::agent
-        TraderAgent["Trader Agent<br/>Decision"]:::agent
+    subgraph AI["Adaptive AI"]
+        Swing["Swing engine<br/>setups + swing model"]:::ai
+        Scalp["Scalper / F&O engine<br/>adaptive models + RL"]:::ai
+        Learn["Continual learning<br/>candidate → shadow → champion"]:::ai
     end
 
-    subgraph Exec["Execution Pipeline"]
-        Safety["Safety Checker<br/>Circuit Breakers"]:::execution
-        Router["Order Router<br/>Live / Paper"]:::execution
+    subgraph Exec["Execution"]
+        Gate["SignalGate<br/>net R:R, data quality"]:::execution
+        Executor["Executor<br/>sizing, SafetyChecker"]:::execution
+        Monitor["Position monitor<br/>stop, target, trail, EOD"]:::execution
     end
 
     subgraph Infra["Infrastructure"]
-        INDstocks["INDstocks Broker<br/>NSE / BSE Trading"]:::external
-        Supabase["Supabase DB<br/>State, History, Auth"]:::external
-        Redis["Redis LangCache<br/>Semantic LLM Caching"]:::external
+        INDstocks["INDstocks<br/>NSE / BSE"]:::external
+        Supabase["Supabase<br/>trades, auth, kill switch"]:::external
+        Journal["Signal journal<br/>+ model registries"]:::external
     end
 
-    ClaudeCode --> Orchestrator
-    ChatREPL --> Orchestrator
-    CLI --> Orchestrator
-    API --> Orchestrator
-    Dashboard --> Orchestrator
-    Orchestrator --> DataAgents
-    DataAgents --> ResearchAgents
-    ResearchAgents --> RiskAgent
-    RiskAgent -- "Confidence %" --> TraderAgent
-    TraderAgent --> Safety
-    Safety --> Router
-    Router --> INDstocks
-    Orchestrator -.-> Supabase
-    Orchestrator -.-> Redis
-    Router -. "Trade Result" .-> Orchestrator
-    Orchestrator -. "Reflection" .-> DataAgents
+    CLI --> Swing
+    CLI --> Scalp
+    Dashboard --> Swing
+    Telegram --> Swing
+    MCP --> Swing
+    Swing --> Gate
+    Scalp --> Gate
+    Gate --> Executor
+    Executor --> INDstocks
+    Executor --> Monitor
+    Monitor --> INDstocks
+    Gate -.-> Journal
+    Executor -.-> Supabase
+    Journal -.-> Learn
+    Learn -. "promoted models" .-> Swing
+    Learn -. "promoted models" .-> Scalp
 ```
 
-*High-level overview of the SkopaqTrader architecture, connecting the user interfaces to the multi-agent AI team and the INDstocks execution engine.*
-
-### 🤖 AI Agent Workflow
-
-<img src="assets/agent_network.png" alt="Concept: AI Agent Neural Network" style="max-width: 100%; height: auto;" />
-<br/>
-<sub>*Conceptual representation of the high-speed data flow between the AI Analyst agents, debate researchers, and the core routing system.*</sub>
+### How a swing trade happens
 
 ```mermaid
 sequenceDiagram
-    participant User as User Input
-    participant Orch as Orchestrator
-    participant Analysts as Analyst Agents
-    participant Research as Researchers
-    participant Risk as Portfolio Manager
-    participant Trader as Trader Agent
-    participant Broker as INDstocks Broker
+    participant S as Scheduler / daemon
+    participant E as SwingEngine
+    participant M as Swing model
+    participant G as SignalGate
+    participant X as Executor + SafetyChecker
+    participant B as INDstocks / Paper
 
-    User->>Orch: Request Analysis (e.g. RELIANCE)
-    Orch->>Analysts: Gather Market, News, Social Data
-    Note over Analysts: Multiple LLM providers<br/>Accelerated by Redis LangCache
-    Analysts-->>Orch: Formatted Data and Sentiment
-    Orch->>Research: Generate Bull and Bear Thesis
-    Note over Research: Deep reasoning LLM
-    Research-->>Orch: Competing Arguments and Debate
-    Orch->>Trader: Propose Trading Strategy
-    Trader-->>Orch: Draft Order (Buy/Sell/Hold)
-    Orch->>Risk: Evaluate Draft against Safety Limits
-    Risk-->>Orch: Assign Confidence Score (50-100%)
-    alt Order Approved
-        Orch->>Broker: Execute Live/Paper Trade
-        Broker-->>Orch: Delivery and Price Confirmation
-        Orch->>Orch: Reflection Node (Self-Evolution)
-        Orch-->>User: Trade Success and Report
-    else Order Rejected
-        Orch-->>User: Trade Blocked (Safety Protocol)
+    S->>E: SCANNING (NIFTY 50 or SKOPAQ_SWING_SYMBOLS)
+    E->>E: daily candles → setup on the last closed bar
+    E->>M: point-in-time features
+    M-->>E: P(win) vs validated threshold
+    E->>G: qualify (net R:R after charges, data, stop bounds)
+    alt qualified
+        G->>X: TradingSignal (stop, target R)
+        X->>B: sized, safety-checked order
+        B-->>X: fill (confirmed live)
+        X-->>S: exit plan → position monitor
+    else rejected
+        G-->>S: journalled with the reason
     end
 ```
 
-*The step-by-step collaborative workflow of our AI agent team, from data gathering to safe execution.*
-
-### 🚀 Usage Lifecycle (For Beginners)
-
-```mermaid
-flowchart LR
-    classDef step fill:#f3f4f6,stroke:#9ca3af,stroke-width:2px,color:#1f2937
-    classDef highlight fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a
-
-    S1["1. Pick a Stock<br/>or run the Screener"]:::step
-    S2["2. AI Team Analyzes<br/>News, Trends, Fundamentals"]:::step
-    S3["3. AI Debate and Decision<br/>Bull vs Bear Arguments"]:::step
-    S4["4. Risk and Confidence Check<br/>Score validates position size"]:::step
-    S5["5. Execute Trade<br/>Paper or Live via INDstocks"]:::highlight
-    S6["6. Reflect and Learn<br/>Lessons feed future trades"]:::step
-
-    S1 --> S2 --> S3 --> S4 --> S5 -.-> S6
-    S6 -. "Feeds next trade" .-> S2
-```
-
-*A simple mental model of how SkopaqTrader operates, making complex algorithmic trading easy to understand.*
-
-### 🔍 Deep-Dive: Scanner Engine & Advanced Risk
-
-<img src="assets/data_scanner.png" alt="Concept: Real-Time Market Scanner" style="max-width: 100%; height: auto;" />
-<br/>
-<sub>*Conceptual UI of the SkopaqTrader scanner engine processing live NIFTY 50 metrics, sentiment scores, and confidence data.*</sub>
-
-The real power of SkopaqTrader lies in its parallel scanner and dynamic risk management logic. When running `skopaq scan`, the system doesn't rely on just one LLM or simple heuristics. It queries multiple models simultaneously while injecting Indian market regime rules.
-
-```mermaid
-flowchart TD
-    classDef trigger fill:#10b981,stroke:#047857,color:#fff
-    classDef data fill:#3b82f6,stroke:#2563eb,color:#fff
-    classDef llm fill:#8b5cf6,stroke:#7c3aed,color:#fff
-    classDef check fill:#f59e0b,stroke:#d97706,color:#fff
-    classDef memory fill:#475569,stroke:#334155,color:#fff
-
-    Start(("skopaq scan<br/>NIFTY 50")):::trigger
-    INDapi["INDstocks API Batch Quote"]:::data
-    CacheCheck{"Redis LangCache<br/>Semantic Check"}:::check
-    CachedData["Return Cached Inference"]:::llm
-
-    Start --> INDapi --> CacheCheck
-    CacheCheck -- "Hit" --> CachedData
-    CacheCheck -- "Miss" --> Gemini
-
-    subgraph Screeners["Parallel Screening Cluster"]
-        Gemini["Gemini 3.8 Flash<br/>Tech / Fundamentals"]:::llm
-        Grok["Grok 4.6<br/>Social Sentiment"]:::llm
-        Perplexity["Perplexity Sonar<br/>Web / News Context"]:::llm
-    end
-
-    CacheCheck -- "Miss" --> Grok
-    CacheCheck -- "Miss" --> Perplexity
-
-    Gemini --> Synthesis["Risk Management<br/>Strategy Synthesis"]:::check
-    Grok --> Synthesis
-    Perplexity --> Synthesis
-
-    subgraph RiskEval["Advanced Risk Evaluator"]
-        Regime["Detect Regime<br/>VIX / NIFTY SMA"]:::check
-        Events["Calendar Checks<br/>RBI / F&O Expiry"]:::check
-        Size["ATR Position Sizing<br/>Concentration Limits"]:::check
-    end
-
-    Synthesis --> Regime
-    Synthesis --> Events
-    Regime --> Size
-    Events --> Size
-    Size --> Confidence{"Confidence Score<br/>above 50% ?"}:::check
-
-    Confidence -- "Yes" --> EmitTrade("Emit Trade Execution"):::trigger
-    Confidence -- "No" --> Drop("Discard Candidate"):::memory
-
-    EmitTrade -.-> SupaDB["Supabase DB<br/>Record Trade and Memory"]:::memory
-```
-
-### Multi-Model Tiering
-
-| Agent Role | Primary Model | Fallback | Local Fallback |
-|------------|---------------|----------|----------------|
-| Market / Fundamentals Analyst | Gemini 3.8 Flash | — | Ollama (auto) |
-| Social Analyst | Grok 4.6 (via OpenRouter) | Gemini 3.8 Flash | Ollama (auto) |
-| News Analyst | Gemini 3.8 Flash | — | Ollama (auto) |
-| Research Manager | Claude Opus 5 | Gemini 3.8 Flash | — (quality critical) |
-| Portfolio Manager | Claude Opus 5 | Gemini 3.8 Flash | — (quality critical) |
-| Chat Brain | Claude Opus 5 | Gemini 3.8 Flash | Ollama (auto) |
-| Bull / Bear / Debate Researchers | Gemini 3.8 Flash | — | Ollama (auto) |
-| Trader | Gemini 3.8 Flash | — | Ollama (auto) |
-| Sell Analyst | Gemini 3.8 Flash | — | Ollama (auto) |
-| Scanner Screeners | Gemini 3.8 Flash, Grok 4.6, Perplexity Sonar | (concurrent) | — |
-
-> **Note:** Perplexity Sonar is used only in the scanner (plain prompts). It does not support tool calling, so it cannot serve as an analyst in the LangGraph agent pipeline.
->
-> **Ollama fallback** activates only when `SKOPAQ_OLLAMA_ENABLED=true` and Ollama is running locally. Judge roles (Research Manager, Portfolio Manager) never fall back to local models.
+Details: [Trading Pipeline](docs/architecture/pipeline.md) · [Swing Trading](docs/trading/swing-trading.md) · [Adaptive AI](docs/architecture/adaptive-ai.md) · [Execution safety](docs/architecture/execution-safety.md).
 
 ### Blockchain Infrastructure
 
-SkopaqTrader includes comprehensive blockchain infrastructure for crypto trading:
+SkopaqTrader includes blockchain modules for crypto (`SKOPAQ_ASSET_CLASS=crypto`):
 
 | Feature | Module | Description |
 |---------|--------|-------------|
@@ -263,38 +138,13 @@ SkopaqTrader includes comprehensive blockchain infrastructure for crypto trading
 | **Whale Alerts** | `skopaq/blockchain/whales.py` | Large transaction monitoring for BTC, ETH, SOL |
 | **Multi-Exchange** | `skopaq/broker/exchange.py` | Unified abstraction layer (Binance, Coinbase, Kraken) |
 
-```python
-# Live Binance trading
-from skopaq.broker import BinanceAuthClient
-
-async with BinanceAuthClient(api_key="...", api_secret="...") as client:
-    await client.place_order("BTCUSDT", "BUY", 0.001, 50000.0)
-
-# Real-time price via WebSocket
-from skopaq.broker import BinanceWS
-
-ws = BinanceWS()
-async for ticker in ws.ticker_stream("BTCUSDT"):
-    print(f"BTC: ${ticker.price}")
-
-# Gas oracle
-from skopaq.blockchain import get_gas_price, get_gas_estimate
-
-gas = await get_gas_price("ETH")
-estimate = await get_gas_estimate("ETH", "USDT transfer")
-
-# Whale alerts
-from skopaq.blockchain import check_whale_alerts
-
-alerts = await check_whale_alerts("ETH", min_value_usd=100000)
-```
-
 ## Installation
 
 ### Prerequisites
 
 - Python 3.11+
-- API keys for at least one LLM provider (Google Gemini recommended as minimum)
+- An INDstocks (INDmoney) account with an API token for market data and live trading
+- No AI/LLM API key
 
 ### Setup
 
@@ -302,134 +152,58 @@ alerts = await check_whale_alerts("ETH", min_value_usd=100000)
 git clone https://github.com/Tophunt-max/Ai-IND-money-.git
 cd Ai-IND-money-
 
-# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate  # macOS/Linux
 
-# Install dependencies
-pip install -e ".[dev]"
+pip install -e ".[dev]"     # add the ML extras you want (LightGBM etc.); `linear` needs none
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys
+cp .env.example .env        # INDstocks token, Supabase, Telegram (all optional for paper)
 ```
 
-### Required API Keys
-
-At minimum, set `GOOGLE_API_KEY` for Gemini 3.8 Flash (used as default/fallback for all roles).
-
-For full multi-model tiering:
-
-```bash
-GOOGLE_API_KEY=...          # Gemini 3.8 Flash (all analyst roles)
-ANTHROPIC_API_KEY=...       # Claude Opus 5 (research/risk manager)
-OPENROUTER_API_KEY=...      # Grok + Perplexity Sonar (social + news)
-```
-
-See [`.env.example`](.env.example) for all configuration options.
+See [`.env.example`](.env.example) for every setting.
 
 ## Usage
 
 > [!WARNING]
-> All trading commands (live or paper) are **at your own risk**. The AI agents may produce incorrect signals. Always verify positions manually and never risk capital you cannot afford to lose.
+> All trading commands (live or paper) are **at your own risk**. Models can be wrong. Always verify positions manually and never risk capital you cannot afford to lose.
 
 ### CLI
 
 ```bash
-# System health check
-skopaq status
+skopaq status                          # System health check
 
-# Analyze a stock (no execution)
-skopaq analyze RELIANCE
-skopaq analyze TATAMOTORS --date 2026-02-28
+# Adaptive AI: swing model
+skopaq swing-train                     # Train on daily history (registers a candidate or shadow; no orders)
+skopaq swing-status                    # Champion / shadow and test results
+skopaq scan --limit 10                 # Today's swing ideas (setup, entry/stop/target, P(win)); no orders
+skopaq swing-promote VERSION --by NAME --reason TEXT   # Shadow → champion (after the shadow period)
+skopaq swing-rollback --by NAME --reason TEXT          # Back to the previous champion
 
-# Analyze + execute (paper mode by default)
-skopaq trade RELIANCE
-
-# Run scanner cycle
-skopaq scan --max-candidates 5
-
-# Autonomous daemon (full session: scan → trade → monitor → close)
+# Autonomous daemon (scan → gate → trade → monitor → close)
 # WARNING: The daemon trades autonomously. Use paper mode until you are confident.
-skopaq daemon --once --paper           # Single paper session, run immediately
-skopaq daemon --dry-run                # Scanner only, print candidates, exit
-skopaq daemon --once --max-trades 1    # Live mode, 1 trade max (requires confirmation)
+skopaq daemon --once --paper           # Single paper session, now
+skopaq daemon --dry-run                # Scan only, print the ideas, exit
+skopaq schedule --check                # The scheduler's plan
 
-# Position monitor (attach to existing open positions)
-skopaq monitor                         # Monitor all open positions until EOD
+# Intraday books (paper by default)
+skopaq scalp                           # Intraday scalper until 15:10
+skopaq fno                             # Index options buying until 15:10
+skopaq adaptive-train                  # Train an adaptive (intraday) model
+skopaq rl-train --algo ppo             # Train an RL policy
 
-# Agent memory
-skopaq settle                          # Settle past decisions whose holding window has traded
-skopaq memory legacy --export old.json # Back up the pre-v0.5.1 per-agent memories
-skopaq memory legacy --delete          # Delete them (writes a backup first, then asks)
-
-# Track record (forward results: AI calls vs NIFTY, closed trades, confidence calibration)
-skopaq report --days 90
-
-# Kill switch (daemon, CLI, MCP, chat, Telegram all obey it; SELLs stay allowed)
-skopaq halt "broker outage"            # Reject every BUY everywhere
+skopaq monitor                         # Monitor open positions until EOD
+skopaq report --days 90                # Track record: journalled signals, closed trades
+skopaq halt "broker outage"            # Kill switch: reject every BUY everywhere
 skopaq resume                          # Lift it
-
-# Start API server
-skopaq serve --port 8000
-
-# Token management (INDstocks broker)
-skopaq token set <your-token>
-skopaq token status
-```
-
-### Python API
-
-```python
-from skopaq.config import SkopaqConfig
-from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
-config = SkopaqConfig()
-graph = SkopaqTradingGraph(config)
-
-# Analysis only
-result = await graph.analyze("RELIANCE", "2026-03-01")
-print(result.signal)
-
-# Analysis + execution
-result = await graph.analyze_and_execute("RELIANCE", "2026-03-01")
-print(result.execution)
-```
-
-### Interactive Chat (Claude Code-style REPL)
-
-```bash
-# Start the interactive AI trading assistant
-skopaq chat                    # Paper mode (default)
-skopaq chat --live             # Live mode (with confirmation)
-
-# Inside the REPL:
-> what should I trade today?   # Natural language → AI reasons + calls tools
-> /quote RELIANCE              # Instant quote (no LLM call)
-> /scan 10                     # Top 10 market candidates
-> /portfolio                   # Show positions + P&L
-> /analyze TCS                 # Full multi-agent analysis
-> /mode live                   # Switch to live mode (confirmation required)
+skopaq serve --port 8000               # API server
+skopaq token set <your-token>          # INDstocks token
 ```
 
 ## Claude Code Integration (MCP + Skills)
 
-SkopaqTrader integrates natively with [Claude Code](https://claude.ai/code) as an MCP server + custom slash commands. This turns Claude Code into a **full-featured trading terminal** — with Claude's own reasoning powering the multi-agent analysis pipeline at zero extra LLM cost.
+The MCP server (`skopaq/mcp_server.py`) exposes **26 tools** to Claude Code or any MCP client: quotes, candles, portfolio, `swing_ideas` / `swing_idea` (the Adaptive AI's output), `check_safety`, `place_order` (paper engine only), the kill switch, backtests and the track record. The decisions stay with the Adaptive AI; the skills report them and never invent a verdict.
 
-### Quick Setup (3 steps)
-
-**Step 1: Install SkopaqTrader**
-
-```bash
-git clone https://github.com/Tophunt-max/Ai-IND-money-.git
-cd Ai-IND-money-
-pip install -e .
-cp .env.example .env   # Add your API keys
-```
-
-**Step 2: Register MCP Server**
-
-Add to your `~/.claude.json` (or run `/mcp add` in Claude Code):
+Register it in `~/.claude.json` (or `.claude/.mcp.json`):
 
 ```json
 {
@@ -442,279 +216,99 @@ Add to your `~/.claude.json` (or run `/mcp add` in Claude Code):
 }
 ```
 
-**Step 3: Restart Claude Code**
+| Skill | What it does |
+|-------|-------------|
+| `/quote RELIANCE` | Real-time quote |
+| `/analyze TCS` | The Adaptive AI's setup and P(win) for one stock, with indicators |
+| `/scan` | Today's swing ideas |
+| `/portfolio` | Positions, holdings, funds, P&L |
+| `/trade INFY` | Paper-trade the Adaptive AI's setup after a safety check and your confirmation |
+| `/options NIFTY` | Rule-based option-selling idea |
 
-Open Claude Code in the `Ai-IND-money-` directory. The MCP server starts automatically. You'll see 29 trading tools available.
-
-### Custom Slash Commands (Skills)
-
-These are pre-built in `.claude/skills/` and available immediately:
-
-| Command | What it does |
-|---------|-------------|
-| `/quote RELIANCE` | Real-time stock quote via MCP |
-| `/analyze TCS` | Full 15-agent analysis pipeline — Claude reasons through 4 analysts, bull/bear debate, risk debate, and final decision using its own LLM |
-| `/scan` | Market scanner — finds top trading candidates |
-| `/portfolio` | Shows positions, holdings, funds, P&L |
-| `/trade INFY` | Analysis + safety check + paper execution (with confirmation) |
-
-### MCP Tools (29 available — core ones listed below)
-
-All tools are callable by Claude Code natively. Read-only tools are auto-approved via `.claude/settings.json`:
-
-| Category | Tools |
-|----------|-------|
-| **Market Data** | `get_quote`, `get_historical` |
-| **Portfolio** | `get_positions`, `get_holdings`, `get_funds`, `get_orders` |
-| **Analysis** | `analyze_stock`, `scan_market`, `check_safety`, `quick_decision` (Jev) |
-| **Execution** | `place_order` (paper engine, safety-checked; the only order tool) |
-| **Options** | `get_option_chain`, `suggest_option_trade` (INDstocks chain, advisory) |
-| **Data Pipeline** | `gather_market_data`, `gather_news_data`, `gather_fundamentals_data`, `gather_social_data`, `gather_all_analysis_data` |
-| **Memory** | `recall_agent_memories`, `save_trade_reflection` |
-| **System** | `system_status`, `halt_trading`, `resume_trading` |
-| **Learning** | `performance_report`, `backtest_strategy`, `run_monte_carlo_test`, `get_learning_insights`, `get_symbol_stats`, `evolve_strategy` |
-
-### Dual-Mode Architecture
-
-SkopaqTrader has two execution paths for the same multi-agent pipeline:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ Claude Code Mode (zero LLM cost)                        │
-│                                                         │
-│  /analyze RELIANCE                                      │
-│    → gather_all_analysis_data (MCP) → raw data          │
-│    → Claude reasons as 4 analysts                       │
-│    → Claude runs bull/bear debate                       │
-│    → Claude acts as research manager (judge)             │
-│    → Claude runs 3-way risk debate                      │
-│    → Claude acts as risk manager → BUY/SELL/HOLD + %    │
-│    → check_safety (MCP) → validated                     │
-│                                                         │
-│  Uses: Claude's own LLM for all reasoning               │
-│  Cost: $0 additional (Claude Code subscription only)    │
-│  Time: ~30s data fetch + Claude's reasoning             │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│ API Mode (separate LLM calls)                           │
-│                                                         │
-│  skopaq analyze RELIANCE                                │
-│    → SkopaqTradingGraph.analyze()                       │
-│    → 4 analyst LLM calls (Gemini Flash)                 │
-│    → Bull/Bear researcher calls (Gemini Flash)          │
-│    → Research Manager call (Claude Opus API)            │
-│    → Trader call (Gemini Flash)                         │
-│    → 3 risk debater calls (Gemini Flash)                │
-│    → Portfolio Manager call (Claude Opus API)           │
-│                                                         │
-│  Uses: Separate API calls to Gemini/Claude/Grok         │
-│  Cost: ~$0.20-0.50 per analysis                         │
-│  Time: 2-5 minutes                                      │
-└─────────────────────────────────────────────────────────┘
-```
-
-Both modes use the **same data sources** and the **same agent prompts** — the only difference is who does the reasoning.
-
-### Ollama Local Model Fallback
-
-For offline operation or zero-cost inference, SkopaqTrader supports local models via [Ollama](https://ollama.ai):
-
-```bash
-# Install Ollama (macOS)
-brew install ollama
-ollama pull mistral    # or any model
-
-# Enable in SkopaqTrader
-export SKOPAQ_OLLAMA_ENABLED=true
-skopaq chat            # Uses local model as fallback when cloud APIs fail
-```
-
-Local models serve as the **last fallback** in the provider chain. Judge roles (research_manager, portfolio_manager) skip local models to preserve reasoning quality.
-
-### OpenClaw Integration
-
-SkopaqTrader also integrates with [OpenClaw](https://openclaw.ai) for multi-channel access via WhatsApp, Telegram, and Slack. See `openclaw.json` for configuration.
-
-### Upstream TradingAgents (Direct)
-
-The vendored upstream is fully functional:
-
-```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-
-ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
-```
+More: [docs/claude-code](docs/claude-code/setup.md).
 
 ## Project Structure
 
 ```
 Ai-IND-money-/
-├── tradingagents/              # Vendored upstream (TradingAgents v0.5.2)
-│   ├── agents/                 # Analyst, researcher, trader, risk agents
-│   │   ├── analysts/           # Market, news, social, fundamentals + crypto analysts
-│   │   ├── researchers/        # Bull/bear researchers
-│   │   ├── managers/           # Research + risk managers
-│   │   ├── risk_mgmt/          # Aggressive/conservative/neutral debators
-│   │   └── trader/             # Final trade decision agent
-│   ├── graph/                  # LangGraph orchestration + reflection
-│   ├── dataflows/              # Data vendors (yfinance, INDstocks, crypto APIs)
-│   └── llm_clients/            # LLM factory (OpenAI, Google, Anthropic, etc.)
+├── tradingagents/              # Vendored data layer (TradingAgents v0.5.2 dataflows only)
+│   └── dataflows/              # Data vendors (yfinance, Alpha Vantage, INDstocks routing, crypto)
 │
-├── skopaq/                     # SkopaqTrader extensions
-│   ├── agents/                 # Sell analyst (AI exit decisions)
-│   ├── api/                    # FastAPI backend server
-│   ├── blockchain/             # Gas oracle, whale alerts
+├── skopaq/
+│   ├── adaptive/               # Adaptive AI: feature pipeline, models, bundles, RL, hyperopt
+│   ├── swing/                  # Swing setups, swing model + registry, SwingEngine
+│   ├── learning/               # Datasets, model registry + gates, continual learning, reports
+│   ├── strategy/               # SignalGate, qualification rules, signal journal, selector
+│   ├── scalping/               # Intraday scalper, F&O engine, backtests
+│   ├── execution/              # Executor, safety checker, order router, live orders, daemon, monitor
+│   ├── risk/                   # ATR sizing, regime detection, drawdown, event calendar
 │   ├── broker/                 # INDstocks REST/WebSocket + Binance + paper engine
-│   ├── chat/                   # Interactive chatbot (REPL, tools, agent, bridge)
-│   ├── cli/                    # Typer CLI (analyze, trade, scan, daemon, monitor, chat)
+│   ├── api/                    # FastAPI backend (dashboard API)
+│   ├── cli/                    # Typer CLI
 │   ├── db/                     # Supabase client + repositories
-│   ├── execution/              # Executor, safety checker, order router, daemon, monitor
-│   ├── graph/                  # SkopaqTradingGraph (upstream wrapper)
-│   ├── llm/                    # Multi-model tiering, env bridge, semantic cache, Ollama
-│   ├── memory/                 # BM25-indexed agent memory + trade reflection loop
-│   ├── risk/                   # ATR sizing, regime detection, drawdown, calendar
-│   ├── scanner/                # Multi-model market scanner engine
-│   ├── mcp_server.py           # MCP server (29 tools for Claude Code integration)
+│   ├── mcp_server.py           # MCP server (26 tools)
+│   ├── telegram_bot.py         # Telegram bot
 │   ├── config.py               # Pydantic Settings (env_prefix="SKOPAQ_")
 │   └── constants.py            # Immutable safety rules + daemon variants
 │
 ├── frontend/                   # Next.js dashboard (Vercel)
 ├── supabase/                   # Database migrations
-├── docker/                     # Container entrypoint (entrypoint.sh)
-├── .claude/                    # Claude Code integration
-│   ├── skills/                 # Custom slash commands (/quote, /analyze, /scan, etc.)
-│   ├── settings.json           # Auto-allowed MCP tools
-│   └── .mcp.json               # MCP server registration
-│
-├── openclaw/                   # OpenClaw skill wrappers (WhatsApp/Telegram/Slack)
-├── tests/                      # 1,400+ unit + 40+ integration tests
-│   ├── unit/                   # Fast tests (no API keys needed)
-│   └── integration/            # Real API calls (requires .env)
-│
-├── CLAUDE.md                   # AI agent project context
-├── UPSTREAM_CHANGES.md         # All modifications to vendored code (6 changes)
-├── CONTRIBUTING.md             # Contribution guidelines
-├── pyproject.toml              # Python project config
-├── Dockerfile                  # One image: compose (Mac mini), Fly, Railway
+├── docker/                     # Container entrypoint
+├── .claude/                    # Claude Code skills + MCP registration
+├── tests/                      # 1,700+ unit tests (no API keys) + integration tests
 ├── docker-compose.yml          # Always-on stack: api + telegram + scheduler
-├── scripts/macmini/verify.sh   # Mac mini readiness checks
-├── railway.toml                # Railway API server config
-├── railway-daemon.toml         # Railway daemon cron config
-└── LICENSE                     # Apache 2.0
+└── Dockerfile                  # One image: compose, Fly, Railway
 ```
 
 ## Security
 
-- **No secrets in the repository.** All API keys, tokens, and credentials are loaded from environment variables via `.env` (gitignored). See [`.env.example`](.env.example) for the full list of configurable keys.
-- **INDstocks tokens** are stored locally in `~/.skopaq/token.json` (gitignored) and validated on every daemon session start.
-- **Immutable safety rules** in `skopaq/constants.py` enforce position limits, order value caps, and rate limits that cannot be overridden at runtime.
-- **Daemon safety variants** apply tighter limits for unattended operation (fewer positions, lower order caps, slower pace).
-- **Live trading double-gate** — the `trade` and `daemon` CLI commands require an explicit confirmation prompt before executing real orders.
+- **No secrets in the repository.** All tokens and credentials are loaded from environment variables via `.env` (gitignored).
+- **INDstocks tokens** are stored encrypted in `~/.skopaq/` and validated before every session.
+- **Immutable safety rules** in `skopaq/constants.py` enforce position limits, order value caps and rate limits that cannot be overridden at runtime — by settings or by any model.
+- **Model bundles** load only after their SHA-256 manifest verifies; nothing is unpickled.
+- **Live trading double-gate** — live sessions need `--live --confirm-live` (or the scheduler's `SKOPAQ_SCHEDULER_CONFIRM_LIVE`), and swing entries need an admin-promoted champion.
 
 If you discover a security issue, please report it privately rather than opening a public issue.
 
 ## Testing
 
-The test suite contains **1,400+ unit tests** (no API keys needed) plus integration tests for real broker/LLM calls.
-
 ```bash
-# Unit tests — fast, no external dependencies
-python -m pytest tests/unit/ -v
-
-# Integration tests (requires .env with real API keys)
-python -m pytest tests/integration/ -v -m integration
-
-# All tests with coverage
-python -m pytest --cov=skopaq --cov=tradingagents -v
+python -m pytest tests/unit/ -q                       # 1,700+ tests, no API keys
+python -m pytest tests/integration/ -v -m integration # real broker calls (needs .env)
+cd frontend && npm test                               # dashboard tests
 ```
 
 ## Docker
 
-The fastest way to get started. One image, all services.
-
 ```bash
-# Build locally (native arm64 on Apple Silicon, amd64 elsewhere)
-git clone https://github.com/Tophunt-max/Ai-IND-money-.git
-cd Ai-IND-money-
 docker build -t skopaqtrader/skopaqtrader .
-```
-
-### Quick Start with Docker
-
-```bash
-# 1. Configure
 cp .env.example .env
-# Edit .env with your API keys (at minimum SKOPAQ_GOOGLE_API_KEY)
-
-# 2. Run any service
-docker run -it --env-file .env skopaqtrader/skopaqtrader chat        # AI chatbot
-docker run -d --env-file .env skopaqtrader/skopaqtrader telegram     # Telegram bot
-docker run -d --env-file .env -p 8000:8000 skopaqtrader/skopaqtrader api  # FastAPI
-docker run --rm --env-file .env skopaqtrader/skopaqtrader scan       # Market scan
-docker run --rm --env-file .env skopaqtrader/skopaqtrader status     # Health check
+docker compose up -d --build                 # api + telegram + scheduler
+docker compose run --rm swing-train          # train the swing model
+docker compose run --rm scan                 # today's swing ideas
+docker compose exec api skopaq halt "reason" # any skopaq command
 ```
 
-### Docker Compose (recommended)
-
-```bash
-cp .env.example .env          # Add your API keys
-docker compose up -d --build  # API + Telegram bot + scheduler (daemon on NSE trading days)
-```
-
-Running 24/7 on a Mac mini: see [docs/deployment/mac-mini.md](docs/deployment/mac-mini.md)
-(host setup, `scripts/macmini/verify.sh`, daily operations, going live).
-
-### Available Services
-
-| Service | Command | Description |
-|---------|---------|-------------|
-| `api` | Default | FastAPI backend (port 8000) |
-| `chat` | Interactive | Claude Code-style AI chatbot |
-| `telegram` | Background | Telegram bot (@Skopaq_bot) |
-| `scheduler` | Background | One daemon session per NSE trading day (09:15 IST) |
-| `mcp` | stdio | MCP server for Claude Code |
-| `daemon` | One-shot | Paper trading session |
-| `daemon-live` | One-shot | LIVE trading session |
-| `monitor` | Background | Position monitor |
-| `scan` | One-shot | Market scanner |
-| `status` | One-shot | System health check |
-| `shell` | Interactive | Bash shell for debugging |
-| any `skopaq` command | One-shot | e.g. `docker compose exec api skopaq halt "reason"` |
+Running 24/7 on a Mac mini: [docs/deployment/mac-mini.md](docs/deployment/mac-mini.md). All services: [docs/deployment/docker.md](docs/deployment/docker.md).
 
 ## Cloud Deployment
 
 > [!WARNING]
-> Deploying autonomous trading to a cloud server means orders will execute **without human supervision**. Start with paper mode, set conservative limits, and monitor logs daily. You are fully responsible for any trades placed by the daemon.
+> Deploying autonomous trading to a server means orders execute **without human supervision**. Start with paper mode, set conservative limits, and monitor logs daily.
 
 | Service | Config | Purpose |
 |---------|--------|---------|
-| **Mac mini M4** (Docker Compose) | [`docker-compose.yml`](docker-compose.yml) | api + telegram + scheduler ([docs/deployment/mac-mini.md](docs/deployment/mac-mini.md)) |
-| **Railway** (API) | [`railway.toml`](railway.toml) | FastAPI backend server |
-| **Railway** (Daemon) | [`railway-daemon.toml`](railway-daemon.toml) | Autonomous trading cron (09:15 IST weekdays; the daemon skips NSE holidays) |
+| **Mac mini / Docker host** | [`docker-compose.yml`](docker-compose.yml) | api + telegram + scheduler |
+| **Railway** (API) | [`railway.toml`](railway.toml) | FastAPI backend |
+| **Railway** (Daemon) | [`railway-daemon.toml`](railway-daemon.toml) | Trading cron (09:15 IST weekdays) |
 | **Vercel** | `frontend/` | Next.js dashboard |
-| **Supabase** | `supabase/` | PostgreSQL + Auth + agent memory |
-| **Upstash** | — | Serverless Redis (semantic LLM cache) |
-| **Cloudflare Tunnel** | — | Inbound HTTPS to the API and dashboard. Not a static outbound IP: INDstocks needs your static egress IPv4 whitelisted |
+| **Supabase** | `supabase/` | PostgreSQL + Auth (trades, P&L history, kill switch) |
+| **Upstash** | — | Optional Redis (shared API state, account leases) |
+| **Cloudflare Tunnel** | — | Inbound HTTPS. Not a static outbound IP: INDstocks needs your egress IPv4 whitelisted |
 
-## Upstream Modifications
+## Upstream Code
 
-The vendored `tradingagents/` directory is upstream v0.5.2 (commit `5eb5085`) plus the changes documented in [`UPSTREAM_CHANGES.md`](UPSTREAM_CHANGES.md), each marked `Skopaq:` in the source.
-
-**Modification philosophy:** Minimal, surgical changes. The upstream graph runs as a black box via `propagate()`. Skopaq wraps it with execution, safety, and multi-model tiering.
-
-**Categories of modifications:**
-
-- **Multi-model tiering** — `llm_map` support in `graph/setup.py` and `trading_graph.py`
-- **INDstocks data vendor** — `dataflows/vendors/indstocks.py` + registration in `dataflows/router.py`
-- **yfinance symbol suffix** — `.NS` appended to bare NSE symbols routed to yfinance
-- **Crypto analyst agents** — on-chain, DeFi and funding analysts + their reports in the debates
-- **Confidence scoring** — optional `confidence` field on the Portfolio Manager's structured decision
-
-See `UPSTREAM_CHANGES.md` for the diff command and the steps for the next upstream sync.
+Only `tradingagents/dataflows` (the market-data vendors) remains from upstream TradingAgents v0.5.2; its LLM agents, graph and clients were removed. Changes are listed in [`UPSTREAM_CHANGES.md`](UPSTREAM_CHANGES.md).
 
 ## Contributing
 
@@ -763,7 +357,7 @@ Then add the tool name to `.claude/settings.json` permissions for auto-approval.
 
 ## Citation
 
-SkopaqTrader is built on the TradingAgents framework. Please reference the original work:
+SkopaqTrader's data layer comes from the TradingAgents framework. Please reference the original work:
 
 ```bibtex
 @misc{xiao2025tradingagentsmultiagentsllmfinancial,
@@ -781,16 +375,12 @@ SkopaqTrader is built on the TradingAgents framework. Please reference the origi
 
 All product names, logos, and brands mentioned in this project are property of their respective owners. Their use here does not imply endorsement, sponsorship, or affiliation.
 
-- **Gemini** is a trademark of Google LLC.
-- **Claude** is a trademark of Anthropic, PBC.
-- **Grok** is a trademark of xAI Corp.
-- **Perplexity** is a trademark of Perplexity AI, Inc.
-- **LangGraph** and **LangChain** are trademarks of LangChain, Inc.
+- **Claude** and **Claude Code** are trademarks of Anthropic, PBC.
 - **NIFTY** and **NIFTY 50** are registered trademarks of NSE Indices Limited.
 - **NSE** is a trademark of National Stock Exchange of India Limited.
 - **BSE** is a trademark of BSE Limited.
 - **INDstocks** is a trademark of its respective owner.
-- **Supabase**, **Vercel**, **Railway**, **Upstash**, **Cloudflare**, and **OpenRouter** are trademarks of their respective companies.
+- **Supabase**, **Vercel**, **Railway**, **Upstash** and **Cloudflare** are trademarks of their respective companies.
 
 All trademarks are used here solely for identification and interoperability purposes.
 

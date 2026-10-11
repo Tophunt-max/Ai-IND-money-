@@ -1,35 +1,38 @@
 "use client";
 
-import { ArrowRight, Radar, Play, Activity, Inbox } from "lucide-react";
+import { ArrowRight, Brain, Play, Radar } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
 import { useAuth } from "@/components/AuthGate";
+import { swingTradingMode, type SwingStatus } from "@/components/SwingModel";
 import { Badge, Button, Card, Empty, ErrorBox, Field, KV, Notice, PageTitle, Progress, Select } from "@/components/ui";
-import { api, when } from "@/lib/api";
 import { useApi, useJob } from "@/lib/hooks";
 
-interface Candidate {
+export interface SwingIdea {
   symbol: string;
+  setup: string;
   reason: string;
-  urgency?: string;
-  metrics?: Record<string, unknown>;
-  timestamp?: string;
+  entry: number;
+  stop: number;
+  target: number;
+  prob: number | null;
+  score: number;
 }
 
-interface ScannerStatus {
-  enabled: boolean;
-  running: boolean;
-  cycle_count?: number;
-  last_cycle_at?: string | null;
-  watchlist_size?: number;
-  cycle_seconds?: number;
-  queue_size?: number;
-  screeners?: unknown;
-  last_candidates: Candidate[];
+interface ScanResult {
+  model: string | null;
+  model_state: string;
+  threshold: number | null;
+  rules_only: boolean;
+  ideas: SwingIdea[];
 }
 
-function CandidateList({ items }: { items: Candidate[] }) {
+const SETUP_TONE: Record<string, "ok" | "info" | "warning"> = { trend_pullback: "info", breakout: "ok", oversold_bounce: "warning" };
+const n2 = (v: number) => v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pctFrom = (a: number, b: number) => `${(((b - a) / a) * 100).toFixed(1)}%`;
+
+function IdeaList({ items }: { items: SwingIdea[] }) {
   return (
     <div className="-mx-2 divide-y divide-white/[0.04]">
       {items.map((c, i) => (
@@ -39,15 +42,21 @@ function CandidateList({ items }: { items: Candidate[] }) {
               {c.symbol.slice(0, 2)}
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium text-white">{c.symbol}</span>
-                {c.urgency && <Badge tone={c.urgency === "high" ? "error" : c.urgency === "medium" ? "warning" : "neutral"}>{c.urgency}</Badge>}
+                <Badge tone={SETUP_TONE[c.setup] || "neutral"}>{c.setup.replace(/_/g, " ")}</Badge>
+                {c.prob != null && <Badge tone={c.prob >= 0.6 ? "ok" : "neutral"}>P(win) {(c.prob * 100).toFixed(0)}%</Badge>}
+              </div>
+              <div className="num mt-1 flex flex-wrap gap-x-3 text-xs">
+                <span className="text-gray-300">Entry ₹{n2(c.entry)}</span>
+                <span className="text-rose-300">SL ₹{n2(c.stop)} ({pctFrom(c.entry, c.stop)})</span>
+                <span className="text-emerald-300">TG ₹{n2(c.target)} (+{pctFrom(c.entry, c.target).replace("-", "")})</span>
               </div>
               <p className="mt-1 text-xs leading-relaxed text-gray-400">{c.reason}</p>
             </div>
           </div>
-          <Link href={`/analyze?symbol=${encodeURIComponent(c.symbol)}`} className="link flex shrink-0 items-center gap-1 text-xs font-medium">
-            Analyze <ArrowRight className="h-3.5 w-3.5" />
+          <Link href={`/market?symbol=${encodeURIComponent(c.symbol)}`} className="link flex shrink-0 items-center gap-1 text-xs font-medium">
+            Chart <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </div>
       ))}
@@ -56,96 +65,69 @@ function CandidateList({ items }: { items: Candidate[] }) {
 }
 
 export default function ScannerPage() {
-  const [max, setMax] = useState(5);
+  const [max, setMax] = useState(10);
   const { isAdmin } = useAuth();
   const { job, error, running, start } = useJob();
-  const bg = useApi<ScannerStatus>("/api/dashboard/scanner/status", 30000);
-  const [queue, setQueue] = useState<Candidate[] | null>(null);
-  const [pulling, setPulling] = useState(false);
-  const [pullError, setPullError] = useState<string | null>(null);
-  const pull = async () => {
-    if (!confirm("Take the queued candidates? The trading session will not see them.")) return;
-    setPulling(true);
-    setPullError(null);
-    try {
-      setQueue((await api<{ candidates: Candidate[] }>("/api/scanner/candidates")).candidates || []);
-    } catch (e: any) {
-      setPullError(e.message);
-    } finally {
-      setPulling(false);
-    }
-  };
-  const candidates: Candidate[] = job?.status === "done" ? job.result?.candidates || [] : [];
+  const swing = useApi<SwingStatus>("/api/dashboard/swing", 120000);
+  const res: ScanResult | null = job?.status === "done" ? job.result : null;
+  const ideas = res?.ideas || [];
+  const mode = swing.data ? swingTradingMode(swing.data) : null;
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <PageTitle title="Market scanner" icon={Radar} subtitle="AI screens the NIFTY 50 watchlist for trade candidates. Nothing is bought." />
+      <PageTitle title="Swing scanner" icon={Radar} subtitle="The Adaptive AI scores today's daily setups with the swing model. Nothing is bought here." />
 
       <div className="grid gap-3 lg:grid-cols-3">
-        <Card title="Run a scan" icon={Play} className="lg:col-span-2">
+        <Card title="Scan for swing ideas" icon={Play} className="lg:col-span-2">
           <p className="mb-4 text-sm text-gray-400">
-            Needs live quotes, so it finds nothing until an INDstocks token is set (Broker page).
+            Reads a year of daily candles for each symbol, finds a trend pullback, breakout or oversold bounce on the last closed bar, and keeps it when the model&apos;s probability clears its validated threshold.
           </p>
           <div className="flex flex-wrap items-end gap-3">
-            <Field label="Candidates" className="w-36">
+            <Field label="Ideas" className="w-36">
               <Select value={max} onChange={(e) => setMax(Number(e.target.value))}>
-                {[3, 5, 10, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+                {[3, 5, 10, 20].map((v) => <option key={v} value={v}>{v}</option>)}
               </Select>
             </Field>
             <Button icon={Radar} loading={running} onClick={() => start({ kind: "scan", max_candidates: max })} disabled={!isAdmin}>
               {running ? "Scanning..." : "Run scan"}
             </Button>
           </div>
-          {running && <div className="mt-4"><Progress value={60} /><p className="mt-2 text-xs text-gray-500">Scanning the market (up to a minute)...</p></div>}
+          {running && <div className="mt-4"><Progress value={60} /><p className="mt-2 text-xs text-gray-500">Scoring setups (up to a minute)...</p></div>}
           {!isAdmin && <p className="mt-3 text-xs text-gray-500">View-only account: running a scan needs an admin.</p>}
         </Card>
 
-        <Card title="Background scanner" icon={Activity}
-          right={bg.data && <Badge tone={bg.data.running ? "ok" : "neutral"} dot>{bg.data.running ? "Running" : bg.data.enabled ? "Stopped" : "Off"}</Badge>}>
-          <ErrorBox error={bg.error} />
-          {bg.data && (bg.data.running ? (
-            <KV items={[
-              ["Cycles", bg.data.cycle_count ?? 0],
-              ["Every", `${bg.data.cycle_seconds ?? "—"}s`],
-              ["Watchlist", bg.data.watchlist_size ?? "—"],
-              ["Last cycle", when(bg.data.last_cycle_at || null)],
-            ]} />
-          ) : (
-            <p className="text-sm text-gray-500">
-              {bg.data.enabled ? "Enabled but not running in the API process." : "Set SKOPAQ_SCANNER_ENABLED=true (Environment page, then restart the API) to scan every cycle in the background."}
-            </p>
-          ))}
+        <Card title="Swing model" icon={Brain}
+          right={swing.data && <Badge tone={swing.data.active ? "ok" : "warning"} dot>{swing.data.active ? "Ready" : "No model"}</Badge>}>
+          <ErrorBox error={swing.error} />
+          {swing.data && mode && (
+            <>
+              <KV items={[
+                ["Paper", mode.paper],
+                ["Live", mode.live],
+                ["Universe", swing.data.config.symbols],
+                ["Target", `${swing.data.config.target_rr} R · same-day exit`],
+              ]} />
+              <Link href="/learning" className="link mt-3 inline-flex items-center gap-1 text-xs font-medium">Train / promote <ArrowRight className="h-3.5 w-3.5" /></Link>
+            </>
+          )}
         </Card>
       </div>
 
       <ErrorBox error={error || (job?.status === "failed" ? job.error : null)} />
 
-      {job?.status === "done" && (
-        <Card title={`${candidates.length} candidates`} subtitle="From your scan">
-          {candidates.length === 0
-            ? <Empty icon={Radar}>No candidates this time (without an INDstocks token there are no quotes to screen).</Empty>
-            : <CandidateList items={candidates} />}
+      {res && (
+        <Card title={`${ideas.length} swing ideas`}
+          subtitle={res.model ? `Model ${res.model} (${res.model_state}) · P >= ${res.threshold ?? "—"}` : res.rules_only ? "Rules only (paper): ranked by trend, no model" : "No swing model"}>
+          {ideas.length === 0
+            ? <Empty icon={Radar}>{!res.model && !res.rules_only
+              ? "No swing model yet, so no ideas: train one on the AI learning page (or set SKOPAQ_SWING_RULES_ONLY=true for paper)."
+              : "No setup cleared the model today (without an INDstocks token or market data there is nothing to score)."}</Empty>
+            : <IdeaList items={ideas} />}
         </Card>
       )}
 
-      {isAdmin && bg.data?.running && (
-        <Card title="Live candidate queue" icon={Inbox}
-          subtitle="Candidates the background scanner queued for the trading session. Taking them removes them from the queue, so the session will not see them."
-          right={<Button size="sm" variant="ghost" loading={pulling} onClick={pull}>Take queue</Button>}>
-          <ErrorBox error={pullError} />
-          {queue === null ? <p className="text-xs text-gray-500">Not read yet.</p>
-            : queue.length === 0 ? <Empty icon={Inbox}>The queue was empty.</Empty> : <CandidateList items={queue} />}
-        </Card>
-      )}
-
-      {bg.data && bg.data.last_candidates.length > 0 && (
-        <Card title="Latest from the background scanner">
-          <CandidateList items={bg.data.last_candidates} />
-        </Card>
-      )}
-
-      {!job && !(bg.data?.last_candidates.length) && (
-        <Notice tone="neutral" icon={Radar}>Run a scan to see candidates here.</Notice>
+      {!job && (
+        <Notice tone="neutral" icon={Radar}>Run a scan to see today&apos;s swing ideas. The trading session runs the same scan at the open and sends each idea through the signal gate and the safety checker.</Notice>
       )}
     </div>
   );

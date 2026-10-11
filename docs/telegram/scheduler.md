@@ -11,7 +11,7 @@ The Telegram bot runs three scheduled jobs on NSE trading days. They are configu
 | Time (IST) | Time (UTC) | Job | Description |
 |------------|------------|-----|-------------|
 | 09:00 | 03:30 | Pre-Market Token Check | INDstocks token status |
-| 09:25 | 03:55 | Market Scan | Auto-scan top 10 stocks |
+| 09:25 | 03:55 | Market Scan | Top movers among 10 blue chips |
 | 15:35 | 10:05 | EOD Summary | End-of-day P&L report |
 
 ## Pre-Market Token Check (09:00 IST)
@@ -40,31 +40,29 @@ app.job_queue.run_daily(
 
 ## Market Scan (09:25 IST)
 
-Scans NIFTY 50 top stocks and sends the results to all registered chats.
+A quote scan of 10 blue chips sent to all registered chats. It does not run the swing model; it points to `/ideas` and `/analyze` for that.
 
 **What it does:**
 
 1. Verifies the INDstocks token (sends the token message and stops if it is missing or expired)
-2. Fetches live INDstocks quotes for 10 blue-chip stocks:
+2. Sends "Market open! Scanning NIFTY 50 for opportunities..."
+3. Fetches live INDstocks quotes (one batched call) for:
    RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, LT, BHARTIARTL, WIPRO, NTPC
-3. Sorts by absolute change% (top movers)
-4. Sends formatted scan results
+4. Sorts by absolute change% and sends the top 8
 
 **Example output:**
 
 ```
-Market Scan (09:25 IST)
+📊 Market Scan (09:25 IST)
 
-  RELIANCE: Rs 2,485.50 (+1.23%) Vol: 12,34,567
-  HDFCBANK: Rs 1,567.80 (+0.89%) Vol: 8,45,230
-  SBIN: Rs 756.30 (-0.45%) Vol: 15,67,890
-  TCS: Rs 3,750.00 (+0.32%) Vol: 3,21,456
-  ...
+🟢 RELIANCE: Rs 2,485.50 (+1.23%) Vol: 1,234,567
+🟢 HDFCBANK: Rs 1,567.80 (+0.89%) Vol: 845,230
+🔴 SBIN: Rs 756.30 (-0.45%) Vol: 1,567,890
+🟢 TCS: Rs 3,750.00 (+0.32%) Vol: 321,456
+...
 
-Top pick: RELIANCE (+1.23%)
-
-Reply 'analyze SYMBOL' for deep analysis
-Reply 'trade SYMBOL' to execute
+/ideas — the Adaptive AI's swing ideas
+/analyze SYMBOL — one stock's setup and indicators
 ```
 
 **Why 09:25?**
@@ -72,7 +70,7 @@ Reply 'trade SYMBOL' to execute
 Prices settle about 10 minutes after market open (09:15). Scanning at 09:25 gives enough data for meaningful volume and direction signals.
 
 !!! note "Customizing the watchlist"
-    The scanned stocks are hardcoded in the `job_market_scan` function. To customize, edit the `symbols` list in `skopaq/telegram_bot.py`.
+    The scanned stocks are the `_SCAN_SYMBOLS` tuple in `skopaq/telegram_bot.py`; edit it to customize.
 
 ## EOD Summary (15:35 IST)
 
@@ -88,15 +86,15 @@ Sends end-of-day portfolio summary after market close.
 **Example output:**
 
 ```
-Market Closed -- EOD Summary
+Market Closed — EOD Summary
 
-Cash: Rs 9,87,654.00
+Cash: Rs 987,654.00
 
-Open Positions (2):
-  RELIANCE: 10x @ 2400.00 P&L: Rs +855.00
-  TCS: 5x @ 3800.00 P&L: Rs -250.00
+Positions (2):
+  RELIANCE [CNC]: 10x @ 2400.00 P&L: Rs +855.00
+  TCS [CNC]: 5x @ 3800.00 P&L: Rs -250.00
 
-Total Day P&L: Rs +605.00
+Total realised P&L: Rs +605.00
 ```
 
 **Why 15:35?**

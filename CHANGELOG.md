@@ -6,6 +6,46 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Removed — one AI: the Adaptive AI
+
+- **The LLM / API AI is gone.** The LangGraph multi-agent pipeline (`skopaq/graph`,
+  `tradingagents/agents|graph|llm_clients|memory`), LLM tiering and providers (Gemini,
+  Anthropic, OpenRouter, Perplexity, xAI, custom gateway), TypeSafe Jev, Ollama, LangCache,
+  agent memory and reflections (`skopaq/memory`, the decision log, `skopaq settle` and the
+  scheduler's 18:30 settle), the sell analyst (`skopaq/agents`) and the monitor's AI sell
+  tier, the LLM scanner (`skopaq/scanner` keeps only the watchlist), the chat
+  (`skopaq/chat`, `skopaq chat`, `/api/chat/*`, Telegram natural-language chat with
+  `/confirm` / `/cancel`, the dashboard AI chat), `skopaq analyze`, `skopaq trade`,
+  `skopaq memory`, `/api/scanner/*`, the dashboard's Analyze page, `/memory`, `/llm/check`
+  and `/scanner/status`, the vendored upstream `cli/` and `main.py`, OpenClaw, and the
+  `langchain*`, `langgraph*`, `questionary`, `rank-bm25`, `typesafe-sdk`, `langcache`
+  dependencies. No AI API key is needed any more.
+- MCP tools `analyze_stock`, `scan_market`, `quick_decision`, `recall_agent_memories`,
+  `save_trade_reflection` (26 tools now). The CI job running upstream TradingAgents' suite.
+- Settings: every LLM / Jev / Ollama / LangCache / custom-gateway / scanner / reflection
+  key, `SKOPAQ_SWING_MODEL_GATE_ENABLED`, `SKOPAQ_SCHEDULER_SETTLE_AT`,
+  `SKOPAQ_MONITOR_AI_INTERVAL_CYCLES`, `SKOPAQ_DAEMON_MIN_PROFIT_*`.
+
+### Added — the swing book on the Adaptive AI
+
+- `skopaq/swing/`: daily setups (trend pullback, breakout, oversold bounce) with an ATR
+  stop and an R-multiple target, scored by a **swing model** trained on the setups'
+  simulated outcomes net of delivery charges with the live book's same-day exit; split by
+  date, threshold picked on validation, gated on unseen dates (`SWING_GATES`), registered
+  pickle-free in `<SKOPAQ_MODEL_DIR>/swing`. Paper trades the champion, else the shadow;
+  live only an admin-promoted champion; no model = no swing entries
+  (`SKOPAQ_SWING_RULES_ONLY=true` trades raw setups on paper only).
+- `SwingEngine` replaces the LLM analysis in the daemon: SCANNING ranks the ideas, TRADING
+  sends each through `SignalGate` (journalled) and the `Executor`; the exit plan takes the
+  setup's R multiple when the monitor's target mode gives none.
+- CLI `skopaq scan` (swing ideas), `swing-train`, `swing-status`, `swing-promote`,
+  `swing-rollback`; compose tool `swing-train`; MCP `swing_ideas`, `swing_idea`; Telegram
+  `/ideas` (and `/analyze` shows the swing setup); dashboard **Swing scanner**, a **Swing
+  model** card on AI learning (train / promote / rollback), jobs `scan` and `swing_train`.
+- Track record (`skopaq report`, dashboard, MCP `performance_report`): journalled signals
+  by strategy and the top rejection reasons replace "AI calls vs NIFTY".
+- Trade booking moved to `skopaq/execution/trade_booking.py`.
+
 ### Security
 
 - `/api/chat/*` is disabled (503) without `SKOPAQ_API_TOKEN` (it was open), and never

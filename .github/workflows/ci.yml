@@ -37,7 +37,7 @@ jobs:
       # Only findings that are always bugs gate CI: syntax errors and undefined
       # names. The rest of ruff's findings pre-date CI.
       - name: Lint (syntax errors, undefined names)
-        run: ruff check --select E9,F63,F7,F82 skopaq tests cli tradingagents
+        run: ruff check --select E9,F63,F7,F82 skopaq tests tradingagents
 
       - name: Unit tests
         run: python -m pytest tests/unit/ -q
@@ -75,44 +75,6 @@ jobs:
       - run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
-
-  upstream:
-    name: Upstream TradingAgents suite (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.11", "3.14"]
-    env:
-      # The vendored base (UPSTREAM_CHANGES.md). Bump it with each upstream sync.
-      UPSTREAM_REF: 5eb50854dad299381861632aa34014448b4260fc
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      - name: Install
-        run: pip install -e ".[dev]"
-
-      # Upstream's own tests, run against our modified tradingagents/ and cli/,
-      # catch Skopaq changes that break upstream behaviour.
-      - name: Fetch upstream tests
-        run: |
-          git clone --quiet https://github.com/TauricResearch/TradingAgents "$RUNNER_TEMP/ta"
-          git -C "$RUNNER_TEMP/ta" checkout --quiet "$UPSTREAM_REF"
-          mkdir "$RUNNER_TEMP/harness"
-          cp -r "$RUNNER_TEMP/ta/tests" "$RUNNER_TEMP/ta/pyproject.toml" "$RUNNER_TEMP/harness/"
-          ln -s "$GITHUB_WORKSPACE/tradingagents" "$RUNNER_TEMP/harness/tradingagents"
-          ln -s "$GITHUB_WORKSPACE/cli" "$RUNNER_TEMP/harness/cli"
-
-      - name: Upstream tests
-        working-directory: ${{ runner.temp }}/harness
-        run: python -m pytest tests -m "not integration" -q -p no:cacheprovider
 
   # supabase/migrations on a real Postgres, twice (the second run must be a no-op), and once
   # more over a database first set up by hand (every file run directly, as in the SQL Editor).
@@ -177,7 +139,7 @@ jobs:
         run: |
           docker run --rm skopaqtrader:local status
           docker run --rm skopaqtrader:local version
-          docker run --rm skopaqtrader:local python -c 'import psycopg2, quantstats, langchain_ollama, langchain_community, telegram.ext'
+          docker run --rm skopaqtrader:local python -c 'import psycopg2, quantstats, telegram.ext'
           # no files created by shell redirections (e.g. an unquoted ">=" in a RUN line)
           test -z "$(docker run --rm skopaqtrader:local sh -c 'ls /app | grep "^="' || true)"
 

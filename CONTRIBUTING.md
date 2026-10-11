@@ -37,13 +37,13 @@ Thank you for your interest in contributing to SkopaqTrader! This document provi
 ### Project Organization
 
 - **`skopaq/`** — All new SkopaqTrader code goes here
-- **`tradingagents/`** — Vendored upstream code. Modify only when necessary, and document every change in `UPSTREAM_CHANGES.md`
+- **`tradingagents/dataflows/`** — Vendored upstream market-data layer. Modify only when necessary, and document every change in `UPSTREAM_CHANGES.md`
 - **`tests/unit/`** — Unit tests (no external API calls)
 - **`tests/integration/`** — Integration tests (require API keys, marked with `@pytest.mark.integration`)
 
 ### Upstream Modification Policy
 
-The `tradingagents/` directory is vendored from [TradingAgents v0.2.0](https://github.com/TauricResearch/TradingAgents). Changes to this directory must:
+`tradingagents/dataflows/` is vendored from [TradingAgents v0.5.2](https://github.com/TauricResearch/TradingAgents) (the LLM framework itself was removed). Changes to it must:
 
 1. Be **minimal and surgical** — prefer wrapping over modifying
 2. Be **backward compatible** — upstream behavior unchanged when Skopaq extensions are absent
@@ -94,7 +94,7 @@ Be respectful, constructive, and inclusive. We're building something together.
 
 ## Upstream Community
 
-This project builds on the [TradingAgents](https://github.com/TauricResearch/TradingAgents) framework by [TauricResearch](https://tauric.ai/). If your contribution relates to the upstream framework, consider also contributing there.
+The market-data layer comes from the [TradingAgents](https://github.com/TauricResearch/TradingAgents) framework by [TauricResearch](https://tauric.ai/). If your contribution relates to its data vendors, consider also contributing there.
 
 ## License
 

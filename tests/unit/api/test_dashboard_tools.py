@@ -1,6 +1,6 @@
 """Dashboard tools (skopaq/api/dashboard_tools.py): broker status and token, portfolio,
-scanner status, learning, the INDstocks option chain, and the backtest / Monte Carlo /
-settle jobs."""
+the swing model, learning, the INDstocks option chain, and the backtest / Monte Carlo
+jobs."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def _wait(client, job_id, timeout=10.0):
 
 def test_everything_needs_a_login(client):
     for path in ("/api/dashboard/broker", "/api/dashboard/portfolio", "/api/dashboard/learning",
-                 "/api/dashboard/scanner/status", "/api/dashboard/options/chain"):
+                 "/api/dashboard/swing", "/api/dashboard/options/chain"):
         assert client.get(path).status_code == 401, path
     assert client.post("/api/dashboard/broker/indstocks-token",
                        json={"token": "x" * 20}).status_code == 401
@@ -202,19 +202,9 @@ def test_option_symbol_is_validated(client):
                       headers=AUTH).status_code == 422
 
 
-def test_scanner_status_when_not_started(client):
-    r = client.get("/api/dashboard/scanner/status", headers=AUTH).json()
-    assert r["running"] is False and r["last_candidates"] == []
-
-
 def test_learning_without_a_database(client):
     r = client.get("/api/dashboard/learning", headers=AUTH).json()
     assert r["available"] is False and "DATABASE_URL" in r["error"]
-
-
-def test_memory_needs_supabase(client, monkeypatch):
-    monkeypatch.setenv("SKOPAQ_SUPABASE_URL", "")
-    assert client.get("/api/dashboard/memory?q=banks", headers=AUTH).status_code == 503
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -266,13 +256,6 @@ def test_backtest_job_reports_too_little_history(client, monkeypatch):
     r = client.post("/api/dashboard/jobs", headers=AUTH, json={"kind": "backtest", "symbol": "TCS"})
     job = _wait(client, r.json()["id"])
     assert job["status"] == "failed" and "Not enough price history" in job["error"]
-
-
-def test_settle_job(client, monkeypatch):
-    monkeypatch.setattr(dashboard_tools, "run_settle_job", lambda: {"settled": 4})
-    r = client.post("/api/dashboard/jobs", headers=AUTH, json={"kind": "settle"})
-    assert r.status_code == 202 and r.json()["symbol"] == ""
-    assert _wait(client, r.json()["id"])["result"] == {"settled": 4}
 
 
 @pytest.mark.parametrize("body", [

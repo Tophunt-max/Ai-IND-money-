@@ -1,136 +1,110 @@
 """Track record — does the system have an edge? (`skopaq report`)
 
-Backtesting an LLM on past dates is contaminated: the models already know
-what happened next. The honest test is forward: score every call made in
-paper or live trading against what the market then did. This module reads
-what Skopaq already stores:
+Forward results only, from what Skopaq stores:
 
-- **AI calls** — upstream's decision log (mirrored to Supabase). Each call is
-  settled once its holding window has traded, with its raw return and its
-  return over the benchmark (NIFTY 50 for ``.NS`` tickers).
-- **Executed trades** — closed positions in the ``trades`` table, with the
-  realized P&L and the signal's confidence at entry.
+- **Signals** — every setup the engines (scalper, F&O, swing) decided on, from the signal
+  journal: qualified or rejected (and the top reasons), executed, and the net outcome of
+  those closed, per strategy.
+- **Executed trades** — closed positions in the ``trades`` table, with the realized P&L
+  and the signal's confidence (the model's probability) at entry.
 - **Calibration** — whether higher confidence actually won more often.
-
-Numbers stay in code; nothing here asks an LLM.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-# Below this many settled calls, hit rates are mostly noise.
+# Below this many closed signals, win rates are mostly noise.
 MIN_SAMPLE = 30
 
-_LONG = {"Buy", "Overweight"}
-_SHORT_OR_EXIT = {"Sell", "Underweight"}
 _BUCKETS = ((0, 50), (50, 60), (60, 70), (70, 80), (80, 101))
-
-
-def _pct(text: Optional[str]) -> Optional[float]:
-    """``"+2.0%"`` → ``0.02``; anything else → ``None``."""
-    if not text:
-        return None
-    try:
-        return float(text.strip().rstrip("%")) / 100
-    except ValueError:
-        return None
-
-
-def parse_tag(entry: str) -> Optional[dict[str, Any]]:
-    """The tag line of a decision-log entry, as upstream writes it.
-
-    ``[date | ticker | rating | pending]`` or
-    ``[date | ticker | rating | +2.0% | +1.0% | 5d | resolved:...]``.
-    """
-    line = entry.strip().splitlines()[0].strip() if entry.strip() else ""
-    if not (line.startswith("[") and line.endswith("]")):
-        return None
-    fields = [f.strip() for f in line[1:-1].split("|")]
-    if len(fields) < 4:
-        return None
-    pending = fields[3] == "pending"
-    return {
-        "date": fields[0],
-        "ticker": fields[1],
-        "rating": fields[2],
-        "pending": pending,
-        "raw": None if pending else _pct(fields[3]),
-        "alpha": None if pending or len(fields) < 5 else _pct(fields[4]),
-    }
-
-
-@dataclass
-class RatingStats:
-    calls: int = 0
-    settled: int = 0
-    avg_return: Optional[float] = None
-    avg_alpha: Optional[float] = None
-
-
-@dataclass
-class CallStats:
-    """How the AI's calls did, whether or not they were traded."""
-
-    total: int = 0
-    pending: int = 0
-    settled: int = 0
-    # Buy/Overweight that rose + Sell/Underweight that fell, over those settled
-    hit_rate: Optional[float] = None
-    directional: int = 0
-    # Mean return over the benchmark of settled Buy/Overweight calls
-    long_alpha: Optional[float] = None
-    by_rating: dict[str, RatingStats] = field(default_factory=dict)
-
-    @property
-    def enough_data(self) -> bool:
-        return self.directional >= MIN_SAMPLE
 
 
 def _mean(values: list[float]) -> Optional[float]:
     return sum(values) / len(values) if values else None
 
 
-def summarize_calls(entries: Iterable[str]) -> CallStats:
-    tags = [t for t in (parse_tag(e) for e in entries) if t is not None]
-    stats = CallStats(total=len(tags))
-    hits = 0
-    long_alphas: list[float] = []
-    returns: dict[str, list[float]] = {}
-    alphas: dict[str, list[float]] = {}
+@dataclass
+class StrategyStats:
+    decisions: int = 0
+    qualified: int = 0
+    executed: int = 0
+    closed: int = 0
+    wins: int = 0
+    net: float = 0.0
 
-    for tag in tags:
-        rating = tag["rating"]
-        by = stats.by_rating.setdefault(rating, RatingStats())
-        by.calls += 1
-        if tag["pending"] or tag["raw"] is None:
-            stats.pending += tag["pending"]
-            continue
-        stats.settled += 1
-        by.settled += 1
-        returns.setdefault(rating, []).append(tag["raw"])
-        if tag["alpha"] is not None:
-            alphas.setdefault(rating, []).append(tag["alpha"])
-        if rating in _LONG:
-            stats.directional += 1
-            hits += tag["raw"] > 0
-            if tag["alpha"] is not None:
-                long_alphas.append(tag["alpha"])
-        elif rating in _SHORT_OR_EXIT:
-            stats.directional += 1
-            hits += tag["raw"] < 0
+    @property
+    def win_rate(self) -> Optional[float]:
+        return self.wins / self.closed if self.closed else None
 
-    for rating, by in stats.by_rating.items():
-        by.avg_return = _mean(returns.get(rating, []))
-        by.avg_alpha = _mean(alphas.get(rating, []))
-    stats.hit_rate = hits / stats.directional if stats.directional else None
-    stats.long_alpha = _mean(long_alphas)
+
+@dataclass
+class SignalStats:
+    """What the engines decided (the signal journal), whether or not it was traded."""
+
+    total: int = 0
+    qualified: int = 0
+    rejected: int = 0
+    expired: int = 0
+    executed: int = 0
+    closed: int = 0
+    wins: int = 0
+    net: float = 0.0
+    by_strategy: dict[str, StrategyStats] = field(default_factory=dict)
+    top_rejections: list[tuple[str, int]] = field(default_factory=list)
+
+    @property
+    def win_rate(self) -> Optional[float]:
+        return self.wins / self.closed if self.closed else None
+
+    @property
+    def enough_data(self) -> bool:
+        return self.closed >= MIN_SAMPLE
+
+
+def summarize_signals(rows: Iterable[dict]) -> SignalStats:
+    """*rows*: signal journal rows (``SignalJournal.signals``)."""
+    stats = SignalStats()
+    reasons: dict[str, int] = {}
+    for r in rows:
+        stats.total += 1
+        status = str(r.get("status") or "")
+        sid = str(r.get("strategy_id") or "?")
+        by = stats.by_strategy.setdefault(sid, StrategyStats())
+        by.decisions += 1
+        if status == "QUALIFIED":
+            stats.qualified += 1
+            by.qualified += 1
+        elif status == "REJECTED":
+            stats.rejected += 1
+            for x in r.get("reasons") or []:
+                # "net reward/risk 0.8 < 1.0" and "… 0.5 < 1.0" are one reason
+                key = re.sub(r"\d+(\.\d+)?%?", "#", str(x).split("(")[0]).strip()[:48]
+                reasons[key] = reasons.get(key, 0) + 1
+        elif status == "EXPIRED":
+            stats.expired += 1
+        ex = r.get("execution") or {}
+        if isinstance(ex.get("filled"), (int, float)) and ex["filled"] > 0:
+            stats.executed += 1
+            by.executed += 1
+        out = r.get("outcome") or {}
+        net = out.get("net_pnl")
+        if isinstance(net, (int, float)):
+            stats.closed += 1
+            by.closed += 1
+            stats.net += float(net)
+            by.net += float(net)
+            if net > 0:
+                stats.wins += 1
+                by.wins += 1
+    stats.top_rejections = sorted(reasons.items(), key=lambda kv: -kv[1])[:8]
     return stats
 
 
@@ -231,34 +205,22 @@ def calibration(trades: Iterable[Any]) -> list[CalibrationBucket]:
 class Report:
     days: int
     mode: str
-    calls: CallStats
+    signals: SignalStats
     trades: TradeStats
     calibration: list[CalibrationBucket]
     sources: list[str] = field(default_factory=list)
 
 
-def _decision_log_entries(config, client) -> tuple[list[str], list[str]]:
-    """Decision-log entries from Supabase and the local log, merged."""
-    from pathlib import Path
+def _journal_rows(config, since: datetime, now: datetime) -> tuple[list[dict], list[str]]:
+    try:
+        from skopaq.strategy.journal import SignalJournal
 
-    from skopaq.memory.store import DECISION_LOG_ROLE, _split_entries, merge_entries
-    from tradingagents.default_config import DEFAULT_CONFIG
-
-    sources, remote, local = [], [], []
-    if client is not None:
-        try:
-            from skopaq.db.repositories import MemoryRepository
-
-            record = MemoryRepository(client).get_by_role(DECISION_LOG_ROLE)
-            remote = record.documents if record else []
-            sources.append("supabase:decision_log")
-        except Exception:
-            logger.warning("Could not read the decision log from Supabase", exc_info=True)
-    path = Path(DEFAULT_CONFIG["memory_log_path"])
-    if path.exists():
-        local = _split_entries(path.read_text(encoding="utf-8"))
-        sources.append(str(path))
-    return merge_entries(remote, local), sources
+        journal = SignalJournal.from_config(config)
+        days = [(since + timedelta(days=i)).date() for i in range((now - since).days + 1)]
+        return journal.signals(days), ["signal journal"]
+    except Exception:
+        logger.warning("Could not read the signal journal", exc_info=True)
+        return [], []
 
 
 def build_report(config, days: int = 90, now: Optional[datetime] = None) -> Report:
@@ -273,9 +235,7 @@ def build_report(config, days: int = 90, now: Optional[datetime] = None) -> Repo
 
         client = create_client(config.supabase_url, config.supabase_service_key.get_secret_value())
 
-    entries, sources = _decision_log_entries(config, client)
-    cutoff = since.date().isoformat()
-    entries = [e for e in entries if (t := parse_tag(e)) and t["date"] >= cutoff]
+    rows, sources = _journal_rows(config, since, now)
 
     trades: list[Any] = []
     if client is not None:
@@ -290,7 +250,7 @@ def build_report(config, days: int = 90, now: Optional[datetime] = None) -> Repo
     return Report(
         days=days,
         mode="paper" if is_paper else "live",
-        calls=summarize_calls(entries),
+        signals=summarize_signals(rows),
         trades=summarize_trades(trades),
         calibration=calibration(trades),
         sources=sources,

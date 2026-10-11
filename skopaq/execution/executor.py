@@ -299,7 +299,8 @@ class Executor:
             return
         try:
             plan = self._planner.plan_for_entry(
-                signal.symbol, result.mode, float(entry), filled, signal.stop_loss)
+                signal.symbol, result.mode, float(entry), filled, signal.stop_loss,
+                target_rr=(signal.agent_state or {}).get("target_rr"))
         except Exception:
             logger.warning("Exit plan of %s not made — the monitor uses its defaults",
                            signal.symbol, exc_info=True)

@@ -1,5 +1,5 @@
 site_name: SkopaqTrader Docs
-site_description: AI Algorithmic Trading Platform for Indian Equities
+site_description: Adaptive-AI Algorithmic Trading Platform for Indian Equities
 site_url: https://tophunt-max.github.io/Ai-IND-money-/
 repo_url: https://github.com/Tophunt-max/Ai-IND-money-
 repo_name: Tophunt-max/Ai-IND-money-
@@ -59,12 +59,10 @@ nav:
     - Setup: claude-code/setup.md
     - MCP Tools: claude-code/mcp-tools.md
     - Custom Skills: claude-code/skills.md
-    - Dual-Mode Analysis: claude-code/dual-mode.md
   - Trading:
-    - Equity Analysis: trading/equity-analysis.md
     - Options Selling: trading/options-selling.md
     - GTT Orders: trading/gtt-orders.md
-    - Swing Trading: trading/swing-trading.md
+    - Swing Trading (Adaptive AI): trading/swing-trading.md
     - Intraday Scalping: trading/scalping.md
     - F&O (Options Buying): trading/fno.md
     - Live Trading: trading/live-trading.md
@@ -73,10 +71,9 @@ nav:
     - Commands: telegram/commands.md
     - Scheduled Jobs: telegram/scheduler.md
   - Architecture:
-    - Multi-Agent Pipeline: architecture/pipeline.md
+    - Trading Pipeline (Adaptive AI): architecture/pipeline.md
     - MCP Server: architecture/mcp-server.md
     - INDstocks API: indstocks_api.md
-    - Ollama Local Models: architecture/ollama.md
     - Notifications: architecture/notifications.md
     - Execution safety, signals and learning: architecture/execution-safety.md
     - Adaptive AI (FreqAI-style): architecture/adaptive-ai.md
@@ -98,4 +95,4 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/Tophunt-max/Ai-IND-money-
 
-copyright: "Apache 2.0 — Built on TradingAgents by TauricResearch"
+copyright: "Apache 2.0 — data layer from TradingAgents by TauricResearch"

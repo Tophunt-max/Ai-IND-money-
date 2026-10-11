@@ -120,11 +120,11 @@ def test_viewer_can_read_but_not_act(env):
     for path, body in [("/api/dashboard/jobs", {"kind": "scan"}),
                        ("/api/dashboard/kill-switch/halt", {"reason": "x"}),
                        ("/api/dashboard/kill-switch/resume", None),
-                       ("/api/dashboard/chat", {"message": "hi"}),
                        ("/api/dashboard/settings/env",
                         {"set": {"SKOPAQ_TRADING_MODE": "live"}, "confirm_live": True}),
                        ("/api/dashboard/broker/indstocks-token", {"token": "x" * 20}),
-                       ("/api/dashboard/jobs", {"kind": "settle"}),
+                       ("/api/dashboard/jobs", {"kind": "swing_train"}),
+                       ("/api/dashboard/swing/v1x/promote", {"reason": "looks good"}),
                        ("/api/dashboard/jobs", {"kind": "backtest", "symbol": "TCS"})]:
         r = env.client.post(path, json=body, headers=h)
         assert r.status_code == 403, path
@@ -167,20 +167,6 @@ def test_api_token_still_works_as_admin(env):
 def test_supabase_down_is_503(env):
     respx.get(f"{SUPA}/auth/v1/user").mock(side_effect=httpx.ConnectError("down"))
     assert env.client.get("/api/dashboard/me", headers=_h(_jwt())).status_code == 503
-
-
-@respx.mock
-def test_chat_for_admin(env, monkeypatch):
-    respx.get(f"{SUPA}/auth/v1/user").mock(
-        return_value=httpx.Response(200, json=_user("boss@example.com")))
-    from skopaq.chat import bridge
-
-    async def fake_send(body):
-        return bridge.ChatMessageResponse(message=f"echo {body.message}", session_id="c1")
-
-    monkeypatch.setattr(bridge, "send_message", fake_send)
-    r = env.client.post("/api/dashboard/chat", json={"message": "hi"}, headers=_h(_jwt()))
-    assert r.status_code == 200 and r.json()["message"] == "echo hi"
 
 
 def test_record_login_writes_one_row_per_session(monkeypatch):

@@ -1,16 +1,15 @@
 # Claude Code Setup
 
-SkopaqTrader integrates directly with Claude Code via a Model Context Protocol (MCP) server. Once connected, all 29 trading tools are available inside your Claude Code session.
+SkopaqTrader integrates with Claude Code via a Model Context Protocol (MCP) server. Once connected, its 26 tools (broker data, portfolio, the Adaptive AI's swing ideas, safety checks, backtests, paper orders) are available inside your Claude Code session. The decisions come from the Adaptive AI; Claude Code reads and reports them.
 
 ## Prerequisites
 
 - Python 3.12+ installed
-- SkopaqTrader cloned and dependencies installed
-- A valid `.env` file with at least one LLM API key
+- SkopaqTrader cloned and dependencies installed (`pip install -e .`)
+- A `.env` file (copied from `.env.example`) with a valid INDstocks token, or one set with `skopaq token set`
+- For the swing ideas: a trained swing model (`skopaq swing-train`, see [Swing Trading](../trading/swing-trading.md))
 
 ## Register the MCP Server
-
-Add the SkopaqTrader MCP server to your Claude Code project configuration.
 
 **Option 1 — Project-level config** (recommended):
 
@@ -40,17 +39,11 @@ Edit `~/.claude.json` and add the same block under `"mcpServers"`.
 
 ## Verify the Connection
 
-After saving the config, restart Claude Code. You should see the tools loaded in the system prompt. Run a quick test:
-
-```
-/status
-```
-
-Or ask Claude directly:
+After saving the config, restart Claude Code and ask:
 
 > What is the current status of the SkopaqTrader system?
 
-Claude will call `mcp__skopaq__system_status` and show version, trading mode, connected LLMs, and token health.
+Claude calls `mcp__skopaq__system_status` and shows version, trading mode, asset class, token health, the swing model (champion and shadow versions), paper capital and the kill-switch state.
 
 ## How It Works
 
@@ -59,9 +52,10 @@ The MCP server (`skopaq/mcp_server.py`) runs as a child process using **stdio tr
 ```
 Claude Code  ──stdin/stdout──  python -m skopaq.mcp_server
                                    │
-                                   ├── INDstocks (broker)
-                                   ├── LLM providers (Gemini, Claude, Grok)
-                                   └── Supabase (memory)
+                                   ├── INDstocks (quotes, candles, option chain)
+                                   ├── Order router (paper engine) + SafetyChecker
+                                   ├── Swing engine + swing model registry (Adaptive AI)
+                                   └── Signal journal / trade history (reports, learning)
 ```
 
 ## Troubleshooting
@@ -71,26 +65,26 @@ Claude Code  ──stdin/stdout──  python -m skopaq.mcp_server
 | Tools not appearing | Restart Claude Code after editing `.mcp.json` |
 | `ModuleNotFoundError` | Run `pip install -e .` in the project root |
 | Broker errors | Ensure a valid INDstocks token (`skopaq token status`, or `SKOPAQ_INDSTOCKS_TOKEN` in `.env`) |
-| LLM failures | Check that at least `SKOPAQ_GOOGLE_API_KEY` is set |
+| Swing tools return `model: null` | No swing model trained yet: run `skopaq swing-train` |
 | MCP server crashes | Run `python -m skopaq.mcp_server` standalone to see errors |
 
 !!! warning "Environment Variables"
-    The MCP server reads from your shell environment. If you use `direnv` or a `.env` loader, make sure variables are exported before Claude Code launches.
+    The MCP server reads from your shell environment (and the settings saved from the dashboard). If you use `direnv` or a `.env` loader, make sure variables are exported before Claude Code launches.
 
 ## Auto-Allowed vs Permission-Required Tools
 
-Read-only tools (quotes, positions, status) are auto-allowed. Tools that modify state require explicit user permission in Claude Code:
+`.claude/settings.json` auto-allows the read-only tools plus `halt_trading`; every other tool asks for permission:
 
 | Auto-Allowed | Requires Permission |
 |---|---|
 | `get_quote`, `get_historical` | `place_order` |
-| `get_positions`, `get_holdings`, `get_funds` | `resume_trading` |
-| `get_orders`, `system_status` | `get_option_chain` |
-| `analyze_stock`, `scan_market`, `check_safety` | `suggest_option_trade` |
-| `gather_*` data tools, `recall_agent_memories`, `quick_decision` | `save_trade_reflection` |
+| `get_positions`, `get_holdings`, `get_funds`, `get_orders` | `resume_trading` |
+| `system_status`, `check_safety`, `performance_report` | `get_option_chain`, `suggest_option_trade` |
+| `gather_*` data tools | `backtest_strategy`, `run_monte_carlo_test` |
+| `swing_ideas`, `swing_idea` | `get_learning_insights`, `get_symbol_stats`, `evolve_strategy` |
+| `halt_trading` | |
 
 ## Next Steps
 
 - Browse all [MCP Tools](mcp-tools.md)
 - Try the [Custom Skills](skills.md) (slash commands)
-- Understand [Dual-Mode Analysis](dual-mode.md)
