@@ -4,7 +4,7 @@ import { Dices, FlaskConical, Play } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { useAuth } from "@/components/AuthGate";
-import Chart from "@/components/Chart";
+import { BarChart, EquityChart } from "@/components/charts";
 import {
   Badge, Button, Card, Empty, ErrorBox, Field, Notice, PageTitle, pnlClass, Progress, Segmented, Select, StatCard, Table,
 } from "@/components/ui";
@@ -27,9 +27,16 @@ function BacktestResult({ r }: { r: any }) {
       </div>
       <Card title="Equity curve" subtitle={`${r.symbol} · ${r.start_date} → ${r.end_date} · ${r.strategy}`}>
         {r.equity_curve.length >= 2 ? (
-          <Chart points={r.equity_curve.map((pt: any, i: number) => ({ t: i, v: pt.value, label: pt.date }))} height={220} format={(v) => inr(v, 0)} />
+          <EquityChart points={r.equity_curve.map((pt: any) => ({ label: String(pt.date).slice(0, 10), v: pt.value }))}
+            baseline={r.equity_curve[0].value} base={0} height={260} format={(v) => inr(v, 0)} />
         ) : <Empty>No equity curve.</Empty>}
       </Card>
+      {r.trades.length > 1 && (
+        <Card title="P&L per trade" subtitle="In order (last 100)">
+          <BarChart height={140} format={(v) => inr(v, 0)}
+            bars={r.trades.map((t: any) => ({ label: String(t.exit_date).slice(5, 10), v: t.pnl, hint: `${String(t.entry_date).slice(0, 10)} → ${String(t.exit_date).slice(0, 10)} · ${String(t.exit_reason).replace(/_/g, " ")}` }))} />
+        </Card>
+      )}
       <Card title={`Trades (${r.trades.length})`} subtitle={`Stop ${r.stop_loss_pct}% · target ${r.target_pct}%`}>
         {r.trades.length === 0 ? <Empty>The strategy made no trades in this period.</Empty> : (
           <Table head={["Entry", "Exit", "Qty", "P&L", "%", "Why"]}>
@@ -52,7 +59,6 @@ function BacktestResult({ r }: { r: any }) {
 
 function MonteCarloResult({ r }: { r: any }) {
   const m = r.result;
-  const max = Math.max(1, ...r.histogram.map((h: any) => h.count));
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -63,17 +69,9 @@ function MonteCarloResult({ r }: { r: any }) {
         <StatCard title="Probability of ruin" value={p(m.probability_of_ruin_pct, 1)} detail={`${m.n_simulations} runs · ${m.n_trades} trades`} />
       </div>
       <Card title="Distribution of final returns" subtitle="Each bar: how many shuffled runs ended in that range">
-        <div className="flex h-48 items-end gap-1">
-          {r.histogram.map((h: any, i: number) => (
-            <div key={i} className="group flex flex-1 flex-col items-center justify-end" title={`${p(h.from)} … ${p(h.to)}: ${h.count}`}>
-              <div className={`w-full rounded-t-md ${h.to < 0 ? "bg-gradient-to-t from-rose-600/70 to-rose-400" : "bg-gradient-to-t from-emerald-600/70 to-emerald-400"}`}
-                style={{ height: `${(h.count / max) * 100}%`, minHeight: h.count ? 3 : 0 }} />
-            </div>
-          ))}
-        </div>
-        <div className="num mt-2 flex justify-between text-[11px] text-gray-500">
-          <span>{p(r.histogram[0]?.from)}</span><span>{p(r.histogram[r.histogram.length - 1]?.to)}</span>
-        </div>
+        <BarChart height={190} zeroLine={false} format={(v) => `${Math.round(v)} runs`}
+          bars={r.histogram.map((h: any) => ({ label: `${Number(h.from).toFixed(0)}%`, v: h.count, tone: h.to < 0 ? "down" : "up",
+            hint: `${p(h.from)} … ${p(h.to)}` }))} />
         {r.histogram.length === 1 && <p className="mt-3 text-xs text-gray-500">Every ordering ends at the same return: drawdowns differ, the total does not.</p>}
       </Card>
     </div>
@@ -97,7 +95,7 @@ export default function BacktestPage() {
   const done = job?.status === "done" && (job.kind === "backtest" || job.kind === "montecarlo");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Backtest" icon={FlaskConical} subtitle="Test the RSI mean-reversion strategy on history. Pure maths, no AI calls, no orders." />
 
       <Card>

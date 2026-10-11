@@ -125,7 +125,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return (
       <AuthFrame>
         <div className="text-center space-y-4">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-rose-500/10 ring-1 ring-rose-500/25">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-xl bg-rose-500/10 ring-1 ring-rose-500/25">
             <Lock className="h-6 w-6 text-rose-300" />
           </div>
           <h2 className="text-xl font-semibold text-white">Access denied</h2>
@@ -290,6 +290,22 @@ function LoginScreen({ serverError }: { serverError: string | null }) {
 }
 
 /** Split screen: brand panel (desktop) + form card. */
+/** The backend's public health (no login needed): version, mode, broker token. */
+function BackendStatus() {
+  const [h, setH] = useState<{ version?: string; mode?: string; token_valid?: boolean } | null | false>(null);
+  useEffect(() => {
+    const base = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+    fetch(`${base}/health`).then((r) => (r.ok ? r.json() : false)).then(setH).catch(() => setH(false));
+  }, []);
+  if (h === null) return null;
+  return (
+    <div className="mt-3 flex items-center justify-center gap-2 text-[11px] text-gray-500">
+      <span className={`h-1.5 w-1.5 rounded-full ${h ? "bg-emerald-400" : "bg-rose-400"}`} />
+      {h ? <>Backend v{h.version} · {(h.mode || "").toUpperCase()} · broker token {h.token_valid ? "valid" : "missing"}</> : "Backend unreachable"}
+    </div>
+  );
+}
+
 export function AuthFrame({ children }: { children: ReactNode }) {
   const features = [
     { icon: Brain, title: "15-agent AI analysis", text: "Analysts, bull/bear debate, trader and risk team on every stock." },
@@ -299,9 +315,9 @@ export function AuthFrame({ children }: { children: ReactNode }) {
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
       <div className="relative hidden overflow-hidden border-r border-white/[0.05] lg:flex lg:flex-col lg:justify-between p-12">
-        <div className="absolute inset-0 bg-[radial-gradient(40rem_25rem_at_20%_20%,rgba(99,102,241,0.25),transparent_60%),radial-gradient(30rem_20rem_at_80%_90%,rgba(34,211,238,0.12),transparent_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(40rem_25rem_at_20%_20%,rgba(47,107,255,0.22),transparent_60%),radial-gradient(30rem_20rem_at_80%_90%,rgba(14,203,129,0.10),transparent_60%)]" />
         <div className="relative flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-cyan-400 shadow-glow">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-500">
             <span className="text-sm font-black text-white">AI</span>
           </div>
           <span className="text-lg font-semibold text-white">AI IND Money</span>
@@ -330,12 +346,13 @@ export function AuthFrame({ children }: { children: ReactNode }) {
       <div className="flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-cyan-400 shadow-glow">
+            <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-500">
               <span className="text-sm font-black text-white">AI</span>
             </div>
             <span className="text-lg font-semibold text-white">AI IND Money</span>
           </div>
-          <div className="surface p-6 sm:p-8">{children}</div>
+          <div className="surface p-5 sm:p-8">{children}</div>
+          <BackendStatus />
         </div>
       </div>
     </div>

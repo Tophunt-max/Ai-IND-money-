@@ -98,13 +98,13 @@ export default function BrokerPage() {
   const ind = s?.indstocks;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Broker connections" icon={PlugZap} subtitle="INDstocks is the only broker: market data, equity and F&O orders"
         right={<Button variant="ghost" icon={RefreshCw} onClick={st.reload}>Refresh</Button>} />
       <ErrorBox error={st.error || error} />
       {msg && <Notice tone="ok">{msg}</Notice>}
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-2">
         <Card title="INDstocks" icon={KeyRound} subtitle="API token, renewed every trading day"
           right={ind && <Badge tone={ind.valid ? "ok" : "error"} dot>{ind.valid ? "Connected" : "No token"}</Badge>}>
           {!ind ? <div className="space-y-3"><Skeleton /><Skeleton className="h-4 w-2/3" /></div> : (

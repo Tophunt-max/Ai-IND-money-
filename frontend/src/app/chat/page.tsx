@@ -94,7 +94,7 @@ function Chat() {
         <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
-              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-brand-500 to-cyan-400 shadow-glow">
+              <div className="grid h-14 w-14 place-items-center rounded-xl bg-brand-500">
                 <Sparkles className="h-6 w-6 text-white" />
               </div>
               <div>
@@ -118,8 +118,8 @@ function Chat() {
                   <Bot className="h-4 w-4 text-brand-200" />
                 </div>
               )}
-              <div className={cx("max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-                m.role === "user" ? "rounded-br-md bg-gradient-to-b from-brand-500 to-brand-600 text-white" : "rounded-bl-md bg-white/[0.04] text-gray-200 ring-1 ring-white/[0.06]")}>
+              <div className={cx("max-w-[85%] whitespace-pre-wrap rounded-xl px-4 py-2.5 text-sm leading-relaxed",
+                m.role === "user" ? "rounded-br-md bg-brand-500 text-white" : "rounded-bl-md bg-white/[0.04] text-gray-200 ring-1 ring-white/[0.06]")}>
                 {m.text}
                 {m.tools && m.tools.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -147,7 +147,7 @@ function Chat() {
             <input value={input} onChange={(e) => setInput(e.target.value)}
               placeholder="Message the AI..." className="field h-12 pr-14" />
             <button type="submit" disabled={busy || !input.trim()}
-              className="absolute right-2 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-lg bg-gradient-to-b from-brand-500 to-brand-600 text-white transition disabled:opacity-40">
+              className="absolute right-2 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-lg bg-brand-500 text-white transition disabled:opacity-40">
               <Send className="h-4 w-4" />
             </button>
           </form>

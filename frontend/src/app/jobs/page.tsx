@@ -30,13 +30,13 @@ export default function JobsPage() {
   const jobs = data?.jobs || [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Jobs" icon={ListChecks} subtitle="Analyses, scans, backtests and settles started from the dashboard (one at a time)"
         right={<Button variant="ghost" icon={RefreshCw} onClick={reload}>Refresh</Button>} />
       <ErrorBox error={error} />
       <Card padded={false}>
         {loading && !data ? (
-          <div className="space-y-3 p-5"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>
+          <div className="space-y-3 p-3 sm:p-4"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>
         ) : jobs.length === 0 ? (
           <Empty icon={ListChecks} title="No jobs yet">Jobs are kept in memory and cleared when the API restarts.</Empty>
         ) : (
@@ -45,7 +45,7 @@ export default function JobsPage() {
               const k = KINDS[j.kind] || KINDS.analyze;
               const Icon = k.icon;
               return (
-                <Link key={j.id} href={k.href(j)} className="flex items-center gap-4 px-5 py-4 transition hover:bg-white/[0.02]">
+                <Link key={j.id} href={k.href(j)} className="flex items-center gap-4 px-3 sm:px-4 py-4 transition hover:bg-white/[0.02]">
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.04] ring-1 ring-white/[0.06]">
                     <Icon className="h-5 w-5 text-brand-300" />
                   </div>

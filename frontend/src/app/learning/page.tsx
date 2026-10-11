@@ -134,7 +134,7 @@ export default function LearningPage() {
   const sl = data?.stop_loss;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="AI learning" icon={Sparkles} subtitle="What the system learns from its own signals and trades" />
       <ModelRegistry />
       <StrategyBuilder />
@@ -160,7 +160,7 @@ export default function LearningPage() {
               <StatCard title="Avg win (no stop)" value={p1(sl.avg_win_when_not_stopped)} tone="ok" />
             </div>
           )}
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2">
             <Card title="Confidence calibration" subtitle="Stated confidence vs actual win rate">
               {(data.calibration || []).length === 0 ? <Empty>No data yet.</Empty> : (
                 <div className="space-y-3">
@@ -189,7 +189,7 @@ export default function LearningPage() {
               )}
             </Card>
           </div>
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2">
             <Card title="By sector">
               {(data.sectors || []).length === 0 ? <Empty>No data yet.</Empty> : (
                 <Table head={["Sector", "Trades", "Win rate", "P&L"]}>
@@ -212,7 +212,7 @@ export default function LearningPage() {
         </>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-2">
         <SymbolStats />
         <MemorySearch />
       </div>

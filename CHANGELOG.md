@@ -89,6 +89,15 @@ All notable changes to SkopaqTrader. The format follows
   boosted trees added to the previous ensemble, PyTorch / logistic from the previous
   weights, the parent's pipeline kept frozen, the rolling backtest chained; RL policies
   from the previous weights and scaling. Lineage recorded in the bundle and registry.
+- **Dashboard redesign, trading-terminal style and phone first:** exchange green / red
+  theme with monospace prices; a live NIFTY / BANKNIFTY / VIX ticker and kill-switch pill on
+  every page; phone tabs Home · Market · Trade · Positions · More (an app grid of every
+  page). Market is a watchlist (NIFTY 50 or your own list, sort by gainers / losers) with a
+  stock view and BUY / SELL buttons that prefill the order ticket. Charts: candles with
+  zoom, pan and pinch, an RSI pane and a crosshair price; equity curves with drawdown;
+  daily P&L, per-symbol and per-trade bars; Monte Carlo histogram; win / loss and signal
+  donuts; option OI profile with PCR and max pain. Also: real option expiries, the
+  scanner's live queue (admin) and the backend's public health on the login screen.
 - **Your strategy without code:** a dashboard builder (features, timeframes, periods,
   correlated symbols, targets, entry rule) validated on the server with the look-ahead
   guard, saved per revision, and selected for training with an audit trail; bundles

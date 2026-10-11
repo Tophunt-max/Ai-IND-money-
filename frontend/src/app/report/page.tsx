@@ -3,6 +3,7 @@
 import { BarChart3, Gauge, RefreshCw, Target, TrendingUp, Wallet } from "lucide-react";
 import { useState } from "react";
 
+import { BarChart, Donut, DOWN, UP } from "@/components/charts";
 import { Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Progress, Segmented, Skeleton, StatCard, Table } from "@/components/ui";
 import { inr, pct } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -44,7 +45,7 @@ export default function ReportPage() {
   const { data: r, error, loading, reload } = useApi<Report>(`/api/dashboard/report?days=${days}`);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Track record" icon={BarChart3} subtitle="Forward results only: every AI call scored against what the market then did"
         right={<Button variant="ghost" icon={RefreshCw} onClick={reload}>Refresh</Button>} />
       <Segmented value={days} onChange={setDays} options={RANGES} />
@@ -66,7 +67,7 @@ export default function ReportPage() {
             <Notice tone="warning">Only {r.calls.directional} settled directional calls. Below {r.min_sample}, hit rates are mostly noise.</Notice>
           )}
 
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2">
             <Card title="Closed trades">
               <KV cols={2} items={[
                 ["Avg win", <span key="w" className="text-emerald-300">{inr(r.trades.avg_win)}</span>],
@@ -93,6 +94,24 @@ export default function ReportPage() {
               </div>
             </Card>
           </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Card title="Win rate by confidence" subtitle="Bars: share of trades won in each confidence band">
+              <BarChart height={150} zeroLine={false} format={(v) => `${v.toFixed(0)}%`}
+                bars={r.calibration.map((b) => ({ label: `${b.low}%`, v: b.trades ? (b.wins / b.trades) * 100 : 0, tone: "accent",
+                  hint: `${b.low}–${Math.min(b.high, 100)}% confidence · ${b.wins}/${b.trades} won` }))} />
+            </Card>
+            <Card title="Closed trades">
+              <Donut slices={[{ label: "Won", v: r.trades.wins, color: UP }, { label: "Lost", v: r.trades.closed - r.trades.wins, color: DOWN }]}
+                center={<div><div className="num text-lg font-bold text-white">{r.trades.closed ? Math.round((r.trades.wins / r.trades.closed) * 100) : 0}%</div><div className="text-[10px] text-gray-500">won</div></div>} />
+            </Card>
+          </div>
+          {Object.keys(r.calls.by_rating).length > 0 && (
+            <Card title="Average return by rating" subtitle="Settled AI calls (bars) — vs NIFTY in the table below">
+              <BarChart height={140} format={(v) => `${v.toFixed(2)}%`}
+                bars={Object.entries(r.calls.by_rating).sort().map(([k, s]) => ({ label: k.slice(0, 8), v: (s.avg_return ?? 0) * 100, hint: `${k}: ${s.settled} settled` }))} />
+            </Card>
+          )}
 
           <Card title="Calls by rating">
             {Object.keys(r.calls.by_rating).length === 0 ? <Empty>No AI calls in this period yet.</Empty> : (

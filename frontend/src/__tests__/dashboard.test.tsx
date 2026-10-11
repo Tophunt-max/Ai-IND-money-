@@ -5,6 +5,8 @@ vi.mock("@/lib/supabase", () => ({ accessToken: async () => "tok" }));
 vi.mock("@/components/AuthGate", () => ({ useAuth: () => ({ isAdmin: true, user: null }) }));
 
 import CandleChart from "@/components/CandleChart";
+import { BarChart, drawdowns, EquityChart } from "@/components/charts";
+import { chainStats } from "@/lib/options";
 import OfflineBanner from "@/components/OfflineBanner";
 import RiskCapacity from "@/components/RiskCapacity";
 import RLAgents, { rlTradingMode, type RLStatus } from "@/components/RLAgents";
@@ -165,5 +167,40 @@ describe("StrategyBuilder", () => {
     expect(screen.getByText("in use")).toBeTruthy();
     expect(screen.getByText("adaptive on")).toBeTruthy();
     expect(screen.getByText("training: my_mom")).toBeTruthy();
+  });
+});
+
+describe("charts", () => {
+  it("computes running drawdowns", () => {
+    const d = drawdowns([0, 100, 50, 150, 120], 1000);
+    expect(d.abs).toEqual([0, 0, -50, 0, -30]);
+    expect(d.max).toBe(-50);
+    expect(d.maxPct).toBeCloseTo(-50 / 1100);
+  });
+
+  it("draws one bar per value and an equity line with its drawdown pane", () => {
+    const { container } = render(<BarChart bars={[{ label: "a", v: 5 }, { label: "b", v: -3 }, { label: "c", v: 0 }]} />);
+    expect(container.querySelectorAll("rect[data-bar]")).toHaveLength(3);
+    cleanup();
+    render(<EquityChart points={[{ label: "d1", v: 0 }, { label: "d2", v: 100 }, { label: "d3", v: 40 }]} baseline={0} />);
+    expect(screen.getByLabelText("equity chart")).toBeTruthy();
+    expect(screen.getAllByText(/DD/).length).toBeGreaterThan(0);
+  });
+
+  it("zooms a long candle history to a readable window", () => {
+    const many = Array.from({ length: 400 }, (_, i) => ({ t: 1000 + i * 60, o: 100, h: 101, l: 99, c: 100.5, v: 1 }));
+    render(<CandleChart candles={many} />);
+    expect(screen.getByText(/\/400$/)).toBeTruthy();
+    expect(screen.getByLabelText("Zoom in")).toBeTruthy();
+  });
+});
+
+describe("option chain stats", () => {
+  it("gives the put-call ratio and the max-pain strike", () => {
+    const calls = [{ strike: 100, oi: 10 }, { strike: 110, oi: 50 }, { strike: 120, oi: 80 }];
+    const puts = [{ strike: 100, oi: 70 }, { strike: 110, oi: 40 }, { strike: 120, oi: 5 }];
+    const s = chainStats(calls, puts);
+    expect(s.pcr).toBeCloseTo(115 / 140);
+    expect(s.maxPain).toBe(110);
   });
 });
