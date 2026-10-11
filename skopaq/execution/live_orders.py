@@ -842,6 +842,7 @@ class LiveOrderWorker:
         self._deadlines = deadlines
         self._registry = registry
         self._journal = journal
+        self._cancel_journalled: set[str] = set()
         self._alerter = alerter
         self._sleep = sleep
         self._clock = clock
@@ -1212,6 +1213,9 @@ class LiveOrderWorker:
         run.uncertain = True             # until the broker answers, the order may exist
         run.placing, run.placing_wall = order, placed_wall
         run.placing_entry, run.placing_before = entry, before_ids
+        # Write-ahead: if this process dies before the answer is journalled, the next one
+        # sees an order that may exist (OrderJournal.entry_blockers) instead of nothing
+        self._journal_attempt("submitting", order, entry)
         try:
             response = await self._call(self._client.place_order, order)
         except OrderPlacementUncertain as exc:
@@ -1227,6 +1231,7 @@ class LiveOrderWorker:
         except BrokerError as exc:
             run.uncertain = False
             run.placed()
+            self._journal_attempt("not_placed", order, entry, note=str(exc)[:200])
             kind = classify_rejection(exc.status_code, str(exc), exc.kind)
             logger.warning("%s %s %s refused (%s): %s", order.side.value, order.quantity,
                            order.symbol, kind.value, exc)
@@ -1235,6 +1240,7 @@ class LiveOrderWorker:
         except Exception as exc:
             run.uncertain = False
             run.placed()
+            self._journal_attempt("not_placed", order, entry, note=str(exc)[:200])
             logger.error("%s %s %s failed: %s", order.side.value, order.quantity,
                          order.symbol, exc)
             return Placement(None, rejected=True, reject_kind=RejectKind.OTHER,
@@ -1501,6 +1507,9 @@ class LiveOrderWorker:
             await self._call(self._client.cancel_order,
                              CancelOrderRequest(order_id=order_id, segment=segment))
             logger.info("Cancel sent for order %s", order_id)
+            if order_id not in self._cancel_journalled:   # CANCEL_PENDING, once
+                self._cancel_journalled.add(order_id)
+                self._journal_event("cancel_sent", order_id)
             return "retry"
         except BrokerError as exc:
             text = str(exc).lower()
@@ -1877,6 +1886,17 @@ class LiveOrderWorker:
                dedup_s: float = 0.0) -> None:
         alerter = self._alerter if self._alerter is not None else get_alerter()
         alerter.alert(severity, key, text, order_ids=tuple(order_ids), dedup_s=dedup_s)
+
+    def _journal_attempt(self, event: str, order: OrderRequest, entry: bool, *,
+                         note: str = "") -> None:
+        """A placement attempt's line by internal id (no broker order id yet)."""
+        if self._journal is None:
+            return
+        self._journal.record(
+            event, internal_id=str(order.internal_id), symbol=order.symbol,
+            security_id=order.security_id, segment=order.segment.value,
+            side=order.side.value, qty=order.quantity,
+            purpose="entry" if entry else "exit", note=note)
 
     def _journal_event(self, event: str, order_id: str, *, conf: Optional[Confirmation] = None,
                        status: str = "", note: str = "",

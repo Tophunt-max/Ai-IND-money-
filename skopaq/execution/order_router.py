@@ -51,6 +51,7 @@ from skopaq.execution.live_orders import (
     recent_exit_qty,
     uncertain_sells,
 )
+from skopaq.execution.entry_gate import EntryGate, entry_blockers
 from skopaq.execution.order_alerts import get_alerter
 from skopaq.execution.order_journal import OrderJournal
 from skopaq.execution.sell_lock import OrderLock, SellLock, lock_dir_or_none
@@ -103,6 +104,9 @@ class OrderRouter:
         wall: Callable[[], datetime] = now_ist,
     ) -> None:
         self._mode = config.trading_mode
+        wait = getattr(config, "entry_lock_wait_seconds", 20.0)
+        self._entry_wait_s = (float(wait) if isinstance(wait, (int, float))
+                              and not isinstance(wait, bool) and 0 <= wait <= 600 else 20.0)
         self._paper = paper_engine
         self._live = live_client
         self._sleep = sleep
@@ -113,6 +117,22 @@ class OrderRouter:
         self._journal: Optional[OrderJournal] = None
         self._worker: Optional[LiveOrderWorker] = None
         self._lock_dir: Optional[Path] = None
+        self._startup_done = False
+        self._lease_client = None
+        self._lease_problem = ""
+        self._lease_key = ""
+        if self._mode == "live" and live_client is not None:
+            from skopaq.execution.lease import LeaseUnavailable, account_key, lease_client
+
+            try:
+                self._lease_client = lease_client(config)
+                self._lease_key = account_key(config, "entry")
+            except LeaseUnavailable as exc:
+                self._lease_problem = str(exc)
+            except Exception as exc:              # a broken client: fail closed
+                self._lease_problem = f"account lease client failed ({exc})"
+        self._startup_problem = ""
+        self.startup_report = None
         # Live only: a paper router never builds the worker, even with a live client (nor
         # resolves the journal and lock directories, which paper never uses)
         if self._mode == "live" and live_client is not None:
@@ -213,8 +233,14 @@ class OrderRouter:
         price, order ids) and never raises.
         """
         if self._live is None or self._worker is None:
-            logger.error("Live client not configured — falling back to paper")
-            return self._execute_paper(order, signal)
+            # Fail closed: a live-mode order is never filled on paper and reported as if
+            # it had traded (the MCP server and any caller without a broker client)
+            logger.error("Live mode without a live broker client: %s %s %s NOT placed",
+                         order.side.value, order.quantity, order.symbol)
+            return ExecutionResult(
+                success=False, signal=signal, mode="live", safety_passed=True,
+                rejection_reason="Live mode, but this process has no live broker client: "
+                                 "not placed (and not filled on paper)")
 
         try:
             await self._ensure_security_id(order)
@@ -303,6 +329,50 @@ class OrderRouter:
         )
         return SellInputs(positions=list(snap.positions), holdings=list(snap.holdings),
                           context=context)
+
+    def entry_gate(self) -> EntryGate:
+        """The account's entry gate (``skopaq.execution.entry_gate``): in-process always,
+        plus the cross-process flock when this router places live orders."""
+        live = self._worker is not None
+        lock_dir = self._lock_dir if live and self._locks_usable() else None
+        wait = self._entry_wait_s
+        if live:
+            wait = min(wait, max(0.0, self._deadlines.settle_by() - self._clock()))
+        lease = None
+        if live and self._lease_client is not None:
+            from skopaq.execution.lease import RedisLease
+
+            lease = RedisLease(self._lease_client, self._lease_key, ttl_s=max(60.0, wait * 6))
+        elif live and self._lease_problem:
+            lease = _BrokenLease(self._lease_problem)
+        return EntryGate(wait_s=wait, lock_dir=lock_dir, live=live, sleep=self._sleep,
+                         clock=self._clock, lease=lease)
+
+    async def ensure_startup_reconciled(self) -> None:
+        """Run the startup reconciliation once (live), before this process's first BUY
+        (``skopaq.execution.startup_reconcile``); a failure is retried on the next one."""
+        if self._worker is None or self._startup_done:
+            return
+        from skopaq.execution.startup_reconcile import reconcile_at_start
+
+        book = self._worker._book
+        book.invalidate()
+        report = await reconcile_at_start(book.rows, self._journal, set(self._registry.ids()),
+                                          get_alerter().alert)
+        self.startup_report = report
+        if report.ok:
+            self._startup_done, self._startup_problem = True, ""
+        else:
+            self._startup_problem = report.summary()
+
+    def entry_blockers(self) -> list[str]:
+        """Why a new BUY must wait for reconciliation (paper: never)."""
+        if self._worker is None:
+            return []
+        found = entry_blockers(self._registry, self._journal)
+        if self._startup_problem:
+            found.insert(0, self._startup_problem)
+        return found
 
     def sell_lock(self, order: OrderRequest) -> Optional[SellLock]:
         """The symbol's SELL lock, to hold from ``sell_inputs`` until ``execute`` returns.
@@ -440,3 +510,23 @@ class OrderRouter:
         if math.isinf(left):
             return await read
         return await asyncio.wait_for(read, max(_MIN_READ_AFTER_STOP_S, left))
+
+
+class _BrokenLease:
+    """Account leases are enabled but cannot work: every entry is refused."""
+
+    held = False
+
+    def __init__(self, problem: str) -> None:
+        self.problem = problem
+
+    async def acquire(self, wait_s: float = 0.0) -> bool:
+        from skopaq.execution.lease import LeaseUnavailable
+
+        raise LeaseUnavailable(self.problem)
+
+    async def holder(self):
+        return None
+
+    async def release(self) -> None:
+        return None

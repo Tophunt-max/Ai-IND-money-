@@ -87,6 +87,10 @@ class SkopaqTradingGraph:
         self._debug = debug
         self._memory_store = memory_store
         self._graph: Any = None  # Lazy-init upstream graph
+        # Swing qualification (set_signal_gate): None keeps the previous behaviour
+        self._signal_gate: Any = None
+        self._swing_candles: Optional[Callable[[str], Any]] = None
+        self._swing_params: dict = {}
 
     def _ensure_graph(self) -> Any:
         """Lazy-import and initialise the upstream TradingAgentsGraph."""
@@ -265,6 +269,12 @@ class SkopaqTradingGraph:
             logger.info("Signal is HOLD for %s — no execution", symbol)
             return result
 
+        if result.signal.action == "BUY" and self._signal_gate is not None:
+            refused = await self._qualify_swing(result.signal)
+            if refused is not None:
+                result.execution = refused
+                return result
+
         # Execute the signal through the full pipeline
         execution = await self._executor.execute_signal(
             result.signal,
@@ -280,6 +290,55 @@ class SkopaqTradingGraph:
             execution.success, execution.mode,
         )
         return result
+
+    def set_signal_gate(self, gate: Any, candles: Callable[[str], Any], *,
+                        notional_inr: float = 100_000.0, hard_stop_pct: float = 0.04,
+                        target_rr: float = 2.0) -> None:
+        """Qualify every swing BUY before the executor (``skopaq.strategy.gate``):
+        ``candles(symbol)`` is an async loader of daily candles. The LLM's levels are used
+        when it gave them; otherwise the exit planner's defaults (hard stop, target at
+        ``target_rr`` R). ``notional_inr`` sizes the charge estimate (sizing happens
+        later, in the executor)."""
+        self._signal_gate = gate
+        self._swing_candles = candles
+        self._swing_params = {"notional": notional_inr, "hard_stop": hard_stop_pct,
+                              "rr": target_rr}
+
+    async def _qualify_swing(self, signal: TradingSignal) -> Optional[ExecutionResult]:
+        """None when the BUY qualified (it goes on to the executor), else the refusal."""
+        p = self._swing_params
+        mode = getattr(getattr(self._executor, "_router", None), "mode", "paper")
+        try:
+            candles = list(await self._swing_candles(signal.symbol))
+        except Exception as exc:
+            logger.warning("Swing candles of %s unavailable: %s", signal.symbol, exc)
+            candles = []
+        now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        # Daily bars: only those complete at the decision (today's bar is still forming)
+        closed = [c for c in candles if c.start + timedelta(days=1) <= now]
+        entry = float(signal.entry_price or (closed[-1].close if closed else 0) or 0)
+        if entry <= 0:
+            return ExecutionResult(success=False, signal=signal, mode=mode,
+                                   safety_passed=False,
+                                   rejection_reason="Not qualified: no price for the entry")
+        stop = float(signal.stop_loss) if signal.stop_loss and 0 < signal.stop_loss < entry             else round(entry * (1 - p["hard_stop"]), 2)
+        target = float(signal.target) if signal.target and signal.target > entry             else round(entry + p["rr"] * (entry - stop), 2)
+        qty = max(1, int(p["notional"] // entry))
+        candidate, decision = self._signal_gate.decide(
+            strategy_id="swing.llm", symbol=signal.symbol, product="equity_delivery",
+            direction=1, decided_at=now, timeframe_s=86400, entry=entry, stop=stop,
+            target=target, qty=qty, reason=(signal.reasoning or "")[:300], candles=closed,
+            stale_after_s=4 * 86400, extra={"llm_confidence": signal.confidence})
+        if not decision.qualified:
+            logger.info("Swing BUY %s %s — %s", signal.symbol, decision.status,
+                        "; ".join(decision.reasons))
+            return ExecutionResult(success=False, signal=signal, mode=mode,
+                                   safety_passed=False,
+                                   rejection_reason="Not qualified: "
+                                                    + "; ".join(decision.reasons))
+        signal.agent_state = {**(signal.agent_state or {}),
+                              "signal_id": candidate.signal_id}
+        return None
 
     def reflect(
         self,

@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import time, timedelta
 from typing import Any
 
-from skopaq.scalping.strategies import STRATEGY_NAMES, StrategyParams
+from skopaq.scalping.strategies import RL_STRATEGY, STRATEGY_NAMES, StrategyParams
+from skopaq.strategy.signal import QualifyRules
 
 DEFAULT_SYMBOLS = ("RELIANCE,HDFCBANK,ICICIBANK,INFY,TCS,SBIN,AXISBANK,KOTAKBANK,LT,"
                    "BHARTIARTL")
@@ -53,13 +54,41 @@ class ScalpSettings:
     tick_max_age_s: float
     rest_poll_s: float
     params: StrategyParams
+    # Qualification before the risk gateway (skopaq/strategy/signal.py)
+    qualify: bool = True
+    qualify_rules: QualifyRules = QualifyRules(require_reliable_regime=False)
+    htf_seconds: int = 300
 
     @classmethod
     def from_config(cls, config: Any) -> "ScalpSettings":
+        """The ``scalp_*`` settings, then the admin-approved hyperopt parameters, if any
+        (``skopaq.adaptive.hyperopt.ParamsStore``; risk limits are never among them)."""
+        settings = cls._from_config(config)
+        model_dir = getattr(config, "model_dir", None)
+        if isinstance(model_dir, str) and model_dir:
+            try:
+                import os
+
+                from skopaq.adaptive.hyperopt import ParamsStore, apply_params
+
+                approved = ParamsStore(os.environ.get("SKOPAQ_MODEL_DIR", "").strip()
+                                       or model_dir).params()
+                if approved:
+                    settings = apply_params(settings, approved)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Approved strategy parameters not applied", exc_info=True)
+        return settings
+
+    @classmethod
+    def _from_config(cls, config: Any) -> "ScalpSettings":
         g = lambda name, default=None: getattr(config, name, default)  # noqa: E731
+        known = STRATEGY_NAMES + (RL_STRATEGY,)
         strategies = tuple(s.lower() for s in _list(g("scalp_strategies"),
                                                      ",".join(STRATEGY_NAMES))
-                           if s.lower() in STRATEGY_NAMES) or STRATEGY_NAMES
+                           if s.lower() in known) or STRATEGY_NAMES
         entry_start = _hhmm(g("scalp_entry_start"), time(9, 30))
         entry_end = _hhmm(g("scalp_entry_end"), time(14, 45))
         flatten_at = _hhmm(g("scalp_flatten_at"), time(15, 10))
@@ -84,4 +113,14 @@ class ScalpSettings:
                 rr=_num(g("scalp_rr"), 1.5, 0.5, 10),
                 orb_minutes=int(_num(g("scalp_orb_minutes"), 15, 5, 120)),
             ),
+            qualify=g("scalp_qualification_enabled", True) is not False,
+            qualify_rules=QualifyRules(
+                min_net_rr=_num(g("scalp_min_net_rr"), 1.0, 0.1, 10),
+                slippage_pct=_num(g("scalp_slippage_pct"), 0.0002, 0.0, 0.01),
+                require_reliable_regime=g("scalp_require_regime", False) is True,
+                require_htf_confirmation=g("scalp_require_htf", False) is True,
+                max_spread_pct=_num(g("scalp_max_spread_pct"), 0.003, 0.0001, 0.05),
+                max_participation=_num(g("scalp_max_participation"), 0.10, 0.001, 1.0),
+            ),
+            htf_seconds=int(_num(g("scalp_htf_seconds"), 300, 60, 3600)),
         )

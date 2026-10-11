@@ -24,6 +24,12 @@ from skopaq.chat.session import ChatSession
 
 logger = logging.getLogger(__name__)
 
+# Tools that place orders. Over HTTP nobody confirms a tool call, so in live mode these
+# are refused (the Telegram bot asks for /confirm; the dashboard has its own order form
+# with the live confirmation). Paper mode runs them as before.
+PRIVILEGED_TOOLS = frozenset({"trade_stock"})
+_MAX_SESSIONS = 200
+
 # The endpoints run tools (including trade_stock): SKOPAQ_API_TOKEN, when set, guards them.
 router = APIRouter(
     prefix="/api/chat", tags=["chat"], dependencies=[Depends(require_api_token)],
@@ -96,15 +102,29 @@ async def send_message(body: ChatMessageRequest) -> ChatMessageResponse:
             config=config,
         )
 
-        # Auto-resume loop: if the agent interrupted before a tool call,
-        # resume it (approve the tool) until it finishes.
+        # Auto-resume loop: if the agent interrupted before a tool call, resume it
+        # (approve the tool) until it finishes — except an order-placing tool in live
+        # mode, which nobody here can confirm: the turn ends with a refusal instead.
         max_resumes = 10  # Safety limit
+        refused = ""
         for _ in range(max_resumes):
             state = agent.get_state(config)
             if not state.next:
                 break  # Agent finished
+            blocked = _blocked_tools(state)
+            if blocked:
+                refused = (f"Not run: {', '.join(blocked)} places orders, and live orders "
+                           "cannot be approved over the chat API. Use the dashboard's "
+                           "order form or the Telegram bot (/confirm).")
+                logger.warning("Chat bridge: refused %s in live mode", blocked)
+                break
             # Resume from interrupt (auto-approve tool call)
             result = await agent.ainvoke(None, config=config)
+        if refused:
+            session.add_ai_message(refused)
+            return ChatMessageResponse(message=refused, session_id=session.id,
+                                       tool_calls=[{"tool": t, "result": "refused"}
+                                                   for t in _blocked_tools(state)])
 
         # Extract final AI message and tool calls
         messages = result.get("messages", [])
@@ -130,9 +150,9 @@ async def send_message(body: ChatMessageRequest) -> ChatMessageResponse:
             tool_calls=tool_calls,
         )
 
-    except Exception as exc:
+    except Exception:
         logger.exception("Chat message handler failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Chat failed: see the server log")
 
 
 @router.post("/tool", response_model=ToolCallResponse)
@@ -160,11 +180,12 @@ async def call_tool(body: ToolCallRequest) -> ToolCallResponse:
                 break
 
         if tool_fn is None:
+            raise HTTPException(status_code=400, detail=f"Unknown tool: {body.tool[:60]}")
+        if body.tool in PRIVILEGED_TOOLS and _live_mode():
             raise HTTPException(
-                status_code=400,
-                detail=f"Unknown tool: {body.tool}. "
-                f"Available: {[t.name for t in tools]}",
-            )
+                status_code=403,
+                detail=f"{body.tool} places orders: not available over the chat API in "
+                       "live mode")
 
         result = await tool_fn.ainvoke(body.args)
         return ToolCallResponse(
@@ -175,12 +196,31 @@ async def call_tool(body: ToolCallRequest) -> ToolCallResponse:
 
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Tool call handler failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Tool call failed: see the server log")
 
 
 # ── Session Management ───────────────────────────────────────────────────────
+
+
+def _live_mode() -> bool:
+    from skopaq.config import SkopaqConfig
+
+    return SkopaqConfig().trading_mode == "live"
+
+
+def _blocked_tools(state: Any) -> list[str]:
+    """Order-placing tool calls the agent is waiting to run, when the mode is live."""
+    try:
+        messages = (state.values or {}).get("messages") or []
+        calls = (getattr(messages[-1], "tool_calls", None) or []) if messages else []
+        names = [c.get("name") if isinstance(c, dict) else getattr(c, "name", "")
+                 for c in calls]
+    except Exception:
+        names = []
+    hits = [n for n in names if n in PRIVILEGED_TOOLS]
+    return hits if hits and _live_mode() else []
 
 
 def _get_or_create_session(session_id: str) -> ChatSession:
@@ -192,6 +232,13 @@ def _get_or_create_session(session_id: str) -> ChatSession:
     """
     if session_id and session_id in _sessions:
         return _sessions[session_id]
+    if session_id and (len(session_id) > 64 or not session_id.replace("-", "").replace(
+            "_", "").isalnum()):
+        raise HTTPException(status_code=422, detail="session_id: up to 64 letters, digits, "
+                                                    "'-' or '_'")
+    if len(_sessions) >= _MAX_SESSIONS:
+        oldest = min(_sessions, key=lambda k: _sessions[k].created_at)
+        del _sessions[oldest]
 
     from skopaq.config import SkopaqConfig
 

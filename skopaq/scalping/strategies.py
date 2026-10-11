@@ -29,6 +29,10 @@ from skopaq.market.candles import Candle
 
 SESSION_OPEN = time(9, 15)
 STRATEGY_NAMES = ("vwap_pullback", "ema_rsi", "orb", "range_reversal")
+# The RL policy (skopaq/adaptive/rl_live.py): opt in with SKOPAQ_SCALP_STRATEGIES. It is
+# not a pure function of the candles — the live engine asks the loaded policy, and the
+# rule backtest has none (``evaluate`` skips it).
+RL_STRATEGY = "rl_policy"
 
 
 @dataclass(frozen=True)

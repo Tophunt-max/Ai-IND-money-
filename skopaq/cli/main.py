@@ -480,6 +480,483 @@ def scalp_backtest(
                       f"{t.entry:>9.2f} → {t.exit:>9.2f}  ₹{t.pnl:>9.2f}  {t.reason}")
 
 
+@app.command("learn-train")
+def learn_train(
+    symbols: str = typer.Option("", help="Comma-separated NSE symbols to backtest for "
+                                         "training data (INDstocks 1-minute candles)."),
+    days: int = typer.Option(20, help="Trading days of candles per symbol."),
+    journal: bool = typer.Option(False, help="Also use the paper/live signal journal's "
+                                             "outcomes."),
+    slippage_pct: float = typer.Option(0.0002, help="Adverse slippage per side assumed."),
+    min_examples: int = typer.Option(200, help="Refuse to train on fewer labelled rows."),
+    model: str = typer.Option("logistic", help="logistic (NumPy) or lightgbm (pip install "
+                                               "skopaqtrader[ml])."),
+    regimes: bool = typer.Option(False, help="Also build a candidate regime → strategy map "
+                                             "from the held-out trades (approve it on the "
+                                             "dashboard)."),
+) -> None:
+    """Train a candidate model on point-in-time features (no orders).
+
+    Chronological train/validation/test split, the threshold chosen on validation, the
+    report on the unseen test period; the candidate is registered and gated. Passing the
+    gates only makes it a *shadow* model: promotion needs the shadow period and an admin
+    (dashboard → Learning)."""
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.dataset import from_backtest, from_journal
+    from skopaq.learning.pipeline import InsufficientData, train_candidate
+    from skopaq.learning.registry import ModelRegistry, model_dir
+    from skopaq.scalping.settings import ScalpSettings
+    from skopaq.strategy.journal import SignalJournal
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    settings = ScalpSettings.from_config(config)
+    examples, leakage = [], []
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if names:
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.token_manager import TokenManager
+        from skopaq.scalping.backtest import fetch_days
+
+        async def load(sym):
+            async with INDstocksClient(config, TokenManager()) as client:
+                return await fetch_days(client, sym, days)
+
+        for sym in names:
+            candles = asyncio.run(load(sym))
+            rep = from_backtest(sym, candles, settings, slippage_pct=slippage_pct)
+            examples += rep.examples
+            leakage += rep.leakage
+            console.print(f"  {sym}: {len(candles)} day(s), {len(rep.examples)} trade rows")
+    if journal:
+        rep = from_journal(SignalJournal.from_config(config).signals())
+        examples += rep.examples
+        leakage += rep.leakage
+        console.print(f"  journal: {len(rep.labelled)} labelled, {rep.unlabelled} without an "
+                      f"outcome, {rep.rejected_signals} rejected signals")
+    if not examples:
+        console.print("No data: pass --symbols and/or --journal")
+        raise typer.Exit(1)
+    registry = ModelRegistry(model_dir(config))
+    from skopaq.db.mirror import mirror_from_config
+
+    registry.mirror = mirror_from_config(config)
+    try:
+        entry = train_candidate(examples, strategy_id="scalp.gate", registry=registry,
+                                min_examples=min_examples, leakage=leakage, model_kind=model)
+    except InsufficientData as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    rep = entry["report"]
+    console.print(f"Candidate {entry['version']} — state {entry['state']}")
+    console.print(f"  test samples {rep['samples']}, threshold {rep['threshold']}")
+    console.print(f"  baseline (every setup): {rep['baseline']}")
+    console.print(f"  model gate:             {rep.get('model')}")
+    console.print(f"  Brier {rep.get('brier')} vs base rate {rep.get('brier_base_rate')}")
+    for fail in entry.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+    if regimes:
+        from skopaq.learning.dataset import chronological_split
+        from skopaq.strategy.selector import RegimeMapStore, build_regime_map
+
+        _, _, test = chronological_split(examples)       # held-out trades only
+        regime_map = build_regime_map(test)
+        RegimeMapStore(model_dir(config)).save_candidate(
+            regime_map, dataset={"test_trades": len(test)})
+        for regime, rows in regime_map["regimes"].items():
+            ok = [s for s, r in rows.items() if r["allowed"]]
+            console.print(f"  regime {regime:<14} validated: {', '.join(ok) or 'none (idle)'}")
+        console.print("  Candidate regime map saved: approve it on the dashboard to use it")
+
+
+def _fetch_history(config, symbols: list[str], days: int) -> dict:
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.scalping.backtest import fetch_days
+
+    async def load():
+        out = {}
+        async with INDstocksClient(config, TokenManager()) as client:
+            for sym in symbols:
+                out[sym] = await fetch_days(client, sym, days)
+        return out
+
+    return asyncio.run(load())
+
+
+@app.command("adaptive-train")
+def adaptive_train(
+    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_ADAPTIVE_SYMBOLS, else "
+                                         "the scalp symbols)."),
+    strategy: str = typer.Option("", help="Your strategy: a saved no-code strategy's name, "
+                                          "spec.json, or path/to/file.py:ClassName (default: "
+                                          "the dashboard's selection / .env / built-in)."),
+    correlated: str = typer.Option("", help="Correlated symbols whose features are added."),
+    days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_ADAPTIVE_DAYS)."),
+    model: str = typer.Option("", help="lightgbm | xgboost | xgboost_rf | catboost | "
+                                       "random_forest | extra_trees | linear | mlp | "
+                                       "ft_transformer."),
+    scaler: str = typer.Option("", help="minmax | standard | robust | none."),
+    pca: Optional[bool] = typer.Option(None, "--pca/--no-pca", help="PCA (99.9 % variance)."),
+    svm: Optional[bool] = typer.Option(None, "--svm/--no-svm", help="One-class SVM outliers."),
+    dbscan: Optional[bool] = typer.Option(None, "--dbscan/--no-dbscan",
+                                          help="DBSCAN outliers."),
+    di: Optional[float] = typer.Option(None, help="Dissimilarity Index threshold (0 = off)."),
+    noise: Optional[float] = typer.Option(None, help="Training noise std (0 = off)."),
+    weight_factor: Optional[float] = typer.Option(None, help="Recent-row weighting "
+                                                             "(0 = off, e.g. 0.9)."),
+    continual: Optional[bool] = typer.Option(None, "--continual/--fresh",
+                                             help="Continue the previous model (default "
+                                                  "SKOPAQ_ADAPTIVE_CONTINUAL_LEARNING)."),
+) -> None:
+    """Train your adaptive strategy (no orders): look-ahead check, data pipeline, model per
+    target, rolling retrain backtest; saved as a verified bundle, registered as a
+    candidate and gated (passing = shadow; promotion stays an admin's decision)."""
+    from dataclasses import replace
+
+    from skopaq.adaptive.framework import config_with, train_bundle
+    from skopaq.adaptive.retrain import (
+        purge_bundles,
+        strategy_from,
+        symbols_from,
+        train_config_from,
+    )
+    from skopaq.adaptive.strategy import LookAheadError, load_strategy
+    from skopaq.config import SkopaqConfig
+    from skopaq.db.mirror import mirror_from_config
+    from skopaq.learning.registry import ModelRegistry, model_dir
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    from skopaq.adaptive.spec import SpecError, SpecStrategy, StrategyStore
+
+    try:
+        if strategy and ":" not in strategy and not strategy.endswith(".json"):
+            saved = StrategyStore(model_dir(config)).get(strategy)
+            if saved is None:
+                raise SpecError(f"no saved strategy {strategy!r}")
+            strat = SpecStrategy(saved["spec"])
+        else:
+            strat = load_strategy(strategy) if strategy else strategy_from(config)
+    except (SpecError, OSError, ValueError) as exc:
+        console.print(f"[red]Strategy not loaded:[/red] {exc}")
+        raise typer.Exit(2)
+    if correlated:
+        strat.correlated = tuple(x.strip().upper() for x in correlated.split(",") if x.strip())
+    cfg = config_with(train_config_from(config), scaler=scaler or None, pca=pca, svm=svm,
+                      dbscan=dbscan, di_threshold=di, noise_std=noise)
+    if model:
+        cfg = replace(cfg, model_kind=model)
+    if weight_factor is not None:
+        cfg = replace(cfg, weight_factor=weight_factor)
+    if continual is not None:
+        cfg = replace(cfg, continual=continual)
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
+    n_days = days or int(config.adaptive_days)
+    hist = _fetch_history(config, names, n_days)
+    corr = _fetch_history(config, list(strat.correlated), n_days) if strat.correlated else {}
+    registry = ModelRegistry(model_dir(config))
+    registry.mirror = mirror_from_config(config)
+    try:
+        entry = train_bundle(strat, hist, cfg, correlated=corr, registry=registry)
+    except LookAheadError as exc:
+        console.print(f"[red]Refused: {exc}[/red]")
+        raise typer.Exit(2)
+    except (ValueError, ImportError) as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    purge_bundles(registry, int(config.adaptive_keep_models))
+    rep = entry["report"]
+    console.print(f"Candidate {entry['version']} ({cfg.model_kind}, strategy {strat.name}, "
+                  f"{rep.get('features')} features, targets {rep.get('targets')}) — "
+                  f"state {entry['state']}")
+    console.print(f"  pipeline: {rep.get('pipeline')}")
+    console.print(f"  entry rule: {rep.get('rule')}")
+    console.print(f"  test: every row {rep['baseline']}")
+    console.print(f"        model     {rep.get('model')}")
+    console.print(f"        model, no outliers {rep.get('model_di')} ({rep.get('outliers')})")
+    roll = rep.get("rolling") or {}
+    console.print(f"  rolling retrain: {roll.get('retrains', 0)}×; every row "
+                  f"{roll.get('baseline', {}).get('net')}, model {roll.get('model', {}).get('net')}")
+    console.print(f"  top features: {[n for n, _ in rep.get('importance', [])[:5]]}")
+    cont = rep.get("continual") or {}
+    if cont.get("enabled"):
+        how = (f"continued from {cont['parent']} {cont.get('models', '')}"
+               if cont.get("parent") else f"fresh — {cont.get('fresh')}")
+        console.print(f"  continual: {how}")
+    for fail in entry.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
+@app.command("model-export")
+def model_export(version: str = typer.Argument(..., help="Registry version."),
+                 file: str = typer.Argument(..., help="Target .tar.gz.")) -> None:
+    """Export a verified model bundle (to move it to another host)."""
+    from pathlib import Path
+
+    from skopaq.adaptive import artifacts
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import ModelRegistry, model_dir
+
+    reg = ModelRegistry(model_dir(SkopaqConfig()))
+    entry = reg.get(version)
+    bundle = (entry or {}).get("model", {}).get("bundle")
+    if not bundle:
+        console.print("Not a bundle model")
+        raise typer.Exit(1)
+    artifacts.export_bundle(Path(reg.dir) / "artifacts" / bundle, Path(file))
+    (Path(file).with_suffix(".entry.json")).write_text(__import__("json").dumps(entry, indent=1))
+    console.print(f"Exported {bundle} → {file} (+ registry entry)")
+
+
+@app.command("model-import")
+def model_import(file: str = typer.Argument(..., help="A bundle .tar.gz from model-export.")
+                 ) -> None:
+    """Import a bundle as a new *candidate* (it is gated again here, never champion)."""
+    import json
+    from pathlib import Path
+
+    from skopaq.adaptive import artifacts
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import ModelRegistry, model_dir
+
+    reg = ModelRegistry(model_dir(SkopaqConfig()))
+    dest = artifacts.import_bundle(Path(file), Path(reg.dir) / "artifacts")
+    manifest = artifacts.verify(dest)
+    report = json.loads((dest / "report.json").read_text())
+    entry = reg.register(
+        model={"kind": "adaptive-bundle-v1", "bundle": dest.name, "path": str(dest),
+               "manifest_sha": manifest["files"]["bundle.json"]["sha256"]},
+        report=report, params={}, dataset=manifest.get("dataset") or {},
+        strategy_id="adaptive.imported", notes=f"imported from {Path(file).name}")
+    fails = reg.evaluate_candidate(entry["version"])
+    console.print(f"Imported {dest.name} as {entry['version']}; gates: {fails or 'passed'}")
+
+
+@app.command("model-verify")
+def model_verify() -> None:
+    """Check every stored bundle against its manifest (exit 1 on a mismatch)."""
+    from pathlib import Path
+
+    from skopaq.adaptive import artifacts
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    root = Path(model_dir(SkopaqConfig())) / "artifacts"
+    bad = 0
+    for d in sorted(root.glob("*")) if root.is_dir() else []:
+        try:
+            m = artifacts.verify(d)
+            console.print(f"  ok   {d.name} ({len(m['files'])} files)")
+        except artifacts.IntegrityError as exc:
+            bad += 1
+            console.print(f"  [red]FAIL[/red] {exc}")
+    if bad:
+        raise typer.Exit(1)
+
+
+@app.command("hyperopt")
+def hyperopt_cmd(
+    symbols: str = typer.Option("", help="Symbols (default the scalp symbols)."),
+    days: int = typer.Option(30, help="Days of 1-minute history."),
+    trials: int = typer.Option(60, help="Optuna trials."),
+) -> None:
+    """Search the scalper's strategy parameters (Optuna) on 70 % of the days, prove them on
+    the other 30 %; saves a candidate an admin approves on the dashboard (no orders)."""
+    from skopaq.adaptive.hyperopt import ParamsStore, hyperopt
+    from skopaq.adaptive.retrain import symbols_from
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+    from skopaq.scalping.settings import ScalpSettings
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
+    res = hyperopt(_fetch_history(config, names, days), ScalpSettings.from_config(config),
+                   trials=trials)
+    entry = ParamsStore(model_dir(config)).save_candidate(res)
+    console.print(f"Candidate {entry['version']}: {res['best_params']}")
+    console.print(f"  holdout: current {res['holdout_current']} vs best {res['holdout_best']}")
+    console.print("  better on the holdout: approve it on the dashboard" if
+                  res["better_on_holdout"] else "  [yellow]not better on the holdout: "
+                  "it cannot be approved[/yellow]")
+
+
+@app.command("rl-research")
+def rl_research(
+    symbol: str = typer.Argument(..., help="NSE symbol."),
+    days: int = typer.Option(30, help="Days of 1-minute history."),
+    epochs: int = typer.Option(5, help="Training passes over the training days."),
+) -> None:
+    """Offline reinforcement-learning research (tabular Q-learning, net of charges). Never
+    trades: a result here is a hypothesis for a rule strategy, not a strategy."""
+    from skopaq.adaptive.rl import research_run
+    from skopaq.config import SkopaqConfig
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    hist = _fetch_history(config, [symbol.upper()], days)
+    console.print(research_run(hist[symbol.upper()], epochs=epochs))
+
+
+@app.command("rl-train")
+def rl_train(
+    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_RL_SYMBOLS, else the "
+                                         "adaptive / scalp symbols)."),
+    algo: str = typer.Option("", help="ppo | a2c | dqn (default SKOPAQ_RL_ALGO)."),
+    days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_RL_DAYS)."),
+    timesteps: int = typer.Option(0, help="Training steps (default SKOPAQ_RL_TIMESTEPS)."),
+    seed: int = typer.Option(7, help="Random seed (reproducible runs)."),
+    continual: Optional[bool] = typer.Option(None, "--continual/--fresh",
+                                             help="Continue the previous policy (default "
+                                                  "SKOPAQ_RL_CONTINUAL_LEARNING)."),
+) -> None:
+    """Train a PPO / A2C / DQN trading policy in the scalper's own rules (net of charges),
+    test it on later unseen days and register it as an RL candidate. Passing the gates
+    makes it the shadow policy (paper trading only); live needs an admin's promotion."""
+    from skopaq.adaptive.rl_agents import (
+        ALGOS,
+        config_from,
+        rl_registry,
+        symbols_from,
+        torch_available,
+        train_and_register,
+    )
+    from skopaq.config import SkopaqConfig
+    from skopaq.db.mirror import mirror_from_config
+    from skopaq.learning.registry import model_dir
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    if not torch_available():
+        console.print("RL agents need PyTorch: pip install 'skopaq[torch]'")
+        raise typer.Exit(2)
+    cfg = config_from(config, algo=algo or None, timesteps=timesteps or None, seed=seed,
+                      continual=continual)
+    if cfg.algo not in ALGOS:
+        console.print(f"Unknown algorithm {cfg.algo!r}: one of {', '.join(ALGOS)}")
+        raise typer.Exit(2)
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
+    hist = _fetch_history(config, names, days or int(config.rl_days))
+    registry = rl_registry(model_dir(config))
+    registry.mirror = mirror_from_config(config)
+    try:
+        out = train_and_register(hist, cfg, registry=registry)
+    except ValueError as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    rep = out["report"]
+    console.print(f"RL {cfg.algo.upper()} {out['version']} — state {out['state']} "
+                  f"({rep['train_sessions']} training / {rep['test_sessions']} test sessions, "
+                  f"{rep['seconds']} s)")
+    console.print(f"  test (unseen days): {rep['model']}")
+    console.print(f"  baseline ({rep['baseline_name']}): {rep['baseline']}")
+    console.print(f"  exits {rep['exits']}  actions {rep['actions']}")
+    cont = rep.get("continual") or {}
+    if cont.get("enabled"):
+        console.print("  continual: " + (f"continued from {cont['parent']}" if cont.get("parent")
+                                         else f"fresh — {cont.get('fresh')}"))
+    for fail in out.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
+@app.command("rl-status")
+def rl_status() -> None:
+    """The RL registry: champion, shadow and recent policies."""
+    from skopaq.adaptive.rl_agents import rl_registry
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    config = SkopaqConfig()
+    reg = rl_registry(model_dir(config))
+    champ, shadow = reg.champion(), reg.shadow()
+    console.print(f"enabled={config.rl_enabled} allow_live={config.rl_allow_live} "
+                  f"paper_use_shadow={config.rl_paper_use_shadow}")
+    console.print(f"champion: {champ['version'] if champ else None}")
+    console.print(f"shadow:   {shadow['version'] if shadow else None}")
+    for v in reg.versions()[-10:]:
+        m = (v.get("report") or {}).get("model") or {}
+        console.print(f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
+                      f"{m.get('trades')} PF {m.get('profit_factor')}")
+
+
+@app.command("rl-promote")
+def rl_promote(
+    version: str = typer.Argument(..., help="The shadow policy's version."),
+    approved_by: str = typer.Option(..., "--by", help="Your name (recorded)."),
+    reason: str = typer.Option(..., help="Why (recorded)."),
+) -> None:
+    """Shadow → champion after the shadow days (the only way an RL policy can trade live)."""
+    from skopaq.adaptive.rl_agents import RL_GATES, rl_registry
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    reg = rl_registry(model_dir(SkopaqConfig()))
+    try:
+        reg.promote(version, approved_by=approved_by, reason=reason, gates=RL_GATES)
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]Not promoted:[/red] {exc}")
+        raise typer.Exit(2)
+    console.print(f"{version} is the RL champion (previous one kept for rollback)")
+
+
+@app.command("rl-rollback")
+def rl_rollback(
+    by: str = typer.Option(..., help="Your name (recorded)."),
+    reason: str = typer.Option(..., help="Why (recorded)."),
+) -> None:
+    """Make the previous RL champion the champion again (none: no RL champion)."""
+    from skopaq.adaptive.rl_agents import rl_registry
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    prev = rl_registry(model_dir(SkopaqConfig())).rollback(by=by, reason=reason)
+    console.print(f"RL champion is now {prev}")
+
+
+@app.command("charges-reconcile")
+def charges_reconcile(
+    file: str = typer.Argument(..., help="The broker's contract-note CSV export."),
+    days: int = typer.Option(7, help="Days of the signal journal to compare against."),
+    tolerance: float = typer.Option(1.0, help="₹ difference that counts as a discrepancy."),
+) -> None:
+    """Compare the broker's contract-note charges with Skopaq's estimates (no orders)."""
+    from datetime import date, timedelta
+    from pathlib import Path
+
+    from skopaq.config import SkopaqConfig
+    from skopaq.finance.reconcile import (
+        estimates_from_signals,
+        parse_contract_note_csv,
+        reconcile,
+        save_report,
+    )
+    from skopaq.strategy.journal import SignalJournal
+
+    config = SkopaqConfig()
+    try:
+        notes = parse_contract_note_csv(Path(file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        console.print(f"Contract note not read: {exc}")
+        raise typer.Exit(1)
+    today = date.today()
+    signals = SignalJournal.from_config(config).signals(
+        sorted(today - timedelta(days=i) for i in range(days)))
+    rep = reconcile(notes, estimates_from_signals(signals), tolerance=tolerance)
+    d = rep.as_dict()
+    console.print(f"{len(notes)} contract-note row(s): broker ₹{d['broker_total']:,.2f}, "
+                  f"estimated ₹{d['estimated_total']:,.2f}, difference ₹{d['difference']:+,.2f}")
+    for line in d["discrepancies"]:
+        console.print(f"  [yellow]{line}[/yellow]")
+    for key in d["unmatched_broker"]:
+        console.print(f"  broker only: {key}")
+    for key in d["unmatched_estimates"]:
+        console.print(f"  estimate only: {key}")
+    console.print(f"Saved {save_report(rep, by='cli')}")
+    if d["discrepancies"]:
+        raise typer.Exit(3)
+
+
 @app.command("report")
 def report(
     days: int = typer.Option(90, help="How many days back to include."),

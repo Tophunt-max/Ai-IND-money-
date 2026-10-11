@@ -162,7 +162,7 @@ async def test_a_partial_live_sell_counts_only_the_filled_shares(notify, alerts)
     result = await live.run(_limit_sell(5, 95.0))   # a LIMIT SELL: one order, rest cancelled
 
     assert result.success and result.filled_quantity == 3 and result.outcome == "partial"
-    assert live.safety._day_pnl == pytest.approx((95 - 100) * 3)
+    assert live.safety._day_pnl == pytest.approx(_net(100, 95, 3))
     [sent] = notify.await_args_list
     assert sent.args[:5] == ("SELL", "TCS", 95.0, 3, "PARTIAL")
     assert sent.kwargs == {"pnl": 0, "order_id": "EQ-1",
@@ -254,7 +254,7 @@ async def test_a_filled_live_sell_notifies_the_broker_fill(notify, alerts):
     [sent] = notify.await_args_list
     assert sent.args[:5] == ("SELL", "TCS", 95.0, 5, "FILLED")
     assert sent.kwargs["order_id"] == "EQ-1"
-    assert live.safety._day_pnl == pytest.approx(-25.0)
+    assert live.safety._day_pnl == pytest.approx(_net(100, 95, 5))
     assert alerts.alerts == []
 
 
@@ -339,3 +339,10 @@ async def test_unreadable_holdings_do_not_matter_when_positions_cover_the_sell(n
     result = await live.run(_exit(5))
 
     assert result.success and result.filled_quantity == 5
+
+
+def _net(entry: float, exit_price: float, qty: float, product: str = "equity_delivery") -> float:
+    """The P&L the loss limits record: gross minus the round trip's estimated charges."""
+    from skopaq.finance.charges import round_trip
+
+    return (exit_price - entry) * qty - round_trip(product, entry, exit_price, qty).total

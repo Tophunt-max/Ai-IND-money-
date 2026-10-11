@@ -34,7 +34,9 @@ def test_kite_routes_are_gone(client):
         assert getattr(client, method)(path).status_code == 404, path
 
 
-def test_chat_tool_endpoint_is_open_without_a_configured_token(client, monkeypatch):
+def test_chat_endpoints_are_refused_without_a_configured_token(client, monkeypatch):
+    """Fail closed: the chat endpoints run tools (trade_stock), so with no
+    SKOPAQ_API_TOKEN they are disabled (they used to be open)."""
     _token(monkeypatch, "")
 
     def teapot(_session_id):
@@ -42,7 +44,9 @@ def test_chat_tool_endpoint_is_open_without_a_configured_token(client, monkeypat
 
     monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", teapot)
     body = {"tool": "get_quote", "args": {"symbol": "TCS"}}
-    assert client.post("/api/chat/tool", json=body).status_code == 418
+    response = client.post("/api/chat/tool", json=body)
+    assert response.status_code == 503
+    assert client.post("/api/chat/message", json={"message": "hi"}).status_code == 503
 
 
 @pytest.mark.parametrize(

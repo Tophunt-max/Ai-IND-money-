@@ -4,7 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3, Brain, CalendarClock, FlaskConical, Gauge, Grid2x2, Layers, LayoutDashboard,
   LineChart, ListChecks, LogOut, MessagesSquare, PlugZap, Radar, ScrollText, Settings,
-  SlidersHorizontal, Sparkles, Wallet, X,
+  Signal, SlidersHorizontal, Sparkles, Wallet, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -13,6 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useApi } from "@/lib/hooks";
 
 import { useAuth } from "./AuthGate";
+import OfflineBanner from "./OfflineBanner";
 import { useModeChanged } from "./ModeSwitch";
 import { Badge, cx } from "./ui";
 
@@ -38,6 +39,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
       { href: "/control", label: "Control", icon: Gauge },
       { href: "/analyze", label: "Analyze", icon: Brain },
       { href: "/scanner", label: "Scanner", icon: Radar },
+      { href: "/signals", label: "Signals & risk", icon: Signal },
       { href: "/options", label: "Options", icon: Layers },
       { href: "/trades", label: "Trades", icon: ScrollText },
     ],
@@ -196,6 +198,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       </header>
 
       <main className="lg:pl-64">
+        <OfflineBanner />
         <div className="mx-auto max-w-6xl px-4 py-6 pb-28 md:px-8 md:py-8 lg:pb-12">{children}</div>
       </main>
 

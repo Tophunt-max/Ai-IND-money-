@@ -42,6 +42,40 @@ jobs:
       - name: Unit tests
         run: python -m pytest tests/unit/ -q
 
+  ml:
+    name: Adaptive AI with the ML extras (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,ml]"
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install safetensors
+      - run: python -m pytest tests/unit/learning tests/unit/strategy -q
+
+  frontend:
+    name: Dashboard (types, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
   upstream:
     name: Upstream TradingAgents suite (Python ${{ matrix.python }})
     runs-on: ubuntu-latest

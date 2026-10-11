@@ -91,6 +91,8 @@ skopaq monitor             # Monitor existing positions; live: exits 4 if it end
 skopaq settle              # Settle past decisions whose holding window has traded
 skopaq memory legacy       # Show pre-v0.5.1 agent memories (--export FILE, --delete)
 skopaq report              # Track record: AI calls vs NIFTY, closed trades, calibration
+skopaq learn-train --symbols RELIANCE,TCS --days 20 --regimes  # candidate model + regime map (no orders)
+skopaq charges-reconcile note.csv  # broker contract note vs estimated charges (exit 3 on a discrepancy)
 skopaq halt "reason"       # Kill switch: reject every BUY everywhere
 skopaq resume              # Lift the kill switch
 skopaq serve               # FastAPI server

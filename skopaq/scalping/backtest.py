@@ -9,8 +9,12 @@ The same strategies and exit rules as the live engine, bar by bar:
 - the time stop and the flatten time act on the close; every trade pays the round-trip
   charges of ``skopaq/scalping/costs.py``.
 
-It ignores the broker's fill quality, slippage beyond the next open, and the safety
-rules' caps (pass ``max_qty`` to apply a share cap such as ``SKOPAQ_MAX_SHARES_PER_ORDER``).
+``slippage_pct`` moves every fill against the trade (entry up, exit down) by that
+fraction. ``on_decision(candles, setup, decided_at)`` is called for each setup with the
+candles known at that close: return None/False to skip it (qualification, a model gate)
+or any other value to take it, stored on the trade as ``tag`` (e.g. its features). It
+ignores the safety rules' caps (pass ``max_qty`` to apply a share cap such as
+``SKOPAQ_MAX_SHARES_PER_ORDER``) and partial fills.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from skopaq.market.candles import Candle
 from skopaq.scalping.costs import round_trip_cost
@@ -40,6 +44,8 @@ class BacktestTrade:
     reason: str
     opened: str
     closed: str
+    decided_at: str = ""          # ISO time of the close the setup was found on
+    tag: Any = None               # what on_decision returned (features, signal id)
 
 
 @dataclass
@@ -80,10 +86,14 @@ class BacktestResult:
 
 
 def simulate(symbol: str, days: Sequence[Sequence[Candle]], settings: ScalpSettings, *,
-             equity: float = 1_000_000.0, max_qty: Optional[int] = None) -> BacktestResult:
+             equity: float = 1_000_000.0, max_qty: Optional[int] = None,
+             slippage_pct: float = 0.0,
+             on_decision: Optional[Callable[[Sequence[Candle], Any, datetime], Any]] = None,
+             ) -> BacktestResult:
     """Run the scalper over ``days`` (each a day's 1-minute candles, in order)."""
     result = BacktestResult(symbol=symbol, days=len(days))
     s = settings
+    slip = max(0.0, float(slippage_pct))
     for day in days:
         if not day:
             continue
@@ -96,9 +106,9 @@ def simulate(symbol: str, days: Sequence[Sequence[Candle]], settings: ScalpSetti
         for i, c in enumerate(day):
             now = c.start + timedelta(seconds=s.candle_seconds)    # the candle's close
             if pending is not None and pos is None:
-                setup = pending
+                setup, decided_at, tag = pending
                 pending = None
-                fill = c.open
+                fill = c.open * (1 + slip)
                 qty = _size(setup, fill, equity, s, max_qty)
                 if qty > 0:
                     shift = fill - setup.entry
@@ -108,6 +118,7 @@ def simulate(symbol: str, days: Sequence[Sequence[Candle]], settings: ScalpSetti
                         stop=round(setup.stop + shift, 2), target=round(setup.target + shift, 2),
                         opened_at=c.start, atr=atr,
                         cost_per_share=round_trip_cost(fill, setup.target, qty) / qty)
+                    pos_meta = (decided_at, tag)
                     entries += 1
             if pos is not None:
                 reason, price = None, c.close
@@ -124,7 +135,7 @@ def simulate(symbol: str, days: Sequence[Sequence[Candle]], settings: ScalpSetti
                 if reason is None and i == len(day) - 1:
                     reason = "SCALP FLATTEN (end of data)"
                 if reason:
-                    pnl = _book(result, pos, price, reason, now)
+                    pnl = _book(result, pos, price * (1 - slip), reason, now, *pos_meta)
                     day_pnl += pnl
                     if pnl < 0:
                         last_loss = now
@@ -151,10 +162,16 @@ def simulate(symbol: str, days: Sequence[Sequence[Candle]], settings: ScalpSetti
                     setup.entry, setup.target, qty):
                 result.skipped_cost += 1
                 continue
+            if i + 1 >= len(day):
+                continue
+            tag = True
+            if on_decision is not None:
+                tag = on_decision(day[:i + 1], setup, now)
+                if tag is None or tag is False:
+                    continue
             if setup.strategy == "orb":
                 orb_done = True
-            if i + 1 < len(day):
-                pending = setup
+            pending = (setup, now, tag)
     return result
 
 
@@ -170,13 +187,15 @@ def _size(setup, price: float, equity: float, s: ScalpSettings,
 
 
 def _book(result: BacktestResult, pos: ScalpPosition, price: float, reason: str,
-          now: datetime) -> float:
+          now: datetime, decided_at: Optional[datetime] = None, tag: Any = None) -> float:
     cost = round_trip_cost(pos.entry, price, pos.qty)
     pnl = round((price - pos.entry) * pos.qty - cost, 2)
     result.trades.append(BacktestTrade(
         day=pos.opened_at.date().isoformat(), strategy=pos.strategy, qty=pos.qty,
         entry=round(pos.entry, 2), exit=round(price, 2), pnl=pnl, reason=reason,
-        opened=pos.opened_at.strftime("%H:%M"), closed=now.strftime("%H:%M")))
+        opened=pos.opened_at.strftime("%H:%M"), closed=now.strftime("%H:%M"),
+        decided_at=decided_at.isoformat() if decided_at else "",
+        tag=None if tag is True else tag))
     return pnl
 
 

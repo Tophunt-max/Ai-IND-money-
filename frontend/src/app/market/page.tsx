@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import AnalysisPanel from "@/components/AnalysisPanel";
 import { useAuth } from "@/components/AuthGate";
 import PriceChart from "@/components/PriceChart";
 import { Badge, Button, Card, ErrorBox, PageTitle, Skeleton, StatCard } from "@/components/ui";
@@ -177,6 +178,8 @@ function Market() {
             )}
             <div className="mt-6"><PriceChart symbol={symbol} /></div>
           </div>
+
+          {!isIndex && <AnalysisPanel symbol={symbol} />}
 
           {isAdmin && !isIndex && (
             <div className="grid grid-cols-2 gap-3">

@@ -27,14 +27,21 @@ def test_health_polls_near_expiry_send_no_token_warning(tmp_path, monkeypatch):
         patch("skopaq.broker.token_manager.KEY_FILE", token_dir / "token.key"),
     ):
         TokenManager().set_token("expiring-soon", ttl_hours=1.5)  # inside the 2 h warning window
+        from skopaq.api.dashboard_auth import DashboardUser, current_user
         from skopaq.api.server import app
 
+        # /api/status needs a dashboard login now (tests/unit/api/test_api_security.py)
+        app.dependency_overrides[current_user] = lambda: DashboardUser(
+            email="viewer@example.com", role="viewer", via="test")
         client = TestClient(app)
         for _ in range(4):
             response = client.get("/health")
             assert response.status_code == 200
             assert response.json()["token_valid"] is True
-        status = client.get("/api/status").json()
+        try:
+            status = client.get("/api/status").json()
+        finally:
+            app.dependency_overrides.pop(current_user, None)
         assert status["broker"]["token_warning"]  # still shown to the dashboard
 
     assert sent == []

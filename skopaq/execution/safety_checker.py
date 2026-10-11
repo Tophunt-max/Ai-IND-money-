@@ -91,6 +91,9 @@ class SafetyChecker:
         self._week_pnl: float = 0.0
         self._month_pnl: float = 0.0
         self._last_loss_time: Optional[datetime] = None
+        self._loss_streak: int = 0
+        self._max_streak: int = int(getattr(rules, "max_consecutive_losses", 0) or 0)
+        self._risk_state_problem: Optional[str] = None
 
     # ── Order size limits (dashboard-adjustable, below the immutable ceilings) ──
 
@@ -132,9 +135,34 @@ class SafetyChecker:
 
     def apply_config_limits(self, config: object) -> list[str]:
         """``set_order_limits`` from a SkopaqConfig (``max_shares_per_order``,
-        ``max_lots_per_order``)."""
+        ``max_lots_per_order``), and ``max_consecutive_losses`` (it can only tighten the
+        rules' ceiling; 0, a negative or a non-integer keeps the ceiling)."""
+        streak = getattr(config, "max_consecutive_losses", None)
+        ceiling = int(getattr(self._rules, "max_consecutive_losses", 0) or 0)
+        if (isinstance(streak, int) and not isinstance(streak, bool) and streak >= 1
+                and ceiling >= 1):
+            self._max_streak = min(streak, ceiling)
         return self.set_order_limits(getattr(config, "max_shares_per_order", None),
                                      getattr(config, "max_lots_per_order", None))
+
+    @property
+    def max_consecutive_losses(self) -> int:
+        return self._max_streak
+
+    @property
+    def loss_streak(self) -> int:
+        return self._loss_streak
+
+    def mark_risk_state_unavailable(self, reason: str) -> None:
+        """Fail closed: new BUYs are refused (exits are not) until ``clear_risk_state_problem``."""
+        self._risk_state_problem = reason
+
+    def clear_risk_state_problem(self) -> None:
+        self._risk_state_problem = None
+
+    @property
+    def risk_state_problem(self) -> Optional[str]:
+        return self._risk_state_problem
 
     def validate(
         self,
@@ -146,6 +174,7 @@ class SafetyChecker:
         holdings: Optional[list[Holding]] = None,
         *,
         sell_context: Optional[SellContext] = None,
+        unrealized_pnl: float = 0.0,
     ) -> SafetyResult:
         """Run all safety checks on a proposed order.
 
@@ -191,12 +220,17 @@ class SafetyChecker:
         self._check_min_stop_loss_pct(order, rejections)
         self._check_sector_concentration(order, positions, portfolio_value, rejections)
         if adds_risk:
-            self._check_daily_loss(portfolio_value, rejections)
+            # Open losses count toward today's limit (open gains do not offset it)
+            self._check_daily_loss(portfolio_value, rejections,
+                                   min(0.0, float(unrealized_pnl or 0.0)))
             self._check_weekly_loss(portfolio_value, rejections)
             self._check_monthly_loss(portfolio_value, rejections)
         self._check_order_rate(rejections)
         if adds_risk:
             self._check_cool_down(rejections)
+            self._check_loss_streak(rejections)
+            if self._risk_state_problem:
+                rejections.append(self._risk_state_problem)
         self._check_naked_options(order, rejections)
         self._check_sufficient_funds(order, funds, rejections)
         self._check_minimum_confidence(signal, rejections)
@@ -551,14 +585,19 @@ class SafetyChecker:
         if reason:
             rejections.append(reason)
 
-    def _check_daily_loss(self, portfolio_value: float, rejections: list[str]) -> None:
-        """Reject if daily loss exceeds circuit breaker threshold."""
+    def _check_daily_loss(self, portfolio_value: float, rejections: list[str],
+                          unrealized: float = 0.0) -> None:
+        """Reject if today's realized loss plus open (unrealized) losses exceed the
+        circuit breaker threshold."""
         if portfolio_value <= 0:
             return
-        loss_pct = abs(self._day_pnl) / portfolio_value if self._day_pnl < 0 else 0
+        day = self._day_pnl + unrealized
+        loss_pct = abs(day) / portfolio_value if day < 0 else 0
         if loss_pct >= self._rules.max_daily_loss_pct:
+            open_part = f" incl. ₹{-unrealized:,.0f} open" if unrealized < 0 else ""
             rejections.append(
-                f"Daily loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_daily_loss_pct:.0%})"
+                f"Daily loss {loss_pct:.1%}{open_part} hit circuit breaker "
+                f"({self._rules.max_daily_loss_pct:.0%})"
             )
 
     def _check_weekly_loss(self, portfolio_value: float, rejections: list[str]) -> None:
@@ -616,6 +655,13 @@ class SafetyChecker:
         if elapsed < self._rules.cool_down_after_loss_minutes:
             remaining = self._rules.cool_down_after_loss_minutes - elapsed
             rejections.append(f"Cool-down active: {remaining:.0f} minutes remaining after loss")
+
+    def _check_loss_streak(self, rejections: list[str]) -> None:
+        """Reject BUYs after ``max_consecutive_losses`` losing trades in a row today."""
+        if self._max_streak >= 1 and self._loss_streak >= self._max_streak:
+            rejections.append(
+                f"{self._loss_streak} losing trades in a row (limit {self._max_streak}): "
+                "no new entries today")
 
     def _check_naked_options(self, order: OrderRequest, rejections: list[str]) -> None:
         """No option writing.
@@ -698,6 +744,16 @@ class SafetyChecker:
         self._week_pnl = week
         self._month_pnl = month
 
+    def seed_loss_streak(self, streak: int, last_loss_at: Optional[datetime]) -> None:
+        """Today's losing run and latest loss from stored trades (``pnl_history``), so a
+        restart neither clears the consecutive-loss stop nor the cool-down."""
+        self._loss_streak = max(0, int(streak))
+        if last_loss_at is not None:
+            if last_loss_at.tzinfo is None:
+                last_loss_at = last_loss_at.replace(tzinfo=timezone.utc)
+            if self._last_loss_time is None or last_loss_at > self._last_loss_time:
+                self._last_loss_time = last_loss_at
+
     def record_pnl(self, pnl: float) -> None:
         """Record a trade's P&L for loss tracking."""
         self._day_pnl += pnl
@@ -705,12 +761,16 @@ class SafetyChecker:
         self._month_pnl += pnl
         if pnl < 0:
             self._last_loss_time = datetime.now(timezone.utc)
+            self._loss_streak += 1
+        elif pnl > 0:
+            self._loss_streak = 0
 
     def reset_daily(self) -> None:
         """Reset daily counters (call at start of each trading day)."""
         self._day_pnl = 0.0
         self._orders_this_minute.clear()
         self._last_loss_time = None
+        self._loss_streak = 0
 
     def reset_weekly(self) -> None:
         """Reset weekly P&L counter."""

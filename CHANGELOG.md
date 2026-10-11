@@ -6,6 +6,97 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- `/api/chat/*` is disabled (503) without `SKOPAQ_API_TOKEN` (it was open), and never
+  auto-approves `trade_stock` in live mode; error responses no longer echo exceptions.
+- `/api/status`, `/api/portfolio`, `/api/scanner/*` need a dashboard login (the scanner's
+  queue-draining route an admin). Live mode: `/docs` off by default, and the API refuses to
+  start without dashboard auth or with `SKOPAQ_CORS_ORIGINS=*`.
+- The failed-login lockout trusts only `SKOPAQ_TRUSTED_PROXY_HOPS` entries of
+  `X-Forwarded-For` (the left-most entry was client-controlled).
+- Manual orders and closes take an `Idempotency-Key`; a duplicate body within 5 s is refused.
+
+### Changed
+
+- **Live mode never fills on paper:** an order without a live broker client is refused
+  (the MCP server's `place_order` used to report a paper fill in live mode).
+- **One entry at a time** (`skopaq/execution/entry_gate.py`) across engines and processes on
+  the host; BUYs wait for unreconciled placements. A write-ahead `submitting` journal line
+  precedes every placement. Exits are unaffected.
+- Loss limits record P&L **net** of estimated charges; a losing streak
+  (`SKOPAQ_MAX_CONSECUTIVE_LOSSES`, ceiling 4) stops BUYs; the streak and cool-down survive
+  restarts; live mode fails closed when stored P&L cannot be read.
+- The scalper qualifies each setup (data quality, net reward/risk after charges and
+  slippage) and journals every candidate with its evidence and reasons; the partial-exit
+  charge double-count is fixed. Setups whose net R:R is below 1.0 are no longer traded.
+
+### Added
+
+- `skopaq/market/`: indicators, candlestick patterns, data quality, multi-timeframe
+  resampling without look-ahead, candle regime. `skopaq/finance/`: versioned charge
+  schedule (intraday, delivery, options, futures) and an execution ledger.
+- `skopaq/strategy/`: signal contract, qualification, evidence, signal journal.
+- Learning lifecycle: point-in-time dataset, NumPy logistic baseline, out-of-sample gates,
+  champion/challenger registry with shadow period, human approval and rollback;
+  `skopaq learn-train`.
+- Dashboard: **Signals & risk** page (signal log, reconciliation, risk limits), technical
+  analysis panel on **Market**, model registry on **AI learning**.
+- `scripts/paper_session_sim.py`: simulated paper sessions through the real pipeline.
+- Docs: `docs/architecture/execution-safety.md`.
+- 13-state order lifecycle replayed from the journal; startup reconciliation before a
+  process's first BUY (adopts / clears journalled placements, reports external orders);
+  cross-host entry and session leases (Upstash Redis, `SKOPAQ_ACCOUNT_LEASE_ENABLED`).
+- F&O and swing (AI) BUYs qualified and journalled like scalps; spread / liquidity limits;
+  champion / shadow model probabilities on every signal (gate opt-in); approved
+  regime → strategy map with idle-when-uncovered; LightGBM candidates; drift monitor.
+- Contract-note CSV charge reconciliation (dashboard / `skopaq charges-reconcile`);
+  broker-quoted charges from `GET /margin`; F&O partial-exit charge double count fixed.
+- Open losses count toward the daily loss stop; entry-block, stale-data, competing-session,
+  external-order and drift alerts with an incident id and the action to take.
+- Candle builder closes quiet candles by timer and drops duplicate / late ticks.
+- `evolve.py`: parameters chosen on 70 % of the history, adopted only if they beat the
+  current ones on the held-out 30 %, within the per-evolution change limit.
+- Supabase migration `005_trading_audit.sql` and a best-effort journal mirror; shared API
+  state across replicas (`SKOPAQ_API_SHARED_STATE_ENABLED`).
+- **Adaptive AI, FreqAI-style** (`skopaq/adaptive/`, native, no Freqtrade code): automatic
+  multi-timeframe / shifted / correlated feature expansion, Dissimilarity Index outlier
+  detection and training-set filtering, LightGBM / XGBoost / CatBoost candidates,
+  cost-net forward targets, rolling backtests that emulate periodic retraining, automatic
+  retraining after sessions into candidate / shadow (never champion), Optuna hyperopt of
+  the scalper's parameters with a holdout and admin approval, an offline RL research
+  module; `skopaq adaptive-train`, `skopaq hyperopt`, `skopaq rl-research`; the
+  Adaptive AI card on the dashboard. Look-ahead guard: candles after the decision are
+  dropped whatever the caller passes.
+- **Adaptive framework**: your own strategy (FreqAI-style feature / target hooks,
+  regressors, custom entry rule) with a look-ahead guard that refuses future-peeking
+  features; data pipeline with scaler choice, PCA, one-class SVM, Dissimilarity Index,
+  DBSCAN and noise (all JSON, no pickle); recency `weight_factor`; models LightGBM,
+  XGBoost (+RF), CatBoost, random forest, extra trees, linear, PyTorch MLP and a tabular
+  transformer, multi-target, early stopping; rich predictions (per-target value, label and
+  live prediction mean/std, z-score, `do_predict`, DI and detector flags, entry rule,
+  model age, top features); verified bundles (SHA-256 manifest, library versions,
+  export / import / verify, retention); `skopaq model-export|import|verify`.
+- **RL agents (PPO, A2C, DQN)** in native PyTorch, trained in a replay of the scalper's own
+  rules net of charges and tested on later unseen days; policies saved as safetensors with
+  a SHA-256 manifest in a separate RL registry (candidate → shadow → admin-approved
+  champion, rollback). A policy trades as the `rl_policy` scalp strategy behind every
+  gate: the shadow policy on paper, live only as the champion with
+  `SKOPAQ_RL_ALLOW_LIVE` (`.env` only). `skopaq rl-train|rl-status|rl-promote|rl-rollback`,
+  dashboard card with promote / rollback.
+- **Continual learning** (`SKOPAQ_ADAPTIVE_CONTINUAL_LEARNING`, `SKOPAQ_RL_CONTINUAL_LEARNING`,
+  `--continual`): a run continues the previous model of the same strategy and kind —
+  boosted trees added to the previous ensemble, PyTorch / logistic from the previous
+  weights, the parent's pipeline kept frozen, the rolling backtest chained; RL policies
+  from the previous weights and scaling. Lineage recorded in the bundle and registry.
+- **Your strategy without code:** a dashboard builder (features, timeframes, periods,
+  correlated symbols, targets, entry rule) validated on the server with the look-ahead
+  guard, saved per revision, and selected for training with an audit trail; bundles
+  rebuild their spec on load; `adaptive-train --strategy <name|spec.json>`.
+- Dashboard: order lifecycle, charges reconciliation, risk capacity on the home page,
+  regime map and drift on AI learning, chart studies (EMA, patterns, signal levels), an
+  offline banner; Vitest + Testing Library tests and a CI job for the dashboard.
+
 ### Removed
 
 - **Kite Connect (Zerodha).** INDstocks is now the only broker. Gone:

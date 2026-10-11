@@ -268,3 +268,6 @@ site/
 
 # The dashboard's source folder (the Python "lib/" rule above would hide it)
 !frontend/src/lib/
+
+# TypeScript incremental build cache
+frontend/tsconfig.tsbuildinfo

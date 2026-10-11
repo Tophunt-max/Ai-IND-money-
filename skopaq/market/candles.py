@@ -51,8 +51,11 @@ def _align(ts: datetime, seconds: int) -> datetime:
 class CandleBuilder:
     """Candles of ``interval_s`` seconds; keeps the last ``keep`` closed ones.
 
-    ``on_close(candle)`` is called when a candle closes (the first tick of a later
-    interval closes it). Ticks older than the current candle are ignored.
+    ``on_close(candle)`` is called when a candle closes: the first tick of a later
+    interval closes it, or ``flush(now)`` once the interval has ended (a quiet instrument
+    must not leave its last candle open). Ticks older than the current candle, ticks for
+    a candle already closed, and exact repeats of the previous tick are ignored
+    (``dropped`` counts them).
     """
 
     def __init__(self, interval_s: int = 60, keep: int = 500,
@@ -65,15 +68,26 @@ class CandleBuilder:
         self._on_close = on_close
         self._last_cum_volume: Optional[int] = None
         self._open_cum_volume: Optional[int] = None
+        self._last_tick: Optional[tuple] = None
+        self.dropped = 0
 
     def add(self, price: float, ts: datetime, cum_volume: Optional[int] = None
             ) -> Optional[Candle]:
         """Add a tick; returns the candle it closed, if any."""
         if price <= 0:
             return None
+        key = (ts, price, cum_volume)
+        if key == self._last_tick:            # the same tick delivered twice
+            self.dropped += 1
+            return None
+        self._last_tick = key
         start = _align(ts, self.interval_s)
         closed = None
         if self.current is not None and start < self.current.start:
+            self.dropped += 1
+            return None
+        if self.closed and start <= self.closed[-1].start:
+            self.dropped += 1                  # late tick of a candle already closed
             return None
         if self.current is None or start > self.current.start:
             if self.current is not None:
@@ -87,6 +101,18 @@ class CandleBuilder:
             self._last_cum_volume = cum_volume
             if self._open_cum_volume is not None:
                 self.current.volume = max(0, cum_volume - self._open_cum_volume)
+        return closed
+
+    def flush(self, now: datetime, grace_s: float = 2.0) -> Optional[Candle]:
+        """Close the current candle once its interval ended ``grace_s`` ago with no tick
+        of a later interval (late ticks for it are dropped from then on)."""
+        if self.current is None:
+            return None
+        end = self.current.start.timestamp() + self.interval_s + grace_s
+        if now.timestamp() < end:
+            return None
+        closed = self._close()
+        self.current = None
         return closed
 
     def _close(self) -> Candle:
@@ -191,6 +217,9 @@ class LiveSeries:
     def add(self, price: float, ts: datetime, cum_volume: Optional[int] = None
             ) -> Optional[Candle]:
         return self.builder.add(price, ts, cum_volume)
+
+    def flush(self, now: datetime, grace_s: float = 2.0) -> Optional[Candle]:
+        return self.builder.flush(now, grace_s)
 
     def seed(self, candles: list[Candle]) -> None:
         """Closed candles from history (oldest first), before any tick: the indicators are

@@ -38,6 +38,9 @@ EVENTS = frozenset({"placed", "uncertain", "stuck", "interrupted", "final", "boo
                     "booked"})
 # Lines about booking an order's fill (trade rows), not about the order's state
 BOOKING_EVENTS = frozenset({"booking", "booked"})
+# Lifecycle annotations (skopaq/execution/order_lifecycle.py): they never change what an
+# order's last state line says for resuming or booking it
+ANNOTATION_EVENTS = frozenset({"cancel_sent", "created", "validated"})
 # Fields a later event may leave empty; they are carried over from earlier lines
 _CARRIED = ("internal_id", "symbol", "security_id", "segment", "side", "qty", "purpose",
             "guessed")
@@ -85,6 +88,7 @@ class OrderJournal:
         self._wall = wall
         self._alerter = alerter
         self._warned = False
+        self.mirror: Any = None          # skopaq.db.mirror.Mirror (from_config)
 
     @classmethod
     def from_config(cls, config: object, **kwargs: Any) -> OrderJournal:
@@ -93,7 +97,14 @@ class OrderJournal:
         env = os.environ.get("SKOPAQ_ORDER_JOURNAL_DIR", "").strip()
         value = getattr(config, "order_journal_dir", None)
         configured = value.strip() if isinstance(value, str) else ""
-        return cls(env or configured or _DEFAULT_DIR, **kwargs)
+        journal = cls(env or configured or _DEFAULT_DIR, **kwargs)
+        try:
+            from skopaq.db.mirror import mirror_from_config
+
+            journal.mirror = mirror_from_config(config)
+        except Exception:
+            journal.mirror = None
+        return journal
 
     def path_for(self, day: date) -> Path:
         return self.directory / f"{day.isoformat()}.jsonl"
@@ -179,6 +190,13 @@ class OrderJournal:
         except Exception as exc:
             self._write_failed(exc)
             return False
+        if self.mirror is not None:
+            try:
+                from skopaq.db.mirror import order_row
+
+                self.mirror.put("order_events", order_row(line))
+            except Exception:
+                pass
         return True
 
     def _write_failed(self, exc: Exception) -> None:
@@ -225,7 +243,8 @@ class OrderJournal:
         for item in self.entries() if entries is None else entries:
             order_id = item.get("order_id")
             if (not isinstance(order_id, str) or not order_id
-                    or item.get("event") in BOOKING_EVENTS):
+                    or item.get("event") in BOOKING_EVENTS
+                    or item.get("event") in ANNOTATION_EVENTS):
                 continue
             merged = dict(item)
             earlier = latest.get(order_id, {})
@@ -274,7 +293,8 @@ class OrderJournal:
                 best = (qty, _decimal(avg))
 
         state_lines = [e for e in lines
-                       if e.get("event") not in BOOKING_EVENTS and e.get("event") != "final"]
+                       if e.get("event") not in BOOKING_EVENTS and e.get("event") != "final"
+                       and e.get("event") not in ANNOTATION_EVENTS]
         for line in state_lines:
             if line.get("reported") is not None:
                 take(_decimal(line.get("reported")), line.get("reported_avg"))
@@ -314,6 +334,48 @@ class OrderJournal:
                  if e.get("order_id") and e.get("internal_id") and not e.get("guessed")}
         return [e for e in entries if e.get("event") == "uncertain"
                 and e.get("internal_id") and e.get("internal_id") not in found]
+
+    def entry_blockers(self, *, own_pid: Optional[int] = None) -> list[dict]:
+        """Today's placements whose outcome nobody established, which must stop new
+        entries until reconciled (``skopaq.execution.entry_gate``):
+
+        * an ``uncertain`` BUY no later line names an order for;
+        * a ``submitting`` line (written before the order was sent) with no later line
+          for its ``internal_id`` at all: the process died between sending the order and
+          learning the answer, so the order may exist. ``own_pid``'s lines are skipped
+          (that process knows its in-flight orders itself).
+
+        An ``operator_resolved`` line (``resolve``) clears one after a person checked the
+        broker's order book."""
+        entries = self.entries()
+        resolved: set[str] = set()
+        answered: set[str] = set()
+        for e in entries:
+            iid = e.get("internal_id")
+            if not iid:
+                continue
+            if e.get("event") not in ("submitting", "created", "validated"):
+                answered.add(iid)
+            if e.get("event") in ("operator_resolved", "not_placed",
+                                  "reconciled_absent") or (
+                    e.get("order_id") and not e.get("guessed")):
+                resolved.add(iid)
+        found: dict[str, dict] = {}
+        for e in entries:
+            iid = e.get("internal_id")
+            if not iid or iid in resolved or iid in found:
+                continue
+            if e.get("event") == "uncertain" and e.get("side") == "BUY":
+                found[iid] = {**e, "blocker": "uncertain BUY placement"}
+            elif (e.get("event") == "submitting" and iid not in answered
+                  and (own_pid is None or e.get("pid") != own_pid)):
+                found[iid] = {**e, "blocker": "sent without a recorded answer"}
+        return list(found.values())
+
+    def resolve(self, internal_id: str, *, by: str, note: str = "") -> bool:
+        """An operator checked the broker for ``internal_id`` and resolved it."""
+        return self.record("operator_resolved", internal_id=internal_id,
+                           note=f"{by}: {note}".strip(": "))
 
     def claim(self, key: str) -> Optional[bool]:
         """Claim ``key`` for today across the processes sharing the journal (a marker

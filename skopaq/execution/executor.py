@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import time
 from datetime import date
@@ -32,6 +33,7 @@ from skopaq.broker.models import (
     filled_quantity_of,
     order_ids_of,
 )
+from skopaq.execution.entry_gate import EntryBusy
 from skopaq.execution.exit_plan import ExitPlanner
 from skopaq.execution.order_alerts import get_alerter
 from skopaq.execution.order_router import OrderRouter
@@ -153,14 +155,38 @@ class Executor:
         # Steps 2–3: safety checks, then the backend. A live SELL holds its
         # symbol's lock from the order-book read until the broker's answer is
         # final, so no other Skopaq process can sell the same shares in between
-        lock = self._router.sell_lock(order) if order.side == Side.SELL else None
+        # A BUY holds the account's entry gate from the safety check until the broker's
+        # answer is final: one entry at a time, across engines and (live) processes
+        if order.side == Side.SELL:
+            lock = self._router.sell_lock(order)
+        else:
+            gate = getattr(self._router, "entry_gate", None)
+            lock = gate() if callable(gate) else None
         try:
             async with lock or contextlib.nullcontext():
+                if order.side == Side.BUY:
+                    blocked = await self._entry_blockers()
+                    if blocked:
+                        return await self._refused(
+                            order, signal,
+                            SafetyResult(passed=False, rejections=[
+                                "Reconciliation required before a new entry: "
+                                + "; ".join(blocked[:3])]),
+                            False)
+                self._lifecycle("created", order)
                 safety_result, positions, holdings, live_sell = await self._check(
                     order, signal)
                 if not safety_result.passed:
+                    self._lifecycle("not_placed", order,
+                                    note=f"safety: {safety_result.reason}"[:200])
                     return await self._refused(order, signal, safety_result, live_sell)
+                self._lifecycle("validated", order)
                 result = await self._router.execute(order, signal)
+        except EntryBusy as exc:
+            reason = f"Entry not sent: {exc}"
+            logger.warning("BUY %s refused: %s", order.symbol, exc)
+            return ExecutionResult(success=False, signal=signal, mode=self._router.mode,
+                                   safety_passed=False, rejection_reason=reason)
         except SellLockBusy as exc:
             logger.warning("SELL %s not sent: %s", order.symbol, exc)
             reason = (f"Another Skopaq process is already selling {order.symbol} — "
@@ -212,7 +238,11 @@ class Executor:
             cost = _cost_basis(order.symbol, positions, holdings,
                                security_id=order.security_id if derivative else "")
             if cost and filled:
+                # Net of the round trip's estimated charges: the loss limits must see a
+                # trade that lost only to charges as a loss
                 pnl = (result.fill_price - cost) * float(filled)
+                pnl -= _estimated_charges(order, cost, float(result.fill_price),
+                                          float(filled))
                 self._safety.record_pnl(pnl)
 
         logger.info(
@@ -226,6 +256,38 @@ class Executor:
         )
 
         return result
+
+    def _lifecycle(self, event: str, order: OrderRequest, *, note: str = "") -> None:
+        """CREATED / VALIDATED / a safety REJECTED in the live order journal (paper keeps
+        no journal). Never raises."""
+        journal = getattr(self._router, "journal", None)
+        if journal is None or getattr(self._router, "mode", "paper") != "live" \
+                or not callable(getattr(journal, "record", None)):
+            return
+        try:
+            journal.record(event, internal_id=str(order.internal_id), symbol=order.symbol,
+                           security_id=order.security_id or "", segment=order.segment.value,
+                           side=order.side.value, qty=order.quantity, note=note)
+        except Exception:
+            logger.debug("Lifecycle line %s not journalled", event, exc_info=True)
+
+    async def _entry_blockers(self) -> list[str]:
+        start = getattr(self._router, "ensure_startup_reconciled", None)
+        if callable(start):
+            try:
+                pending = start()
+                if inspect.isawaitable(pending):
+                    await pending
+            except Exception as exc:
+                return [f"startup reconciliation failed: {exc}"]
+        find = getattr(self._router, "entry_blockers", None)
+        if not callable(find):
+            return []
+        try:
+            found = find()
+        except Exception as exc:
+            return [f"reconciliation state unreadable: {exc}"]
+        return list(found) if isinstance(found, (list, tuple)) else []
 
     def _plan_exit(self, signal: TradingSignal, result: ExecutionResult, filled: int) -> None:
         """Save the exit plan of a filled BUY and put its target (and stop) on the signal,
@@ -283,6 +345,7 @@ class Executor:
             portfolio_value=portfolio_value,
             holdings=holdings,
             sell_context=inputs.context if inputs is not None else None,
+            unrealized_pnl=_unrealized(positions) if order.side == Side.BUY else 0.0,
         )
         return safety_result, positions, holdings, inputs is not None
 
@@ -294,6 +357,8 @@ class Executor:
         live_sell: bool,
     ) -> ExecutionResult:
         """Report a safety rejection (nothing reached the broker)."""
+        if order.side == Side.BUY:
+            _alert_entry_block(order, safety_result.reason)
         if live_sell:
             code = safety_result.codes[0] if safety_result.codes else "safety"
             alert_sell_refused(order, code, safety_result.reason,
@@ -595,3 +660,66 @@ def _cost_basis(symbol: str, positions: list, holdings: list, *,
         if same and (getattr(item, "quantity", 0) or 0) > 0 and price > 0:
             return price
     return None
+
+
+def _estimated_charges(order: OrderRequest, entry: float, exit_price: float,
+                       qty: float) -> float:
+    """Round-trip charges of the sold quantity (``skopaq.finance.charges``); 0 if they
+    cannot be estimated (never blocks recording the P&L)."""
+    try:
+        from skopaq.finance.charges import product_of, round_trip
+
+        product = product_of(order.segment.value, getattr(order.product, "value", ""),
+                             order.symbol)
+        return round_trip(product, entry, exit_price, qty).total
+    except Exception:
+        logger.debug("Charges of %s not estimated", order.symbol, exc_info=True)
+        return 0.0
+
+
+def _unrealized(positions) -> float:
+    """Mark-to-market P&L of the open long rows that carry a last price."""
+    total = 0.0
+    for p in positions or []:
+        try:
+            qty, last, avg = float(p.quantity), float(p.last_price or 0), float(
+                p.average_price or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if qty > 0 and last > 0 and avg > 0:
+            total += (last - avg) * qty
+    return total
+
+
+# Entry refusals that need a person: (reason fragment, category, severity, action)
+_ENTRY_ALERTS = (
+    ("Reconciliation required", "entries-blocked", "CRITICAL",
+     "check the broker's order book and resolve the placement (dashboard → Signals & risk)"),
+    ("risk state not restored", "risk-state", "CRITICAL",
+     "restore Supabase access; new entries stay blocked until the stored P&L can be read"),
+    ("Daily loss", "daily-loss-lockout", "CRITICAL",
+     "no new entries today; exits keep running. Review the day before tomorrow's session"),
+    ("Weekly loss", "weekly-loss-lockout", "CRITICAL", "no new entries this week"),
+    ("Monthly loss", "monthly-loss-lockout", "CRITICAL", "no new entries this month"),
+    ("losing trades in a row", "loss-streak", "WARNING",
+     "no new entries today; review the strategy's recent trades"),
+    ("Trading HALTED", "kill-switch", "WARNING", "lift it with `skopaq resume` when intended"),
+)
+
+
+def _alert_entry_block(order: OrderRequest, reason: str) -> None:
+    """One deduplicated alert per category and day when a BUY is refused for a reason an
+    operator must act on (incident id = category + IST date). Never raises."""
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        day = datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
+        for fragment, category, severity, action in _ENTRY_ALERTS:
+            if fragment.lower() in (reason or "").lower():
+                get_alerter().alert(
+                    severity, f"{category}:{day}",
+                    f"[incident {category}-{day}] BUY {order.quantity} {order.symbol} "
+                    f"refused: {reason[:300]}. Action: {action}.", dedup_s=3600)
+                return
+    except Exception:
+        logger.debug("Entry-block alert not sent", exc_info=True)

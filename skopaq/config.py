@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import SecretStr, ValidationError, ValidatorFunctionWrapHandler, field_validator
 from pydantic_core.core_schema import ValidationInfo
@@ -51,6 +51,37 @@ _LENIENT_FIELDS = (
     "scalp_rest_poll_seconds",
     "scalp_rr",
     "scalp_orb_minutes",
+    "scalp_min_net_rr",
+    "scalp_slippage_pct",
+    "scalp_htf_seconds",
+    "scalp_require_htf",
+    "scalp_require_regime",
+    "scalp_qualification_enabled",
+    "scalp_max_spread_pct",
+    "scalp_max_participation",
+    "scalp_model_gate_enabled",
+    "fno_model_gate_enabled",
+    "fno_min_net_rr",
+    "fno_slippage_pct",
+    "fno_qualification_enabled",
+    "block_model_outliers",
+    "adaptive_auto_retrain",
+    "adaptive_retrain_hours",
+    "adaptive_days",
+    "adaptive_train_days",
+    "adaptive_retrain_days",
+    "adaptive_horizon_bars",
+    "adaptive_di_threshold",
+    "adaptive_continual_learning",
+    "rl_continual_learning",
+    "rl_enabled",
+    "rl_allow_live",
+    "rl_paper_use_shadow",
+    "rl_timesteps",
+    "rl_days",
+    "rl_stop_atr",
+    "entry_lock_wait_seconds",
+    "max_consecutive_losses",
     "max_shares_per_order",
     "max_lots_per_order",
     "fno_enabled",
@@ -152,6 +183,16 @@ class SkopaqConfig(BaseSettings):
     indstocks_order_remarks_enabled: bool = False  # tag orders with `remarks` (docs: unreleased)
     order_lock_dir: str = "~/.skopaq/locks"  # per-symbol SELL locks (shared home volume)
     order_journal_dir: str = "~/.skopaq/orders"  # per-day order journal (shared home volume)
+    # Sequential entries: one BUY at a time per account (an flock in order_lock_dir across
+    # processes on this host, and a lock inside each process), held from the safety check
+    # until the broker's answer is final. A second entry waits this long, then is refused
+    entry_lock_wait_seconds: float = 20.0
+    # Cross-host account leases in Upstash Redis (entries and daemon sessions); enabled
+    # without a reachable Redis, entries are refused
+    account_lease_enabled: bool = False
+    # Consecutive losing closed trades after which new BUYs stop for the day; it can
+    # only lower the immutable ceiling SafetyRules.max_consecutive_losses (4)
+    max_consecutive_losses: int = 4
 
     # ── LLM API Keys ───────────────────────────────────────────────────
     google_api_key: SecretStr = SecretStr("")  # Gemini Flash (scanner)
@@ -196,7 +237,13 @@ class SkopaqConfig(BaseSettings):
     # ── API access ───────────────────────────────────────────────────────
     # When set, /api/chat/* require Bearer auth (and it works as an admin dashboard login)
     api_token: SecretStr = SecretStr("")
-    cors_origins: str = "*"  # comma-separated browser origins; "" = none
+    cors_origins: str = "*"  # comma-separated browser origins; "" = none (live: no "*")
+    # Proxies in front of the API whose X-Forwarded-For entry is trusted (0 = none)
+    trusted_proxy_hops: int = 1
+    # Login lockout and duplicate-order keys shared by every API replica (Upstash Redis)
+    api_shared_state_enabled: bool = False
+    # /docs, /redoc, /openapi.json: unset = on in paper mode, off in live
+    api_docs_enabled: Optional[bool] = None
     # Web dashboard logins (Supabase Auth): "me@x.com:admin,friend@y.com:viewer"
     dashboard_users: str = ""
 
@@ -268,6 +315,79 @@ class SkopaqConfig(BaseSettings):
     scalp_min_reward_to_cost: float = 2.0      # target profit ≥ this × round-trip charges
     scalp_orb_minutes: int = 15
     scalp_rest_poll_seconds: float = 3.0       # batched REST quotes when the feed is down
+    # Signal qualification (skopaq/strategy/signal.py) before the risk gateway: data
+    # quality always; net reward/risk after charges and assumed slippage; the regime and
+    # higher-timeframe filters are off until a walk-forward backtest supports them
+    scalp_qualification_enabled: bool = True
+    scalp_min_net_rr: float = 1.0              # net reward / net risk, after costs + slippage
+    scalp_slippage_pct: float = 0.0002         # assumed adverse slippage per side (0.02 %)
+    scalp_htf_seconds: int = 300               # higher timeframe recorded as evidence (5 min)
+    scalp_require_htf: bool = False            # require the higher timeframe to agree
+    scalp_require_regime: bool = False         # reject when the candle regime is unreliable
+    scalp_max_spread_pct: float = 0.003        # bid/ask spread over mid (REST quotes)
+    scalp_max_participation: float = 0.10      # order qty / average 1-min bar volume
+    # The champion model decides entries (P(net win) ≥ its threshold); off: recorded only
+    scalp_model_gate_enabled: bool = False
+    fno_model_gate_enabled: bool = False
+    fno_min_net_rr: float = 1.0                # F&O qualification, on the premium
+    fno_slippage_pct: float = 0.001            # assumed adverse premium slippage per side
+    fno_qualification_enabled: bool = True
+    # Swing (AI) BUYs: qualified on daily candles before the executor
+    swing_qualification_enabled: bool = True
+    swing_min_net_rr: float = 1.0
+    swing_slippage_pct: float = 0.001
+    swing_notional_inr: float = 100_000.0       # sizes the charge estimate only
+    swing_model_gate_enabled: bool = False
+    # Refuse entries while the champion adaptive model says the market is unlike its
+    # training data (Dissimilarity Index above its threshold)
+    block_model_outliers: bool = False
+
+    # ── Adaptive AI (FreqAI-style, skopaq/adaptive/) ─────────────────────────
+    # Retrain automatically at the end of a session when older than the interval; a new
+    # model only ever becomes a candidate / shadow (promotion stays an admin's decision)
+    adaptive_auto_retrain: bool = False
+    adaptive_retrain_hours: float = 24.0
+    adaptive_symbols: str = ""                  # empty: scalp_symbols
+    adaptive_correlated: str = ""               # e.g. "HDFCBANK,ICICIBANK" (their features)
+    adaptive_days: int = 30                     # history fetched per retrain
+    adaptive_train_days: int = 20               # sliding training window
+    adaptive_retrain_days: int = 5              # block length of the rolling backtest
+    adaptive_model_kind: str = "lightgbm"       # lightgbm | xgboost | catboost | logistic
+    adaptive_target: str = "forward"            # forward | setup
+    adaptive_horizon_bars: int = 15
+    adaptive_di_threshold: float = 1.5
+    # Your strategy (features + targets): "path/to/file.py:ClassName"; empty = the default
+    # one. It runs code, so it is set in .env only, never from the dashboard
+    adaptive_strategy: str = ""
+    # Data pipeline (skopaq/adaptive/pipeline.py)
+    adaptive_scaler: str = "minmax"            # minmax | standard | robust | none
+    adaptive_pca: bool = False
+    adaptive_svm: bool = False
+    adaptive_dbscan: bool = False
+    adaptive_noise_std: float = 0.0
+    adaptive_weight_factor: float = 0.0        # 0 = equal weights; e.g. 0.9 favours recent rows
+    adaptive_keep_models: int = 10             # bundles kept (champion / shadow always kept)
+    # Continual learning: continue the previous model (same strategy and model kind)
+    # instead of training from scratch; still a candidate behind the gates
+    adaptive_continual_learning: bool = False
+
+    # ── Reinforcement learning (PPO / A2C / DQN, skopaq/adaptive/rl_*.py) ────
+    # The policy trades as the scalper's "rl_policy" strategy (add it to
+    # SKOPAQ_SCALP_STRATEGIES) behind every gate. Paper: the RL champion, else its shadow
+    # policy. Live: the admin-approved champion only, and only with rl_allow_live
+    rl_enabled: bool = False
+    rl_allow_live: bool = False                # .env only (locked against overrides)
+    rl_paper_use_shadow: bool = True
+    rl_algo: str = "ppo"                       # ppo | a2c | dqn
+    rl_timesteps: int = 60_000
+    rl_days: int = 60                          # history per training run
+    rl_symbols: str = ""                       # empty: adaptive_symbols, else scalp_symbols
+    rl_stop_atr: float = 1.5                   # the entry's stop distance (bounded 0.4–2.5 ATR)
+    rl_continual_learning: bool = False        # continue the previous policy's weights
+    signal_journal_dir: str = "~/.skopaq/signals"  # every candidate + decision (learning data)
+    model_dir: str = "~/.skopaq/models"        # candidate / shadow / champion models
+    # Mirror signal / order / model journals to Supabase (migration 005), best effort
+    audit_mirror_enabled: bool = True
 
     # ── Order size limits (dashboard: Control → Exits & risk) ──────────────
     # Per order, every strategy (swing, scalper, F&O engine, manual). Clamped to the

@@ -1,0 +1,678 @@
+"""Dashboard endpoints for the trading pipeline's evidence and controls.
+
+Reads (any signed-in user):
+
+- ``GET  /api/dashboard/signals``                 signal journal: every candidate, its
+                                                  evidence, decision, reasons, outcome
+- ``GET  /api/dashboard/risk``                    hard ceilings, working limits, today's
+                                                  realized P&L / loss streak, charge schedule
+- ``GET  /api/dashboard/control/reconcile``       placements blocking new entries
+- ``GET  /api/dashboard/market/analysis``         indicators, patterns, regime, data quality
+                                                  of a symbol's candles (chart overlays)
+- ``GET  /api/dashboard/learning/models``         model registry: champion, shadow,
+                                                  candidates, out-of-sample reports, history
+
+Actions (admins; logged and sent to Telegram):
+
+- ``POST /api/dashboard/control/reconcile/{internal_id}/resolve``  after checking the broker
+- ``POST /api/dashboard/learning/models/{version}/promote``        shadow → champion
+- ``POST /api/dashboard/learning/rollback``                        previous champion back
+- ``POST /api/dashboard/learning/regimes/approve``                  approve the regime map
+- ``POST /api/dashboard/finance/contract-note``                     reconcile charges
+
+More reads: ``/control/lifecycle`` (each order's states today), ``/learning/drift``,
+``/learning/regimes``, ``/finance/reconciliation``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from skopaq.api.dashboard_auth import DashboardUser, current_user, require_admin
+from skopaq.config import SkopaqConfig
+
+logger = logging.getLogger(__name__)
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+router = APIRouter(prefix="/api/dashboard", tags=["dashboard"],
+                   dependencies=[Depends(current_user)])
+
+
+def _finite(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
+
+
+async def _notify_audit(user: DashboardUser, action: str) -> None:
+    from skopaq.api.dashboard_control import _audit, _notify
+
+    await _notify(_audit(user, action))
+
+
+# ── Signals ──────────────────────────────────────────────────────────────────
+
+
+@router.get("/signals")
+async def signals(days: int = Query(1, ge=1, le=30),
+                  status: Optional[str] = Query(None, pattern="^(QUALIFIED|REJECTED|EXPIRED)$"),
+                  limit: int = Query(200, ge=1, le=2000),
+                  symbol: Optional[str] = Query(None, min_length=1, max_length=40)) -> dict:
+    from skopaq.strategy.journal import SignalJournal
+
+    journal = SignalJournal.from_config(SkopaqConfig())
+    today = datetime.now(_IST).date()
+    wanted = [today - timedelta(days=i) for i in range(days)]
+
+    def read() -> list[dict]:
+        rows = journal.signals(sorted(wanted))
+        if status:
+            rows = [r for r in rows if r.get("status") == status]
+        if symbol:
+            rows = [r for r in rows if str(r.get("symbol", "")).upper() == symbol.upper()]
+        return rows[-limit:]
+
+    rows = await asyncio.to_thread(read)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r.get("status", "?")] = counts.get(r.get("status", "?"), 0) + 1
+    return _finite({"signals": list(reversed(rows)), "counts": counts,
+                    "mode": journal.mode, "days": days})
+
+
+# ── Risk ─────────────────────────────────────────────────────────────────────
+
+
+@router.get("/risk")
+async def risk() -> dict:
+    from dataclasses import asdict
+
+    from skopaq.constants import DAEMON_SAFETY_RULES, SAFETY_RULES
+    from skopaq.execution import kill_switch
+    from skopaq.execution.pnl_history import load_realized_pnl
+    from skopaq.finance.charges import CURRENT
+
+    config = SkopaqConfig()
+    realized = await asyncio.to_thread(load_realized_pnl, config)
+    halt = kill_switch.status()
+    return _finite({
+        "mode": config.trading_mode,
+        "kill_switch": {"halted": halt.halted, "reason": halt.describe() if halt.halted
+                        else ""},
+        "ceilings": asdict(SAFETY_RULES), "daemon_ceilings": asdict(DAEMON_SAFETY_RULES),
+        "working": {"max_shares_per_order": config.max_shares_per_order,
+                    "max_lots_per_order": config.max_lots_per_order,
+                    "max_consecutive_losses": min(config.max_consecutive_losses,
+                                                  SAFETY_RULES.max_consecutive_losses),
+                    "entry_lock_wait_seconds": config.entry_lock_wait_seconds},
+        "realized": None if realized is None else {
+            "day": realized.day, "week": realized.week, "month": realized.month,
+            "loss_streak": realized.loss_streak,
+            "last_loss_at": realized.last_loss_at.isoformat() if realized.last_loss_at
+            else None},
+        "realized_source": "supabase" if realized is not None else "unavailable",
+        "charges": {"schedule": CURRENT.version,
+                    "effective_from": CURRENT.effective_from.isoformat(),
+                    "source": CURRENT.source, "excluded": list(CURRENT.excluded),
+                    "notes": CURRENT.notes},
+    })
+
+
+# ── Reconciliation ───────────────────────────────────────────────────────────
+
+
+def _journal():
+    from skopaq.execution.order_journal import OrderJournal
+
+    return OrderJournal.from_config(SkopaqConfig())
+
+
+@router.get("/control/reconcile")
+async def reconcile_status() -> dict:
+    journal = _journal()
+    blockers = await asyncio.to_thread(journal.entry_blockers)
+    return {"blocking_entries": bool(blockers), "blockers": blockers}
+
+
+class ResolveBody(BaseModel):
+    note: str = Field(..., min_length=5, max_length=300,
+                      description="What the broker's order book showed")
+
+
+@router.post("/control/reconcile/{internal_id}/resolve")
+async def reconcile_resolve(internal_id: str, body: ResolveBody,
+                            user: DashboardUser = Depends(require_admin)) -> dict:
+    if not re.match(r"^[A-Za-z0-9\-]{8,64}$", internal_id):
+        raise HTTPException(422, "Not an internal order id")
+    journal = _journal()
+    blockers = await asyncio.to_thread(journal.entry_blockers)
+    if internal_id not in {b.get("internal_id") for b in blockers}:
+        raise HTTPException(404, "No unresolved placement with that id today")
+    ok = await asyncio.to_thread(journal.resolve, internal_id, by=user.email, note=body.note)
+    if not ok:
+        raise HTTPException(500, "The order journal could not be written")
+    await _notify_audit(user, f"✅ Placement {internal_id[:12]} resolved: {body.note}")
+    return {"ok": True, "blockers": await asyncio.to_thread(journal.entry_blockers)}
+
+
+# ── Market analysis ──────────────────────────────────────────────────────────
+
+_MARKER_PATTERNS = frozenset({
+    "bullish_engulfing", "bearish_engulfing", "hammer", "shooting_star", "inverted_hammer",
+    "morning_star", "evening_star", "breakout_up", "breakout_down", "breakout_retest",
+    "failed_breakout_up", "failed_breakout_down", "support_rejection", "resistance_rejection",
+})
+_INTERVAL_S = {"1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "60m": 3600,
+               "1h": 3600, "1d": 86400, "1wk": 604800}
+
+
+def _analysis(candles: list[dict], interval: str, source: str) -> dict:
+    from skopaq.market import indicators as ind
+    from skopaq.market.candles import Candle
+    from skopaq.market.patterns import detect
+    from skopaq.market.quality import check_series
+    from skopaq.market.regime import classify
+
+    bars = [Candle(datetime.fromtimestamp(int(c["t"]), _IST), float(c["o"]), float(c["h"]),
+                   float(c["l"]), float(c["c"]),
+                   int(c["v"]) if c.get("v") is not None else None)
+            for c in candles if all(c.get(k) is not None for k in ("t", "o", "h", "l", "c"))]
+    if not bars:
+        return {"bars": 0}
+    closes = [b.close for b in bars]
+    ema9, ema21 = ind.ema_series(closes, 9), ind.ema_series(closes, 21)
+    step = _INTERVAL_S.get(interval, 86400)
+    rsi = [ind.rsi(closes[:i + 1]) for i in range(len(closes))]
+    atr = [ind.atr(bars[max(0, i - 60):i + 1]) for i in range(len(bars))]
+    patterns = []
+    for i in range(max(1, len(bars) - 120), len(bars)):     # markers for recent bars
+        prior = bars[:i]
+        lv = ind.support_resistance(prior) if len(prior) >= 5 else ind.Levels(None, None)
+        res = detect(bars[:i + 1], support=lv.support, resistance=lv.resistance)
+        # Chart markers: the reversal / breakout patterns only (inside bars, dojis and
+        # plain pin bars are on most bars and would bury the chart)
+        strong = [p.name for p in res.patterns if p.name in _MARKER_PATTERNS]
+        if strong:
+            patterns.append({"t": int(bars[i].start.timestamp()), "bias": res.bias,
+                             "names": strong})
+    # Daily bars are not checked for intraday staleness: only their validity/order
+    quality = check_series(bars, step, bars[-1].start + timedelta(seconds=step),
+                           max_missing=10 ** 6 if step >= 86400 else 3)
+    snap = ind.snapshot(bars)
+    return {
+        "bars": len(bars), "interval": interval, "source": source,
+        "last_bar": bars[-1].start.isoformat(),
+        "overlays": [{"t": int(b.start.timestamp()), "ema9": ema9[i] if i >= 8 else None,
+                      "ema21": ema21[i] if i >= 20 else None, "rsi": rsi[i], "atr": atr[i]}
+                     for i, b in enumerate(bars)],
+        "patterns": patterns[-40:],
+        "indicators": snap.as_dict() if snap else {},
+        "regime": classify(bars, data_ok=quality.ok).as_dict(),
+        "data_quality": quality.as_dict(),
+    }
+
+
+@router.get("/market/analysis")
+async def market_analysis(symbol: str = Query(..., min_length=1, max_length=40),
+                          range: str = "3mo") -> dict:  # noqa: A002
+    """Deterministic analysis of the chart's candles. Evidence only: no signal, no order."""
+    from skopaq.broker import live_quotes, yahoo_quotes
+
+    if range not in yahoo_quotes.RANGES:
+        raise HTTPException(422, f"range must be one of {', '.join(yahoo_quotes.RANGES)}")
+    try:
+        data = await live_quotes.get_history(symbol, range)
+    except ValueError as exc:
+        raise HTTPException(422, "Unknown symbol or range") from exc
+    except Exception as exc:
+        logger.warning("analysis history of %s failed: %s", symbol, exc)
+        raise HTTPException(502, "Price history unavailable") from exc
+    if not data.get("candles"):
+        raise HTTPException(404, f"No price history for {symbol}")
+    source = data.get("source") or "unknown"
+    label = "live" if source == "indstocks" else "delayed"
+    out = await asyncio.to_thread(_analysis, data["candles"],
+                                  str(data.get("interval") or "1d"), label)
+    return _finite({"symbol": data.get("symbol", symbol), "provider": source, **out})
+
+
+# ── Learning models ──────────────────────────────────────────────────────────
+
+
+def _registry():
+    from skopaq.db.mirror import mirror_from_config
+    from skopaq.learning.registry import ModelRegistry, model_dir
+
+    config = SkopaqConfig()
+    reg = ModelRegistry(model_dir(config))
+    try:
+        reg.mirror = mirror_from_config(config)
+    except Exception:
+        reg.mirror = None
+    return reg
+
+
+@router.get("/learning/models")
+async def learning_models() -> dict:
+    from skopaq.learning.registry import Gates
+
+    reg = _registry()
+
+    def read() -> dict:
+        champ, shadow = reg.champion(), reg.shadow()
+        for m in (champ, shadow):
+            if m:
+                m.pop("model", None)
+        gates = Gates()
+        return {"champion": champ, "shadow": shadow, "versions": reg.versions(),
+                "history": list(reversed(reg.history(50))),
+                "gates": gates.__dict__, "directory": str(reg.dir)}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+class PromoteBody(BaseModel):
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
+@router.post("/learning/models/{version}/promote")
+async def learning_promote(version: str, body: PromoteBody,
+                           user: DashboardUser = Depends(require_admin)) -> dict:
+    if not re.match(r"^[A-Za-z0-9_\-]{3,80}$", version):
+        raise HTTPException(422, "Not a model version")
+    reg = _registry()
+    try:
+        entry = await asyncio.to_thread(reg.promote, version, approved_by=user.email,
+                                        reason=body.reason)
+    except KeyError:
+        raise HTTPException(404, "No such model version") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🧠 Model {version} promoted to champion: {body.reason}")
+    entry.pop("model", None)
+    return _finite({"ok": True, "champion": entry})
+
+
+@router.post("/learning/rollback")
+async def learning_rollback(body: PromoteBody,
+                            user: DashboardUser = Depends(require_admin)) -> dict:
+    reg = _registry()
+    to = await asyncio.to_thread(reg.rollback, by=user.email, reason=body.reason)
+    await _notify_audit(user, f"↩️ Model rollback to {to or 'none (rules only)'}: "
+                              f"{body.reason}")
+    return {"ok": True, "champion": to}
+
+
+# ── Order lifecycle ──────────────────────────────────────────────────────────
+
+
+@router.get("/control/lifecycle")
+async def order_lifecycle() -> dict:
+    from skopaq.execution.order_lifecycle import lifecycles
+
+    journal = _journal()
+    rows = await asyncio.to_thread(lambda: [lc.as_dict() for lc in lifecycles(journal.entries())])
+    open_rows = [r for r in rows if not r["terminal"]]
+    return {"orders": list(reversed(rows)), "open": len(open_rows),
+            "anomalies": sum(len(r["anomalies"]) for r in rows)}
+
+
+# ── Charges reconciliation ───────────────────────────────────────────────────
+
+
+class ContractNoteBody(BaseModel):
+    csv: str = Field(..., min_length=10, max_length=2_000_000)
+    days: int = Field(7, ge=1, le=60)
+
+
+@router.post("/finance/contract-note")
+async def contract_note(body: ContractNoteBody,
+                        user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.finance.reconcile import (
+        estimates_from_signals,
+        parse_contract_note_csv,
+        reconcile,
+        save_report,
+    )
+    from skopaq.strategy.journal import SignalJournal
+
+    try:
+        notes = parse_contract_note_csv(body.csv)
+    except ValueError as exc:
+        raise HTTPException(422, f"Contract note not read: {exc}") from exc
+    journal = SignalJournal.from_config(SkopaqConfig())
+    today = datetime.now(_IST).date()
+    days = sorted(today - timedelta(days=i) for i in range(body.days))
+    signals = await asyncio.to_thread(journal.signals, days)
+    report = reconcile(notes, estimates_from_signals(signals))
+    path = await asyncio.to_thread(save_report, report, by=user.email)
+    await _notify_audit(user, f"🧾 Contract note reconciled: {len(notes)} row(s), "
+                              f"{len(report.discrepancies)} discrepancy(ies)")
+    return _finite({"rows": len(notes), "saved": path.name, **report.as_dict()})
+
+
+@router.get("/finance/reconciliation")
+async def reconciliation_reports() -> dict:
+    from skopaq.finance.reconcile import saved_reports
+
+    return _finite({"reports": await asyncio.to_thread(saved_reports)})
+
+
+# ── Drift and regime map ─────────────────────────────────────────────────────
+
+
+@router.get("/learning/drift")
+async def learning_drift(days: int = Query(5, ge=1, le=60)) -> dict:
+    """Champion's training features vs the last ``days`` of live/paper signals (PSI)."""
+    from skopaq.learning.monitor import drift_now
+
+    return _finite(await asyncio.to_thread(drift_now, SkopaqConfig(), days))
+
+
+@router.get("/learning/regimes")
+async def learning_regimes() -> dict:
+    from skopaq.learning.registry import model_dir
+    from skopaq.strategy.selector import RegimeMapStore
+
+    store = RegimeMapStore(model_dir(SkopaqConfig()))
+    return _finite({"approved": store.approved(), "candidate": store.candidate()})
+
+
+@router.post("/learning/regimes/approve")
+async def learning_regimes_approve(body: PromoteBody,
+                                   user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.learning.registry import model_dir
+    from skopaq.strategy.selector import RegimeMapStore
+
+    store = RegimeMapStore(model_dir(SkopaqConfig()))
+    try:
+        entry = await asyncio.to_thread(store.approve, by=user.email, reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🗺️ Regime map {entry['version']} approved: {body.reason}")
+    entry.pop("previous", None)
+    return _finite({"ok": True, "approved": entry})
+
+
+@router.post("/learning/regimes/rollback")
+async def learning_regimes_rollback(body: PromoteBody,
+                                    user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.learning.registry import model_dir
+    from skopaq.strategy.selector import RegimeMapStore
+
+    store = RegimeMapStore(model_dir(SkopaqConfig()))
+    previous = await asyncio.to_thread(store.rollback)
+    await _notify_audit(user, f"↩️ Regime map rolled back: {body.reason}")
+    return {"ok": True, "approved": (previous or {}).get("version")}
+
+
+# ── Adaptive AI (FreqAI-style) ───────────────────────────────────────────────
+
+
+@router.get("/learning/adaptive")
+async def learning_adaptive() -> dict:
+    from skopaq.adaptive.hyperopt import ParamsStore
+    from skopaq.adaptive.retrain import config_from, read_state
+    from skopaq.learning.registry import model_dir
+
+    config = SkopaqConfig()
+    reg = _registry()
+
+    def read() -> dict:
+        versions = [v for v in reg.versions()
+                    if str(v.get("strategy_id", "")).startswith("adaptive.")]
+        store = ParamsStore(model_dir(config))
+        approved = store.approved()
+        if approved:
+            approved.pop("previous", None)
+        from pathlib import Path as _P
+
+        from skopaq.adaptive import artifacts
+        from skopaq.adaptive.models import KINDS, available
+
+        bundles = []
+        root = _P(reg.dir) / "artifacts"
+        for d in sorted(root.glob("*"), key=lambda x: x.stat().st_mtime,
+                        reverse=True)[:10] if root.is_dir() else []:
+            try:
+                m = artifacts.verify(d)
+                info = __import__("json").loads((d / "bundle.json").read_text())
+                bundles.append({"version": d.name, "ok": True, "files": len(m["files"]),
+                                "bytes": sum(f["bytes"] for f in m["files"].values()),
+                                "libraries": m.get("libraries"), "created_at": m["created_at"],
+                                "strategy": info["strategy"]["name"],
+                                "model": next(iter(info["models"].values()))["meta"]["kind"],
+                                "task": info["task"], "targets": info["targets"],
+                                "rule": info["rule"], "pipeline": info["pipeline"],
+                                "importance": info.get("importance", [])[:8],
+                                "features": len(info["features"]),
+                                "continued_from": (info.get("continual") or {}).get("parent")})
+            except artifacts.IntegrityError as exc:
+                bundles.append({"version": d.name, "ok": False, "error": str(exc)})
+            except Exception as exc:
+                bundles.append({"version": d.name, "ok": False, "error": str(exc)[:200]})
+        return {"enabled": bool(config.adaptive_auto_retrain),
+                "bundles": bundles,
+                "model_kinds": {k: available(k) for k in KINDS},
+                "strategy": config.adaptive_strategy or "built-in default",
+                "retrain_hours": config.adaptive_retrain_hours,
+                "config": config_from(config).as_dict(),
+                "state": read_state(reg.dir), "versions": list(reversed(versions))[:10],
+                "params": {"approved": approved, "candidate": store.candidate()}}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+@router.post("/learning/params/approve")
+async def learning_params_approve(body: PromoteBody,
+                                  user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.hyperopt import ParamsStore
+    from skopaq.learning.registry import model_dir
+
+    try:
+        entry = await asyncio.to_thread(ParamsStore(model_dir(SkopaqConfig())).approve,
+                                        by=user.email, reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🎚️ Strategy parameters {entry['version']} approved: "
+                              f"{body.reason} (from the next session)")
+    entry.pop("previous", None)
+    return _finite({"ok": True, "approved": entry})
+
+
+@router.post("/learning/params/rollback")
+async def learning_params_rollback(body: PromoteBody,
+                                   user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.hyperopt import ParamsStore
+    from skopaq.learning.registry import model_dir
+
+    prev = await asyncio.to_thread(ParamsStore(model_dir(SkopaqConfig())).rollback)
+    await _notify_audit(user, f"↩️ Strategy parameters rolled back: {body.reason}")
+    return {"ok": True, "approved": (prev or {}).get("version")}
+
+
+# ── Reinforcement learning (PPO / A2C / DQN) ─────────────────────────────────
+
+
+def _rl_registry():
+    from skopaq.adaptive.rl_agents import rl_registry
+    from skopaq.learning.registry import model_dir
+
+    return rl_registry(model_dir(SkopaqConfig()))
+
+
+@router.get("/learning/rl")
+async def learning_rl() -> dict:
+    from skopaq.adaptive.rl_agents import ALGOS, RL_GATES, torch_available
+
+    config = SkopaqConfig()
+    reg = _rl_registry()
+
+    def read() -> dict:
+        champ, shadow = reg.champion(), reg.shadow()
+        live_ok = bool(config.rl_allow_live) and champ is not None
+        active = (champ or (shadow if config.rl_paper_use_shadow else None))
+        versions = []
+        for v in reversed(reg.versions()[-15:]):
+            rep = v.get("report") or {}
+            versions.append({"version": v["version"], "state": v["state"],
+                             "created_at": v.get("created_at"), "algo": rep.get("algo"),
+                             "model": rep.get("model"), "baseline": rep.get("baseline"),
+                             "test_sessions": rep.get("test_sessions"),
+                             "train_sessions": rep.get("train_sessions"),
+                             "exits": rep.get("exits"), "actions": rep.get("actions"),
+                             "continued_from": (rep.get("continual") or {}).get("parent"),
+                             "gate_failures": v.get("gate_failures") or [],
+                             "shadow_since": v.get("shadow_since"),
+                             "approved_by": v.get("approved_by")})
+        strategies = [s.strip().lower() for s in str(config.scalp_strategies).split(",")]
+        return {"enabled": bool(config.rl_enabled),
+                "in_scalp_strategies": "rl_policy" in strategies,
+                "allow_live": bool(config.rl_allow_live),
+                "paper_use_shadow": bool(config.rl_paper_use_shadow),
+                "torch": torch_available(), "algos": list(ALGOS), "algo": config.rl_algo,
+                "paper_policy": active["version"] if active else None,
+                "live_policy": champ["version"] if live_ok else None,
+                "champion": champ["version"] if champ else None,
+                "shadow": shadow["version"] if shadow else None,
+                "shadow_days": RL_GATES.shadow_days, "versions": versions,
+                "history": list(reversed(reg.history(30)))}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+@router.post("/learning/rl/{version}/promote")
+async def learning_rl_promote(version: str, body: PromoteBody,
+                              user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.rl_agents import RL_GATES
+
+    if not re.match(r"^[A-Za-z0-9_\-]{3,80}$", version):
+        raise HTTPException(422, "Not a policy version")
+    reg = _rl_registry()
+    try:
+        await asyncio.to_thread(reg.promote, version, approved_by=user.email,
+                                reason=body.reason, gates=RL_GATES)
+    except KeyError:
+        raise HTTPException(404, "No such RL policy") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🤖 RL policy {version} promoted to champion: {body.reason} "
+                              "(live only with SKOPAQ_RL_ALLOW_LIVE, from the next session)")
+    return {"ok": True, "champion": version}
+
+
+@router.post("/learning/rl/rollback")
+async def learning_rl_rollback(body: PromoteBody,
+                               user: DashboardUser = Depends(require_admin)) -> dict:
+    to = await asyncio.to_thread(_rl_registry().rollback, by=user.email, reason=body.reason)
+    await _notify_audit(user, f"↩️ RL policy rollback to {to or 'none'}: {body.reason}")
+    return {"ok": True, "champion": to}
+
+
+# ── Your strategy (no-code specs) ────────────────────────────────────────────
+
+
+def _strategy_store():
+    from skopaq.adaptive.spec import StrategyStore
+    from skopaq.learning.registry import model_dir
+
+    return StrategyStore(model_dir(SkopaqConfig()))
+
+
+@router.get("/learning/strategies")
+async def learning_strategies() -> dict:
+    from skopaq.adaptive.spec import ENTRY_TYPES, FEATURES, TARGETS, TIMEFRAMES
+
+    config = SkopaqConfig()
+    store = _strategy_store()
+
+    def read() -> dict:
+        sel = store.active()
+        code = str(config.adaptive_strategy or "")
+        if sel is None:
+            in_use = {"kind": "env" if code else "default"}
+        else:
+            in_use = {k: sel.get(k) for k in ("kind", "name", "set_by", "at", "reason")}
+        return {"in_use": in_use, "selected": sel is not None,
+                "env_strategy": code.rpartition(":")[2] if code else "",
+                "continual": {"adaptive": bool(config.adaptive_continual_learning),
+                              "rl": bool(config.rl_continual_learning)},
+                "specs": store.list(), "history": list(reversed(store.history(30))),
+                "catalog": {"features": {k: {"kind": v[0], "about": v[1]}
+                                         for k, v in FEATURES.items()},
+                            "targets": {k: {"task": v[0], "about": v[1]}
+                                        for k, v in TARGETS.items()},
+                            "entry_types": list(ENTRY_TYPES), "timeframes": list(TIMEFRAMES)}}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+class StrategyBody(BaseModel):
+    spec: dict
+
+
+@router.post("/learning/strategies")
+async def learning_strategy_save(body: StrategyBody,
+                                 user: DashboardUser = Depends(require_admin)) -> dict:
+    """Validate (fixed indicator list, look-ahead guard) and save a no-code strategy."""
+    from skopaq.adaptive.spec import SpecError
+    from skopaq.adaptive.strategy import LookAheadError
+
+    if len(json.dumps(body.spec)) > 8000:
+        raise HTTPException(413, "Strategy too large")
+    try:
+        entry = await asyncio.to_thread(_strategy_store().save, body.spec, by=user.email)
+    except (SpecError, LookAheadError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await _notify_audit(user, f"🧩 Strategy {entry['spec']['name']} saved "
+                              f"(revision {entry['revision']})")
+    return {"ok": True, "strategy": entry}
+
+
+class ActivateBody(BaseModel):
+    choice: str = Field(..., min_length=3, max_length=60)
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
+@router.post("/learning/strategies/activate")
+async def learning_strategy_activate(body: ActivateBody,
+                                     user: DashboardUser = Depends(require_admin)) -> dict:
+    """Which strategy the next training uses: ``default``, ``env`` or a saved spec."""
+    if body.choice == "env" and not SkopaqConfig().adaptive_strategy:
+        raise HTTPException(409, "No code strategy is set in .env (SKOPAQ_ADAPTIVE_STRATEGY)")
+    try:
+        sel = await asyncio.to_thread(_strategy_store().activate, body.choice,
+                                      by=user.email, reason=body.reason)
+    except KeyError:
+        raise HTTPException(404, "No such strategy") from None
+    await _notify_audit(user, f"🧩 Training strategy set to {sel.get('name') or sel['kind']}: "
+                              f"{body.reason} (models trained with it are candidates)")
+    return {"ok": True, "in_use": sel}
+
+
+@router.delete("/learning/strategies/{name}")
+async def learning_strategy_delete(name: str,
+                                   user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.spec import SpecError
+
+    try:
+        await asyncio.to_thread(_strategy_store().delete, name, by=user.email)
+    except KeyError:
+        raise HTTPException(404, "No such strategy") from None
+    except SpecError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🧩 Strategy {name} deleted")
+    return {"ok": True}

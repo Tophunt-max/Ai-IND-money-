@@ -1,9 +1,9 @@
 "use client";
 
-import { CandlestickChart, LineChart } from "lucide-react";
+import { Activity, CandlestickChart, LineChart } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import CandleChart, { type Candle } from "@/components/CandleChart";
+import CandleChart, { type Candle, type Level, type Marker, type Overlay } from "@/components/CandleChart";
 import Chart from "@/components/Chart";
 import { ErrorBox, Segmented, Skeleton } from "@/components/ui";
 import { inr } from "@/lib/api";
@@ -35,6 +35,23 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
     every,
   );
   const ago = useAgo(updatedAt);
+  // Indicator overlays, pattern markers and the latest signal's levels (evidence only)
+  const [studies, setStudies] = useState(true);
+  const isIdx = symbol.startsWith("^");
+  const analysis = useApi<{ overlays: Overlay[]; patterns: Marker[] }>(
+    studies && symbol && !isIdx ? `/api/dashboard/market/analysis?symbol=${encodeURIComponent(symbol)}&range=${range}` : null,
+    every * 2,
+  );
+  const sig = useApi<{ signals: { status: string; entry: number; stop: number; target: number; decided_at: string }[] }>(
+    studies && symbol && !isIdx ? `/api/dashboard/signals?days=1&limit=20&symbol=${encodeURIComponent(symbol)}` : null,
+    60000,
+  );
+  const latest = sig.data?.signals?.[0];
+  const levels: Level[] = latest ? [
+    { label: `${latest.status === "QUALIFIED" ? "Entry" : "Rejected entry"}`, price: latest.entry, tone: "entry" },
+    { label: "Stop", price: latest.stop, tone: "stop" },
+    { label: "Target", price: latest.target, tone: "target" },
+  ] : [];
   const live = data?.source === "indstocks";
   useEffect(() => setFast(live), [live]);
   const intraday = INTRADAY.has(range);
@@ -58,6 +75,12 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
             <span className={`h-1.5 w-1.5 rounded-full ${open ? "animate-pulse bg-emerald-400" : "bg-gray-600"}`} />
             {open ? (data?.live ? "Live" : "Auto") : "Market closed"} · {live ? "INDstocks" : data ? "Yahoo (delayed)" : ""} · {ago}
           </span>
+          {!isIdx && (
+            <button type="button" onClick={() => setStudies(!studies)} title="EMA 9/21, candle patterns, signal levels"
+              className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition ${studies ? "bg-brand-500/15 text-brand-200 ring-brand-500/30" : "text-gray-400 ring-white/10"}`}>
+              <Activity className="h-3.5 w-3.5" /> Studies
+            </button>
+          )}
           <Segmented size="sm" value={kind} onChange={setKind} options={[
             { value: "candle", label: <CandlestickChart className="h-4 w-4" aria-label="Candles" /> },
             { value: "line", label: <LineChart className="h-4 w-4" aria-label="Line" /> },
@@ -68,7 +91,21 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
       {loading && !data ? (
         <Skeleton className="h-80 w-full" />
       ) : data && kind === "candle" ? (
-        <CandleChart candles={data.candles} format={format} timeLabel={timeLabel} live={!!data.live} />
+        <>
+          <CandleChart candles={data.candles} format={format} timeLabel={timeLabel} live={!!data.live}
+            overlays={studies ? analysis.data?.overlays : undefined}
+            markers={studies ? analysis.data?.patterns : undefined}
+            levels={studies ? levels : undefined} />
+          {studies && !isIdx && (
+            <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-gray-500">
+              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded bg-amber-400" /> EMA 9</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded bg-violet-400" /> EMA 21</span>
+              <span>triangles: candle patterns (green bullish, red bearish)</span>
+              {latest ? <span>levels: today&apos;s latest signal ({latest.status})</span> : <span>no signal today</span>}
+              {analysis.error && <span className="text-amber-300">studies unavailable</span>}
+            </div>
+          )}
+        </>
       ) : data ? (
         <Chart points={data.candles.map((c) => ({ t: c.t, v: c.c }))} height={300} format={format} timeLabel={timeLabel} />
       ) : null}
