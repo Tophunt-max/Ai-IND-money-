@@ -1,12 +1,12 @@
 "use client";
 
-import { ArrowRight, Radar, Play, Activity } from "lucide-react";
+import { ArrowRight, Radar, Play, Activity, Inbox } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
 import { useAuth } from "@/components/AuthGate";
 import { Badge, Button, Card, Empty, ErrorBox, Field, KV, Notice, PageTitle, Progress, Select } from "@/components/ui";
-import { when } from "@/lib/api";
+import { api, when } from "@/lib/api";
 import { useApi, useJob } from "@/lib/hooks";
 
 interface Candidate {
@@ -60,13 +60,28 @@ export default function ScannerPage() {
   const { isAdmin } = useAuth();
   const { job, error, running, start } = useJob();
   const bg = useApi<ScannerStatus>("/api/dashboard/scanner/status", 30000);
+  const [queue, setQueue] = useState<Candidate[] | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
+  const pull = async () => {
+    if (!confirm("Take the queued candidates? The trading session will not see them.")) return;
+    setPulling(true);
+    setPullError(null);
+    try {
+      setQueue((await api<{ candidates: Candidate[] }>("/api/scanner/candidates")).candidates || []);
+    } catch (e: any) {
+      setPullError(e.message);
+    } finally {
+      setPulling(false);
+    }
+  };
   const candidates: Candidate[] = job?.status === "done" ? job.result?.candidates || [] : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Market scanner" icon={Radar} subtitle="AI screens the NIFTY 50 watchlist for trade candidates. Nothing is bought." />
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid gap-3 lg:grid-cols-3">
         <Card title="Run a scan" icon={Play} className="lg:col-span-2">
           <p className="mb-4 text-sm text-gray-400">
             Needs live quotes, so it finds nothing until an INDstocks token is set (Broker page).
@@ -110,6 +125,16 @@ export default function ScannerPage() {
           {candidates.length === 0
             ? <Empty icon={Radar}>No candidates this time (without an INDstocks token there are no quotes to screen).</Empty>
             : <CandidateList items={candidates} />}
+        </Card>
+      )}
+
+      {isAdmin && bg.data?.running && (
+        <Card title="Live candidate queue" icon={Inbox}
+          subtitle="Candidates the background scanner queued for the trading session. Taking them removes them from the queue, so the session will not see them."
+          right={<Button size="sm" variant="ghost" loading={pulling} onClick={pull}>Take queue</Button>}>
+          <ErrorBox error={pullError} />
+          {queue === null ? <p className="text-xs text-gray-500">Not read yet.</p>
+            : queue.length === 0 ? <Empty icon={Inbox}>The queue was empty.</Empty> : <CandidateList items={queue} />}
         </Card>
       )}
 

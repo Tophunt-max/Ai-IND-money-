@@ -64,11 +64,11 @@ function Analyze() {
   const stage = [...STAGES].reverse().find((s) => elapsed >= s.at) || STAGES[0];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Analyze a stock" icon={Brain}
         subtitle="15 AI agents: analysts → bull/bear debate → trader → risk team. 2–5 minutes." />
 
-      <div className="surface relative overflow-hidden p-6">
+      <div className="surface relative overflow-hidden p-3 sm:p-5">
         <div className="absolute -left-10 -top-24 h-64 w-64 rounded-full bg-brand-500/15 blur-3xl" />
         <div className="relative space-y-4">
           <Segmented value={trade ? "trade" : "analyze"} onChange={(v) => setTrade(v === "trade")} options={[

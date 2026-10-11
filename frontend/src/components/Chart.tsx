@@ -56,7 +56,7 @@ export default function Chart({
   const base = baseline ?? points[0].v;
   const last = points[points.length - 1].v;
   const up = last >= base;
-  const stroke = up ? "#34d399" : "#fb7185";
+  const stroke = up ? "#0ecb81" : "#f6465d";
   const gid = up ? "chart-up" : "chart-down";
 
   const move = (clientX: number) => {
@@ -121,7 +121,7 @@ export default function Chart({
               x1={geo.x(hover)} x2={geo.x(hover)} y1={pad.t} y2={H - pad.b}
               stroke="rgba(255,255,255,0.25)" strokeWidth="1" vectorEffect="non-scaling-stroke"
             />
-            <circle cx={geo.x(hover)} cy={geo.y(h.v)} r="4.5" fill={stroke} stroke="#05070d" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+            <circle cx={geo.x(hover)} cy={geo.y(h.v)} r="4.5" fill={stroke} stroke="#0b0e11" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </>
         )}
       </svg>

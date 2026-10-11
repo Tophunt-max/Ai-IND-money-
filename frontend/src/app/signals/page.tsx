@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useAuth } from "@/components/AuthGate";
 import ChargesReconcile from "@/components/ChargesReconcile";
 import OrderLifecycle from "@/components/OrderLifecycle";
+import { BarChart, Donut, DOWN, UP } from "@/components/charts";
 import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Segmented, Skeleton, StatCard, Table } from "@/components/ui";
 import { api, ApiError, inr, pct, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -147,9 +148,26 @@ export default function SignalsPage() {
   const s = useApi<Signals>(path, 15000);
   const ago = useAgo(s.updatedAt);
   const counts = s.data?.counts || {};
+  // Candidates per hour of the session (IST)
+  const hours = (() => {
+    const m = new Map<number, number>();
+    (s.data?.signals || []).forEach((r) => {
+      const h = Number(new Date(r.decided_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", hour12: false }));
+      if (Number.isFinite(h)) m.set(h, (m.get(h) || 0) + 1);
+    });
+    return Array.from({ length: 7 }, (_, i) => i + 9).map((h) => ({ label: `${h}:00`, v: m.get(h) || 0, tone: "accent" as const }));
+  })();
+  const reasons = (() => {
+    const m = new Map<string, number>();
+    (s.data?.signals || []).forEach((r) => r.reasons.forEach((x) => {
+      const k = x.split(/[:(0-9]/)[0].trim().slice(0, 28) || x.slice(0, 28);
+      m.set(k, (m.get(k) || 0) + 1);
+    }));
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  })();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Signals & risk" icon={Signal}
         subtitle="Every setup the strategies found, the evidence they saw, and why each was traded or skipped"
         right={s.data && <Badge tone={s.data.mode === "live" ? "error" : "info"}>{s.data.mode === "live" ? "LIVE" : "PAPER"}</Badge>} />
@@ -161,8 +179,32 @@ export default function SignalsPage() {
         <StatCard title="Updated" value={<span className="text-sm">{ago}</span>} detail="every 15 s" />
       </div>
 
+      {(s.data?.signals.length ?? 0) > 0 && (
+        <div className="grid gap-3 lg:grid-cols-3">
+          <Card title="Decisions">
+            <Donut slices={[{ label: "Qualified", v: counts.QUALIFIED ?? 0, color: UP }, { label: "Rejected", v: counts.REJECTED ?? 0, color: DOWN },
+              { label: "Expired", v: counts.EXPIRED ?? 0, color: "#fbbf24" }]} />
+          </Card>
+          <Card title="Candidates by hour" subtitle="IST, in the selected period">
+            <BarChart bars={hours} height={120} zeroLine={false} format={(v) => `${v}`} labelEvery={1} />
+          </Card>
+          <Card title="Top rejection reasons">
+            {reasons.length === 0 ? <Empty>None.</Empty> : (
+              <ul className="space-y-1.5 text-xs">
+                {reasons.map(([k, v]) => (
+                  <li key={k}>
+                    <div className="flex justify-between gap-2"><span className="truncate text-gray-300">{k}</span><span className="num text-gray-400">{v}</span></div>
+                    <div className="mt-0.5 h-1 rounded-full bg-white/[0.05]"><div className="h-full rounded-full bg-rose-400/70" style={{ width: `${(v / reasons[0][1]) * 100}%` }} /></div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
       {/* min-w-0: a wide table scrolls inside its card instead of widening the page */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <div className="min-w-0"><Reconcile /></div>
         <div className="min-w-0"><RiskCard /></div>
       </div>

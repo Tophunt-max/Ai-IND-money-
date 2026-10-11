@@ -59,7 +59,7 @@ function Account() {
   return (
     <Card title="Account" icon={User} right={<Badge tone={isAdmin ? "ok" : "neutral"}>{user.role.toUpperCase()}</Badge>}>
       <div className="mb-5 flex items-center gap-4">
-        <div className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-brand-500 to-cyan-400 text-lg font-semibold uppercase text-white">
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-brand-500 text-lg font-semibold uppercase text-white">
           {(user.name || user.email).slice(0, 1)}
         </div>
         <div className="min-w-0">
@@ -161,7 +161,7 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Settings" icon={Settings} subtitle="Account, safety and connections" />
 
       <ModeSwitch />
@@ -192,7 +192,7 @@ export default function SettingsPage() {
         )}
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-2">
         <Account />
         <div className="space-y-5">
           <Card title="Connections" icon={Server}>

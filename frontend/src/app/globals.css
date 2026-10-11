@@ -8,47 +8,63 @@
   }
   html {
     -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
   }
   body {
     @apply bg-ink-950 text-gray-100 antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11", "tnum";
-    background-image:
-      radial-gradient(60rem 30rem at 10% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
-      radial-gradient(50rem 25rem at 100% 0%, rgba(16, 185, 129, 0.07), transparent 60%);
-    background-attachment: fixed;
+    overscroll-behavior-y: none;
   }
   ::selection {
     @apply bg-brand-500/40 text-white;
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: #283049 transparent;
+    scrollbar-color: #353c47 transparent;
   }
   *::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
   *::-webkit-scrollbar-thumb {
     @apply rounded-full bg-ink-600;
   }
+  input, select, textarea {
+    font-size: 16px; /* no iOS zoom on focus */
+  }
+  @media (min-width: 640px) {
+    input, select, textarea { font-size: 14px; }
+  }
 }
 
 @layer components {
+  /* A terminal panel: flat, hairline border */
   .surface {
-    @apply rounded-2xl border border-white/[0.06] bg-ink-900/70 shadow-card backdrop-blur-xl;
+    @apply rounded-xl border border-white/[0.06] bg-ink-900 shadow-card;
   }
   .field {
-    @apply w-full rounded-xl border border-white/[0.08] bg-ink-850 px-3.5 py-2.5 text-sm text-gray-100
+    @apply w-full rounded-lg border border-white/[0.08] bg-ink-850 px-3 py-2 text-sm text-gray-100
       placeholder:text-gray-500 outline-none transition
-      focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/20;
+      focus:border-brand-500/70 focus:ring-1 focus:ring-brand-500/40;
   }
   .label {
-    @apply mb-1.5 block text-xs font-medium text-gray-400;
+    @apply mb-1 block text-[11px] font-medium uppercase tracking-wide text-gray-500;
   }
   .link {
-    @apply text-brand-300 hover:text-brand-400 transition-colors;
+    @apply text-brand-300 hover:text-brand-200 transition-colors;
   }
+  /* Prices and quantities: monospace, tabular */
   .num {
+    @apply font-mono;
     font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .up { @apply text-emerald-400; }
+  .down { @apply text-rose-400; }
 }

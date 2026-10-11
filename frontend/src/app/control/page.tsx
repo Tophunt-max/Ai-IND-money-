@@ -193,7 +193,7 @@ export default function ControlPage() {
   const engineTone = c?.halt.halted ? "warning" : c?.active ? "ok" : "neutral";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Control center" icon={Gauge}
         subtitle="Run the auto-trading engine: pause, start, stop, close positions, change stops and targets, place orders"
         right={<div className="flex items-center gap-2">
@@ -416,8 +416,13 @@ function OrderCard({ live, active, busy, act }: {
   live: boolean; active: boolean; busy: string | null;
   act: (key: string, path: string, body?: unknown, done?: string) => Promise<any>;
 }) {
-  const [symbol, setSymbol] = useState("");
-  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  // ?symbol=X&side=BUY|SELL (the market page's BUY / SELL buttons) prefills the ticket
+  const query = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const [symbol, setSymbol] = useState(() => (query?.get("symbol") || "").toUpperCase());
+  const [side, setSide] = useState<"BUY" | "SELL">(() => (query?.get("side") === "SELL" ? "SELL" : "BUY"));
+  useEffect(() => {
+    if (query?.get("symbol")) document.getElementById("order")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [qty, setQty] = useState("1");
   const [type, setType] = useState<"MARKET" | "LIMIT">("MARKET");
   const [price, setPrice] = useState("");
@@ -439,24 +444,31 @@ function OrderCard({ live, active, busy, act }: {
   };
 
   return (
-    <Card title="Manual order" icon={Send}
+    <div id="order" className="scroll-mt-16"><Card title="Manual order" icon={Send}
       subtitle="Through the same safety checks as the engine. A BUY gets an exit plan (stop, target) the monitor follows.">
       {blocked && <Notice tone="info" className="mb-4">Paper mode: orders are placed inside a running session — start one first.</Notice>}
-      <div className="flex flex-wrap items-end gap-3">
-        <Field label="Symbol" className="w-36"><input className="field uppercase" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="RELIANCE" /></Field>
-        <Field label="Side"><Segmented value={side} onChange={setSide} options={[{ value: "BUY", label: "BUY" }, { value: "SELL", label: "SELL" }]} /></Field>
-        <Field label="Quantity" className="w-28"><input className="field" inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ""))} /></Field>
-        <Field label="Type" className="w-32">
+      <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-ink-850 p-1">
+        {(["BUY", "SELL"] as const).map((s) => (
+          <button key={s} type="button" onClick={() => setSide(s)}
+            className={`rounded-md py-2 text-sm font-bold transition ${side === s ? (s === "BUY" ? "bg-emerald-500 text-ink-950" : "bg-rose-500 text-white") : "text-gray-400 hover:text-gray-200"}`}>
+            {s}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:flex lg:flex-wrap lg:items-end">
+        <Field label="Symbol" className="col-span-2 sm:col-span-1 lg:w-36"><input className="field uppercase" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="RELIANCE" /></Field>
+        <Field label="Quantity" className="lg:w-28"><input className="field num" inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ""))} /></Field>
+        <Field label="Type" className="lg:w-32">
           <Select value={type} onChange={(e) => setType(e.target.value as any)}><option>MARKET</option><option>LIMIT</option></Select>
         </Field>
-        {type === "LIMIT" && <Field label="Price" className="w-28"><input className="field" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} /></Field>}
-        {side === "BUY" && <Field label="Stop-loss (optional)" className="w-36"><input className="field" inputMode="decimal" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="hard stop" /></Field>}
-        <Button variant={side === "BUY" ? "success" : "danger"} icon={Send} loading={busy === "order"}
+        {type === "LIMIT" && <Field label="Price" className="lg:w-28"><input className="field num" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} /></Field>}
+        {side === "BUY" && <Field label="Stop-loss (optional)" className="lg:w-36"><input className="field num" inputMode="decimal" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="hard stop" /></Field>}
+        <Button variant={side === "BUY" ? "success" : "danger"} icon={Send} loading={busy === "order"} size="lg" className="col-span-2 sm:col-span-3 lg:col-span-1"
           disabled={blocked || !symbol.trim() || !parseInt(qty, 10) || (type === "LIMIT" && !price)} onClick={place}>
-          {side} {live ? "(LIVE)" : ""}
+          {side} {symbol.trim().toUpperCase() || ""} {live ? "(LIVE)" : "(paper)"}
         </Button>
       </div>
-    </Card>
+    </Card></div>
   );
 }
 

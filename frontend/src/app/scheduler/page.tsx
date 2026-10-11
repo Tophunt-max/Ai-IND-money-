@@ -31,7 +31,7 @@ export default function SchedulerPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Scheduler" icon={CalendarClock} subtitle="One autonomous session per NSE trading day"
         right={<>
           {isAdmin && <Button variant="ghost" icon={CheckCheck} loading={settle.running} onClick={runSettle}>Settle now</Button>}
@@ -44,7 +44,7 @@ export default function SchedulerPage() {
 
       {loading && !data ? <Skeleton className="h-40" /> : data?.ok ? (
         <>
-          <div className="grid gap-5 lg:grid-cols-5">
+          <div className="grid gap-3 lg:grid-cols-5">
             <Card title="Today's plan" className="lg:col-span-3"
               right={<Badge tone={!data.enabled ? "neutral" : data.mode === "live" ? "error" : "warning"} dot>
                 {data.enabled ? (data.mode || "").toUpperCase() : "DISABLED"}</Badge>}>

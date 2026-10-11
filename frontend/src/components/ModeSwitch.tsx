@@ -43,11 +43,11 @@ function LiveDialog({ broker, onCancel, onConfirm, busy, error }: {
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={busy ? undefined : onCancel} />
-      <div className="relative max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-rose-500/30 bg-ink-900 p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl animate-fade-in sm:rounded-3xl">
+      <div className="relative max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-rose-500/30 bg-ink-900 p-3 sm:p-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl animate-fade-in sm:rounded-xl">
         <button onClick={onCancel} disabled={busy} className="absolute right-4 top-4 rounded-lg p-1.5 text-gray-400 hover:bg-white/[0.06]">
           <X className="h-5 w-5" />
         </button>
-        <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-rose-500/15 ring-1 ring-rose-500/30">
+        <div className="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-rose-500/15 ring-1 ring-rose-500/30">
           <ShieldAlert className="h-6 w-6 text-rose-300" />
         </div>
         <h3 className="text-lg font-semibold text-white">Switch to LIVE trading?</h3>
@@ -56,7 +56,7 @@ function LiveDialog({ broker, onCancel, onConfirm, busy, error }: {
           next session (09:15 IST), without supervision. A session already running keeps its mode.
         </p>
 
-        <ul className="mt-5 space-y-2.5 rounded-2xl bg-white/[0.03] p-4 ring-1 ring-white/[0.06]">
+        <ul className="mt-5 space-y-2.5 rounded-xl bg-white/[0.03] p-4 ring-1 ring-white/[0.06]">
           <Check ok={token}>
             INDstocks token {token === null ? "…" : token ? "valid" : <><b>not valid</b> — <Link href="/broker" className="link">set it</Link> before 08:45</>}
           </Check>

@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, KV, Notice, PageTitle, Segmented, Select, StatCard } from "@/components/ui";
 import { api, inr, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { chainStats } from "@/lib/options";
 
 interface Contract {
   tradingsymbol: string;
@@ -72,6 +73,9 @@ const n2 = (v: number | null | undefined, d = 2) => (v == null ? "—" : Number(
 export default function OptionsPage() {
   const broker = useApi<{ indstocks: { valid: boolean } }>("/api/dashboard/broker");
   const [symbol, setSymbol] = useState("NIFTY");
+  // The real expiry dates (needs the broker token)
+  const expiries = useApi<{ expiries: string[] }>(
+    broker.data?.indstocks.valid ? `/api/dashboard/options/expiries?symbol=${symbol}` : null, 600000);
   const [expiry, setExpiry] = useState(0);
   const [strategy, setStrategy] = useState<(typeof STRATEGIES)[number]["value"]>("SHORT_PUT");
   const [chain, setChain] = useState<Chain | null>(null);
@@ -114,11 +118,19 @@ export default function OptionsPage() {
     return all.slice(Math.max(0, atm - 12), atm + 13);
   }, [chain]);
 
+  const stats = useMemo(() => (chain ? chainStats(chain.calls, chain.puts) : null), [chain]);
+  const oiMax = Math.max(1, ...rows.flatMap(([, r]) => [r.ce?.oi || 0, r.pe?.oi || 0]));
+  const atmIv = useMemo(() => {
+    if (!chain || !rows.length) return null;
+    const [, r] = rows.reduce((b, x) => (Math.abs(x[0] - chain.spot_price) < Math.abs(b[0] - chain.spot_price) ? x : b));
+    const ivs = [r.ce?.iv, r.pe?.iv].filter((v): v is number => v != null && v > 0);
+    return ivs.length ? ivs.reduce((a, b) => a + b, 0) / ivs.length : null;
+  }, [chain, rows]);
   const token = broker.data?.indstocks;
   const t = idea?.trade;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Options" icon={Layers} subtitle="INDstocks option chain with IV and Greeks, and rule-based option-selling ideas (read only, no orders)" />
 
       {token && !token.valid && (
@@ -137,7 +149,8 @@ export default function OptionsPage() {
           </Field>
           <Field label="Expiry" className="w-40">
             <Select value={expiry} onChange={(e) => setExpiry(Number(e.target.value))}>
-              {(chain?.symbol === symbol && chain.expiries?.length ? chain.expiries.slice(0, 8) : ["Nearest", "Next", "3rd", "4th"])
+              {(expiries.data?.expiries?.length ? expiries.data.expiries.slice(0, 13)
+                : chain?.symbol === symbol && chain.expiries?.length ? chain.expiries.slice(0, 8) : ["Nearest", "Next", "3rd", "4th"])
                 .map((l, i) => <option key={i} value={i}>{l}</option>)}
             </Select>
           </Field>
@@ -179,10 +192,40 @@ export default function OptionsPage() {
         )}
       </Card>
 
+      {chain && stats && (
+        <>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+            <StatCard title="Spot" value={n2(chain.spot_price)} tone="info" detail={`${chain.expiry} · lot ${chain.lot_size}`} />
+            <StatCard title="PCR (OI)" value={stats.pcr == null ? "—" : stats.pcr.toFixed(2)}
+              tone={stats.pcr == null ? "neutral" : stats.pcr > 1 ? "ok" : stats.pcr < 0.7 ? "error" : "warning"}
+              detail={stats.pcr == null ? undefined : stats.pcr > 1 ? "more put writing (support)" : "more call writing (resistance)"} />
+            <StatCard title="Max pain" value={stats.maxPain == null ? "—" : n2(stats.maxPain, 0)}
+              detail={stats.maxPain != null ? `${(((stats.maxPain - chain.spot_price) / chain.spot_price) * 100).toFixed(2)}% from spot` : undefined} />
+            <StatCard title="ATM IV" value={atmIv == null ? "—" : `${n2(atmIv, 1)}%`} detail={`OI calls ${n2(stats.callOi, 0)} · puts ${n2(stats.putOi, 0)}`} />
+          </div>
+          <Card title="Open interest by strike" subtitle="Calls (red, resistance) left · puts (green, support) right · spot and max pain marked">
+            <div className="space-y-px">
+              {rows.map(([strike, { ce, pe }]) => {
+                const atm = Math.abs(strike - chain.spot_price) === Math.min(...rows.map(([k]) => Math.abs(k - chain.spot_price)));
+                return (
+                  <div key={strike} className={`grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded px-1 py-0.5 ${atm ? "bg-brand-500/10" : ""}`}>
+                    <div className="flex h-3.5 justify-end"><div className="h-full rounded-l bg-rose-500/70" style={{ width: `${((ce?.oi || 0) / oiMax) * 100}%` }} title={`Call OI ${n2(ce?.oi, 0)}`} /></div>
+                    <div className="num w-16 text-center text-[11px] font-semibold text-gray-200">
+                      {n2(strike, 0)}{strike === stats.maxPain && <span className="ml-1 rounded bg-amber-400/20 px-0.5 text-[9px] text-amber-300" title="max pain">MP</span>}
+                    </div>
+                    <div className="flex h-3.5"><div className="h-full rounded-r bg-emerald-500/70" style={{ width: `${((pe?.oi || 0) / oiMax) * 100}%` }} title={`Put OI ${n2(pe?.oi, 0)}`} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        </>
+      )}
+
       {chain && (
         <Card title={`${chain.symbol} option chain`} subtitle={`Spot ${n2(chain.spot_price)} · expiry ${chain.expiry} · lot ${chain.lot_size} · ${when(chain.fetched_at)}`} padded>
           {rows.length === 0 ? <Empty>No contracts for this expiry.</Empty> : (
-            <div className="-mx-5 overflow-x-auto">
+            <div className="-mx-3 sm:-mx-4 overflow-x-auto">
               <table className="num w-full min-w-[860px] text-xs">
                 <thead>
                   <tr className="border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
