@@ -18,7 +18,7 @@ interface Version {
   shadow_since?: string | null;
   approved_by?: string;
   gate_failures: string[];
-  dataset: { labelled?: number; train?: number; validation?: number; test?: number; first?: string; last?: string; fingerprint?: string };
+  dataset: { labelled?: number; rows?: number; features?: number; train?: number; validation?: number; test?: number; first?: string; last?: string; fingerprint?: string };
   report: { samples?: number; threshold?: number; baseline?: Stats; model?: Stats; brier?: number | null; brier_base_rate?: number | null;
             drift_test_vs_train?: { alerts: string[] }; walk_forward?: { train: number; test: number; baseline_net: number; model_net: number | null }[] };
 }
@@ -86,7 +86,7 @@ export default function ModelRegistry() {
                   {v.gate_failures.length > 0 && <ul className="mt-1 space-y-0.5 text-left text-[11px] text-amber-300/90">{v.gate_failures.slice(0, 4).map((g, i) => <li key={i}>{g}</li>)}</ul>}
                   {!!v.report.drift_test_vs_train?.alerts.length && <div className="mt-1 text-[11px] text-rose-300">drift: {v.report.drift_test_vs_train.alerts.join(", ")}</div>}
                 </td>
-                <td className="text-xs">{v.dataset.labelled ?? "—"} rows<div className="text-gray-500">{v.dataset.train}/{v.dataset.validation}/{v.dataset.test}</div></td>
+                <td className="text-xs">{v.dataset.labelled ?? v.dataset.rows ?? "—"} rows<div className="text-gray-500">{v.dataset.train != null ? `${v.dataset.train}/${v.dataset.validation}/${v.dataset.test}` : v.dataset.features != null ? `${v.dataset.features} features` : ""}</div></td>
                 <td className="text-xs"><StatsLine s={v.report.baseline} /></td>
                 <td className="text-xs"><StatsLine s={v.report.model} />
                   {v.report.model?.expectancy_ci90 && <div className="text-gray-500">E 90% CI {v.report.model.expectancy_ci90.map((x) => x.toFixed(0)).join("…")}</div>}</td>

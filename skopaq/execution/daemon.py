@@ -346,6 +346,7 @@ class TradingDaemon:
             if not dry_run:
                 report.decisions_settled = await self._settle_due_decisions()
                 await self._check_model_drift()
+                await self._adaptive_retrain()
 
             # Clean up client session
             if self._client is not None:
@@ -678,6 +679,28 @@ class TradingDaemon:
                 logger.warning("Model drift: %s", ", ".join(res["alerts"]))
         except Exception:
             logger.debug("Drift check skipped", exc_info=True)
+
+    async def _adaptive_retrain(self) -> None:
+        """FreqAI-style periodic retraining after the session (``adaptive_auto_retrain``):
+        the new model is a candidate, shadow at best — never the champion by itself."""
+        if self._client is None:
+            return
+        try:
+            from skopaq.adaptive.retrain import retrain_due, run_retrain
+            from skopaq.db.mirror import mirror_from_config
+            from skopaq.learning.registry import ModelRegistry, model_dir
+
+            directory = model_dir(self._config)
+            if not retrain_due(self._config, directory):
+                return
+            registry = ModelRegistry(directory)
+            registry.mirror = mirror_from_config(self._config)
+            state = await asyncio.wait_for(run_retrain(self._config, self._client, registry),
+                                           timeout=900)
+            logger.info("Adaptive retrain: %s", {k: state.get(k) for k in
+                                                  ("ok", "version", "state", "error")})
+        except Exception:
+            logger.warning("Adaptive retrain skipped", exc_info=True)
 
     async def _take_session_lease(self, config: object) -> None:
         """The account's session lease (``skopaq.execution.lease``): another host's live

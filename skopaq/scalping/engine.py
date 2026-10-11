@@ -500,7 +500,9 @@ class ScalpEngine:
             entry=setup.entry, stop=setup.stop, target=setup.target, qty=qty,
             reason=setup.reason, candles=list(self.series[symbol].candles),
             holding_minutes=s.max_hold.total_seconds() / 60, htf_s=s.htf_seconds,
-            extra=extra)
+            extra=extra,
+            # Other instruments' closed candles, for an adaptive model's correlated features
+            correlated={k: list(v.candles) for k, v in self.series.items() if k != symbol})
         if not decision.qualified:
             self.report.skipped_quality += 1
             logger.info("Scalper: %s %s %s — %s", setup.strategy, symbol, decision.status,

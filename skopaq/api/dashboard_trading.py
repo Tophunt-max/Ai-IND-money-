@@ -416,3 +416,59 @@ async def learning_regimes_rollback(body: PromoteBody,
     previous = await asyncio.to_thread(store.rollback)
     await _notify_audit(user, f"↩️ Regime map rolled back: {body.reason}")
     return {"ok": True, "approved": (previous or {}).get("version")}
+
+
+# ── Adaptive AI (FreqAI-style) ───────────────────────────────────────────────
+
+
+@router.get("/learning/adaptive")
+async def learning_adaptive() -> dict:
+    from skopaq.adaptive.hyperopt import ParamsStore
+    from skopaq.adaptive.retrain import config_from, read_state
+    from skopaq.learning.registry import model_dir
+
+    config = SkopaqConfig()
+    reg = _registry()
+
+    def read() -> dict:
+        versions = [v for v in reg.versions()
+                    if str(v.get("strategy_id", "")).startswith("adaptive.")]
+        store = ParamsStore(model_dir(config))
+        approved = store.approved()
+        if approved:
+            approved.pop("previous", None)
+        return {"enabled": bool(config.adaptive_auto_retrain),
+                "retrain_hours": config.adaptive_retrain_hours,
+                "config": config_from(config).as_dict(),
+                "state": read_state(reg.dir), "versions": list(reversed(versions))[:10],
+                "params": {"approved": approved, "candidate": store.candidate()}}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+@router.post("/learning/params/approve")
+async def learning_params_approve(body: PromoteBody,
+                                  user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.hyperopt import ParamsStore
+    from skopaq.learning.registry import model_dir
+
+    try:
+        entry = await asyncio.to_thread(ParamsStore(model_dir(SkopaqConfig())).approve,
+                                        by=user.email, reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🎚️ Strategy parameters {entry['version']} approved: "
+                              f"{body.reason} (from the next session)")
+    entry.pop("previous", None)
+    return _finite({"ok": True, "approved": entry})
+
+
+@router.post("/learning/params/rollback")
+async def learning_params_rollback(body: PromoteBody,
+                                   user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.hyperopt import ParamsStore
+    from skopaq.learning.registry import model_dir
+
+    prev = await asyncio.to_thread(ParamsStore(model_dir(SkopaqConfig())).rollback)
+    await _notify_audit(user, f"↩️ Strategy parameters rolled back: {body.reason}")
+    return {"ok": True, "approved": (prev or {}).get("version")}

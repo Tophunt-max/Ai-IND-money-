@@ -59,6 +59,15 @@ All notable changes to SkopaqTrader. The format follows
   current ones on the held-out 30 %, within the per-evolution change limit.
 - Supabase migration `005_trading_audit.sql` and a best-effort journal mirror; shared API
   state across replicas (`SKOPAQ_API_SHARED_STATE_ENABLED`).
+- **Adaptive AI, FreqAI-style** (`skopaq/adaptive/`, native, no Freqtrade code): automatic
+  multi-timeframe / shifted / correlated feature expansion, Dissimilarity Index outlier
+  detection and training-set filtering, LightGBM / XGBoost / CatBoost candidates,
+  cost-net forward targets, rolling backtests that emulate periodic retraining, automatic
+  retraining after sessions into candidate / shadow (never champion), Optuna hyperopt of
+  the scalper's parameters with a holdout and admin approval, an offline RL research
+  module; `skopaq adaptive-train`, `skopaq hyperopt`, `skopaq rl-research`; the
+  Adaptive AI card on the dashboard. Look-ahead guard: candles after the decision are
+  dropped whatever the caller passes.
 - Dashboard: order lifecycle, charges reconciliation, risk capacity on the home page,
   regime map and drift on AI learning, chart studies (EMA, patterns, signal levels), an
   offline banner; Vitest + Testing Library tests and a CI job for the dashboard.

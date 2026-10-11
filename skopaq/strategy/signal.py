@@ -82,6 +82,7 @@ class QualifyRules:
     max_spread_pct: Optional[float] = 0.005     # bid/ask spread over mid (when known)
     max_participation: Optional[float] = 0.10   # qty / average bar volume (when known)
     min_model_prob: Optional[float] = None      # champion model gate (None = off)
+    block_model_outliers: bool = False          # refuse when the market is unlike training
 
 
 @dataclass
@@ -209,6 +210,11 @@ def qualify(c: SignalCandidate, rules: QualifyRules = QualifyRules(), *,
                            f"{rules.min_model_prob:.2f}")
         else:
             passed.append(f"model P(net win) {c.model_prob:.2f}")
+
+    adaptive = ev.get("adaptive") or {}
+    if rules.block_model_outliers and adaptive.get("outlier"):
+        reasons.append(f"market unlike the model's training data (dissimilarity "
+                       f"{adaptive.get('di', 0):.2f} > {adaptive.get('di_threshold', 0):.2f})")
 
     allowed = ev.get("regime_allowed")
     if allowed is False:

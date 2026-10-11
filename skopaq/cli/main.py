@@ -569,6 +569,125 @@ def learn_train(
         console.print("  Candidate regime map saved: approve it on the dashboard to use it")
 
 
+def _fetch_history(config, symbols: list[str], days: int) -> dict:
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.scalping.backtest import fetch_days
+
+    async def load():
+        out = {}
+        async with INDstocksClient(config, TokenManager()) as client:
+            for sym in symbols:
+                out[sym] = await fetch_days(client, sym, days)
+        return out
+
+    return asyncio.run(load())
+
+
+@app.command("adaptive-train")
+def adaptive_train(
+    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_ADAPTIVE_SYMBOLS, else "
+                                         "the scalp symbols)."),
+    correlated: str = typer.Option("", help="Correlated symbols whose features are added."),
+    days: int = typer.Option(0, help="Days of 1-minute history (default "
+                                     "SKOPAQ_ADAPTIVE_DAYS)."),
+    model: str = typer.Option("", help="lightgbm | xgboost | catboost | logistic."),
+    target: str = typer.Option("", help="forward (every bar) | setup (strategy setups)."),
+) -> None:
+    """FreqAI-style training (no orders): expanded features, outlier filter, Dissimilarity
+    Index, model, rolling backtest with periodic retraining; registered as a candidate and
+    gated (passing = shadow; promotion stays an admin's decision)."""
+    from dataclasses import replace
+
+    from skopaq.adaptive.features import FeatureConfig
+    from skopaq.adaptive.retrain import config_from, symbols_from, train_and_register
+    from skopaq.config import SkopaqConfig
+    from skopaq.db.mirror import mirror_from_config
+    from skopaq.learning.registry import ModelRegistry, model_dir
+    from skopaq.scalping.settings import ScalpSettings
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    cfg = config_from(config)
+    if model:
+        cfg = replace(cfg, model_kind=model)
+    if target:
+        cfg = replace(cfg, target=target)
+    if correlated:
+        cfg = replace(cfg, features=FeatureConfig(correlated=tuple(
+            s.strip().upper() for s in correlated.split(",") if s.strip())))
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
+    n_days = days or int(config.adaptive_days)
+    hist = _fetch_history(config, names, n_days)
+    corr = _fetch_history(config, list(cfg.features.correlated), n_days) \
+        if cfg.features.correlated else {}
+    registry = ModelRegistry(model_dir(config))
+    registry.mirror = mirror_from_config(config)
+    try:
+        entry = train_and_register(hist, cfg, registry, correlated=corr,
+                                   settings=ScalpSettings.from_config(config))
+    except ValueError as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    rep = entry["report"]
+    console.print(f"Candidate {entry['version']} ({rep.get('model_kind')}, "
+                  f"{rep.get('features')} features) — state {entry['state']}")
+    console.print(f"  test: baseline {rep['baseline']}")
+    console.print(f"        model    {rep.get('model')}")
+    console.print(f"        model+DI {rep.get('model_di')} (outliers {rep.get('outlier_rate')})")
+    roll = rep.get("rolling") or {}
+    console.print(f"  rolling retrain backtest: {roll.get('retrains', 0)} retrain(s); "
+                  f"baseline {roll.get('baseline', {}).get('net')}, model "
+                  f"{roll.get('model', {}).get('net')}, model+DI "
+                  f"{roll.get('model_di', {}).get('net')}")
+    for fail in entry.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
+@app.command("hyperopt")
+def hyperopt_cmd(
+    symbols: str = typer.Option("", help="Symbols (default the scalp symbols)."),
+    days: int = typer.Option(30, help="Days of 1-minute history."),
+    trials: int = typer.Option(60, help="Optuna trials."),
+) -> None:
+    """Search the scalper's strategy parameters (Optuna) on 70 % of the days, prove them on
+    the other 30 %; saves a candidate an admin approves on the dashboard (no orders)."""
+    from skopaq.adaptive.hyperopt import ParamsStore, hyperopt
+    from skopaq.adaptive.retrain import symbols_from
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+    from skopaq.scalping.settings import ScalpSettings
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
+    res = hyperopt(_fetch_history(config, names, days), ScalpSettings.from_config(config),
+                   trials=trials)
+    entry = ParamsStore(model_dir(config)).save_candidate(res)
+    console.print(f"Candidate {entry['version']}: {res['best_params']}")
+    console.print(f"  holdout: current {res['holdout_current']} vs best {res['holdout_best']}")
+    console.print("  better on the holdout: approve it on the dashboard" if
+                  res["better_on_holdout"] else "  [yellow]not better on the holdout: "
+                  "it cannot be approved[/yellow]")
+
+
+@app.command("rl-research")
+def rl_research(
+    symbol: str = typer.Argument(..., help="NSE symbol."),
+    days: int = typer.Option(30, help="Days of 1-minute history."),
+    epochs: int = typer.Option(5, help="Training passes over the training days."),
+) -> None:
+    """Offline reinforcement-learning research (tabular Q-learning, net of charges). Never
+    trades: a result here is a hypothesis for a rule strategy, not a strategy."""
+    from skopaq.adaptive.rl import research_run
+    from skopaq.config import SkopaqConfig
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    hist = _fetch_history(config, [symbol.upper()], days)
+    console.print(research_run(hist[symbol.upper()], epochs=epochs))
+
+
 @app.command("charges-reconcile")
 def charges_reconcile(
     file: str = typer.Argument(..., help="The broker's contract-note CSV export."),

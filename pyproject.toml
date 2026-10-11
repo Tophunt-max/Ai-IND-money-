@@ -60,9 +60,13 @@ dev = [
     "python-telegram-bot>=22.4",  # tests/unit/chat/test_telegram_bot.py
     "langchain-ollama>=1.0.0",  # Ollama fallback (SKOPAQ_OLLAMA_ENABLED), tests/unit/llm/test_ollama.py
 ]
-# Optional learning candidates (skopaq learn-train --model lightgbm)
+# Optional learning candidates and search (skopaq learn-train / adaptive-train --model
+# lightgbm|xgboost|catboost, skopaq hyperopt). Without them the logistic baseline is used
 ml = [
     "lightgbm>=4.0",
+    "xgboost>=2.0",
+    "catboost>=1.2",
+    "optuna>=3.6",
 ]
 # Runtime integrations installed in the Docker image (Dockerfile) and into the Mac host's
 # MCP Python (docs/deployment/mac-mini.md). redis is already a core dependency.

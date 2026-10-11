@@ -44,19 +44,29 @@ class _Models:
             logger.warning("Model registry not loaded: signals carry no model probability",
                            exc_info=True)
 
-    def score(self, model, features: dict) -> Optional[float]:
+    def score(self, model, features: dict, *, candles=None, as_of=None,
+              correlated=None) -> tuple[Optional[float], Optional[dict]]:
+        """(probability, adaptive details). Adaptive models (``candles_based``) build their
+        own expanded features from the candles; the others use the evidence features."""
         if model is None:
-            return None
+            return None, None
         try:
-            return model.predict_one(features)
+            if getattr(model, "candles_based", False):
+                prob, di, outlier = model.predict(candles or [], as_of, correlated)
+                thr = model.di.threshold if model.di is not None else None
+                return prob, {"prob": round(prob, 4), "di": None if di != di else round(di, 4),
+                              "outlier": bool(outlier), "di_threshold": thr}
+            return model.predict_one(features), None
         except Exception:
-            return None
+            logger.debug("Model scoring failed", exc_info=True)
+            return None, None
 
 
 class SignalGate:
     def __init__(self, *, journal: Optional[SignalJournal], rules: QualifyRules,
                  model_dir: Any = None, regime_dir: Any = None,
-                 model_gate: bool = False, source: str = "live") -> None:
+                 model_gate: bool = False, source: str = "live",
+                 block_outliers: bool = False) -> None:
         self.journal = journal
         self.rules = rules
         self.source = source
@@ -71,8 +81,12 @@ class SignalGate:
                 logger.warning("Regime map not loaded: every strategy runs", exc_info=True)
         if model_gate and self.models.champion is not None:
             thr = self.models.champion_threshold
-            self.rules = QualifyRules(**{**rules.__dict__,
+            if thr is None:
+                thr = getattr(self.models.champion, "threshold", None)
+            self.rules = QualifyRules(**{**self.rules.__dict__,
                                          "min_model_prob": float(thr) if thr else 0.5})
+        if block_outliers:
+            self.rules = QualifyRules(**{**self.rules.__dict__, "block_model_outliers": True})
 
     # ── Strategy selection ──────────────────────────────────────────────
 
@@ -95,7 +109,8 @@ class SignalGate:
                holding_minutes: Optional[float] = None, htf_s: Optional[int] = None,
                evidence_direction: Optional[int] = None,
                stale_after_s: Optional[float] = None,
-               extra: Optional[dict] = None) -> tuple[SignalCandidate, Decision]:
+               extra: Optional[dict] = None,
+               correlated: Optional[dict] = None) -> tuple[SignalCandidate, Decision]:
         from skopaq.learning.dataset import features_from_evidence
         from skopaq.strategy.evidence import build_evidence
 
@@ -127,12 +142,17 @@ class SignalGate:
                                            decided_at=decided_at)
         except Exception:
             feats = {}
-        c.model_prob = self.models.score(self.models.champion, feats)
+        kw = {"candles": list(candles), "as_of": decided_at, "correlated": correlated}
+        c.model_prob, adaptive = self.models.score(self.models.champion, feats, **kw)
         c.model_version = self.models.champion_version
-        shadow = self.models.score(self.models.shadow, feats)
+        if adaptive is not None:
+            evidence["adaptive"] = adaptive
+        shadow, shadow_adaptive = self.models.score(self.models.shadow, feats, **kw)
         if shadow is not None:
             evidence["shadow_model"] = {"version": self.models.shadow_version,
-                                        "prob": round(shadow, 4)}
+                                        "prob": round(shadow, 4),
+                                        **({"adaptive": shadow_adaptive}
+                                           if shadow_adaptive else {})}
         d = qualify(c, self.rules, now=decided_at)
         if self.journal is not None:
             self.journal.record_decision(c, d)
@@ -188,4 +208,5 @@ def gate_from_config(config: Any, rules: QualifyRules, *, paper: bool,
     return SignalGate(journal=journal, rules=rules, model_dir=model_dir,
                       regime_dir=model_dir,
                       model_gate=getattr(config, model_gate_attr, False) is True,
-                      source="simulated" if paper else "live")
+                      source="simulated" if paper else "live",
+                      block_outliers=getattr(config, "block_model_outliers", False) is True)

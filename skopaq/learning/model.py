@@ -12,6 +12,7 @@ learn; they are not dependencies today.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -144,8 +145,11 @@ class GBMModel:
             raise ValueError("need labelled examples of both classes to train")
         X = _matrix(rows, self.names)
         y = np.array([e.label for e in rows], dtype=float)
-        self._booster = lgb.train(self.params, lgb.Dataset(X, y, feature_name=list(
-            self.names)), num_boost_round=self.rounds)
+        # LightGBM refuses some characters in feature names (":" of correlated
+        # symbols): positional names inside the booster, ours in ``names``
+        safe = [f"f{i}" for i in range(len(self.names))]
+        self._booster = lgb.train(self.params, lgb.Dataset(X, y, feature_name=safe),
+                                  num_boost_round=self.rounds)
         self.text = self._booster.model_to_string()
         self.trained_on = len(rows)
         return self
@@ -181,16 +185,161 @@ class GBMModel:
         return hashlib.sha256(self.text.encode()).hexdigest()[:12]
 
 
-MODEL_KINDS = {"logistic": LogisticModel, "lightgbm": GBMModel}
+@dataclass
+class XGBModel:
+    """Optional XGBoost candidate (deterministic: fixed seed, exact tree method, one
+    thread). Saved as XGBoost's JSON model (base64), never a pickle."""
+
+    names: tuple[str, ...] = FEATURE_NAMES
+    params: dict = field(default_factory=lambda: {
+        "objective": "binary:logistic", "eta": 0.05, "max_depth": 3, "subsample": 0.8,
+        "colsample_bytree": 0.8, "lambda": 1.0, "min_child_weight": 5, "seed": 7,
+        "nthread": 1, "tree_method": "exact", "eval_metric": "logloss"})
+    rounds: int = 200
+    raw: str = ""
+    trained_on: int = 0
+    kind: str = "xgboost-v1"
+    _booster: object = None
+
+    def fit(self, examples: Sequence[Example]) -> "XGBModel":
+        import xgboost as xgb
+
+        rows = [e for e in examples if e.label is not None]
+        if len(rows) < 2 or len({e.label for e in rows}) < 2:
+            raise ValueError("need labelled examples of both classes to train")
+        d = xgb.DMatrix(_matrix(rows, self.names), label=[e.label for e in rows],
+                        missing=np.nan)
+        self._booster = xgb.train(self.params, d, num_boost_round=self.rounds)
+        self.raw = base64.b64encode(bytes(self._booster.save_raw("json"))).decode()
+        self.trained_on = len(rows)
+        return self
+
+    def _model(self):
+        if self._booster is None:
+            import xgboost as xgb
+
+            self._booster = xgb.Booster()
+            self._booster.load_model(bytearray(base64.b64decode(self.raw)))
+        return self._booster
+
+    def predict_proba(self, examples: Sequence[Example]) -> np.ndarray:
+        if not examples:
+            return np.zeros(0)
+        import xgboost as xgb
+
+        return np.asarray(self._model().predict(xgb.DMatrix(
+            _matrix(examples, self.names), missing=np.nan)), float)
+
+    def predict_one(self, features: dict[str, float]) -> float:
+        return float(self.predict_proba([Example(decided_at=None, features=features,  # type: ignore[arg-type]
+                                                 label=None, net_pnl=None)])[0])
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "names": list(self.names), "params": self.params,
+                "rounds": self.rounds, "raw": self.raw, "trained_on": self.trained_on}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "XGBModel":
+        return cls(names=tuple(d["names"]), params=dict(d["params"]), rounds=int(d["rounds"]),
+                   raw=d["raw"], trained_on=int(d["trained_on"]))
+
+    def fingerprint(self) -> str:
+        return hashlib.sha256(self.raw.encode()).hexdigest()[:12]
+
+
+@dataclass
+class CatBoostModel:
+    """Optional CatBoost candidate (fixed seed, one thread). Saved as CatBoost's JSON
+    model, never a pickle."""
+
+    names: tuple[str, ...] = FEATURE_NAMES
+    params: dict = field(default_factory=lambda: {
+        "iterations": 300, "depth": 4, "learning_rate": 0.05, "l2_leaf_reg": 3.0,
+        "random_seed": 7, "thread_count": 1, "verbose": False, "allow_writing_files": False,
+        "loss_function": "Logloss"})
+    text: str = ""
+    trained_on: int = 0
+    kind: str = "catboost-v1"
+    _model_obj: object = None
+
+    def fit(self, examples: Sequence[Example]) -> "CatBoostModel":
+        import tempfile
+
+        from catboost import CatBoostClassifier
+
+        rows = [e for e in examples if e.label is not None]
+        if len(rows) < 2 or len({e.label for e in rows}) < 2:
+            raise ValueError("need labelled examples of both classes to train")
+        m = CatBoostClassifier(**self.params)
+        m.fit(_matrix(rows, self.names), [e.label for e in rows])
+        with tempfile.TemporaryDirectory() as d:
+            path = f"{d}/model.json"
+            m.save_model(path, format="json")
+            with open(path, encoding="utf-8") as fh:
+                self.text = fh.read()
+        self._model_obj, self.trained_on = m, len(rows)
+        return self
+
+    def _model(self):
+        if self._model_obj is None:
+            import tempfile
+
+            from catboost import CatBoostClassifier
+
+            m = CatBoostClassifier()
+            with tempfile.TemporaryDirectory() as d:
+                path = f"{d}/model.json"
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(self.text)
+                m.load_model(path, format="json")
+            self._model_obj = m
+        return self._model_obj
+
+    def predict_proba(self, examples: Sequence[Example]) -> np.ndarray:
+        if not examples:
+            return np.zeros(0)
+        return np.asarray(self._model().predict_proba(_matrix(examples, self.names))[:, 1],
+                          float)
+
+    def predict_one(self, features: dict[str, float]) -> float:
+        return float(self.predict_proba([Example(decided_at=None, features=features,  # type: ignore[arg-type]
+                                                 label=None, net_pnl=None)])[0])
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "names": list(self.names), "params": self.params,
+                "text": self.text, "trained_on": self.trained_on}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CatBoostModel":
+        return cls(names=tuple(d["names"]), params=dict(d["params"]), text=d["text"],
+                   trained_on=int(d["trained_on"]))
+
+    def fingerprint(self) -> str:
+        return hashlib.sha256(self.text.encode()).hexdigest()[:12]
+
+
+MODEL_KINDS = {"logistic": LogisticModel, "lightgbm": GBMModel, "xgboost": XGBModel,
+               "catboost": CatBoostModel}
+_LOADERS = {"logistic-numpy-v1": LogisticModel, "lightgbm-v1": GBMModel,
+            "xgboost-v1": XGBModel, "catboost-v1": CatBoostModel}
+
+
+def make_model(kind: str, names: Sequence[str] = FEATURE_NAMES):
+    """A fresh model of ``kind`` over the feature ``names``."""
+    if kind not in MODEL_KINDS:
+        raise ValueError(f"model kind must be one of {sorted(MODEL_KINDS)}")
+    return MODEL_KINDS[kind](names=tuple(names))
 
 
 def load_model(d: dict):
     """A stored model of any kind (``to_dict`` output)."""
     kind = d.get("kind")
-    if kind == "logistic-numpy-v1":
-        return LogisticModel.from_dict(d)
-    if kind == "lightgbm-v1":
-        return GBMModel.from_dict(d)
+    if kind == "adaptive-v1":
+        from skopaq.adaptive.engine import AdaptiveModel
+
+        return AdaptiveModel.from_dict(d)
+    if kind in _LOADERS:
+        return _LOADERS[kind].from_dict(d)
     raise ValueError(f"unknown model kind {kind!r}")
 
 

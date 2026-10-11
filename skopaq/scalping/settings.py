@@ -61,6 +61,29 @@ class ScalpSettings:
 
     @classmethod
     def from_config(cls, config: Any) -> "ScalpSettings":
+        """The ``scalp_*`` settings, then the admin-approved hyperopt parameters, if any
+        (``skopaq.adaptive.hyperopt.ParamsStore``; risk limits are never among them)."""
+        settings = cls._from_config(config)
+        model_dir = getattr(config, "model_dir", None)
+        if isinstance(model_dir, str) and model_dir:
+            try:
+                import os
+
+                from skopaq.adaptive.hyperopt import ParamsStore, apply_params
+
+                approved = ParamsStore(os.environ.get("SKOPAQ_MODEL_DIR", "").strip()
+                                       or model_dir).params()
+                if approved:
+                    settings = apply_params(settings, approved)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Approved strategy parameters not applied", exc_info=True)
+        return settings
+
+    @classmethod
+    def _from_config(cls, config: Any) -> "ScalpSettings":
         g = lambda name, default=None: getattr(config, name, default)  # noqa: E731
         strategies = tuple(s.lower() for s in _list(g("scalp_strategies"),
                                                      ",".join(STRATEGY_NAMES))

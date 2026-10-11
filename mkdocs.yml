@@ -79,6 +79,7 @@ nav:
     - Ollama Local Models: architecture/ollama.md
     - Notifications: architecture/notifications.md
     - Execution safety, signals and learning: architecture/execution-safety.md
+    - Adaptive AI (FreqAI-style): architecture/adaptive-ai.md
   - Deployment:
     - Mac mini (Docker): deployment/mac-mini.md
     - Go live on AWS (INDstocks): deployment/go-live.md

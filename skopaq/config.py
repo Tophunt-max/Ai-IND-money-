@@ -64,6 +64,14 @@ _LENIENT_FIELDS = (
     "fno_min_net_rr",
     "fno_slippage_pct",
     "fno_qualification_enabled",
+    "block_model_outliers",
+    "adaptive_auto_retrain",
+    "adaptive_retrain_hours",
+    "adaptive_days",
+    "adaptive_train_days",
+    "adaptive_retrain_days",
+    "adaptive_horizon_bars",
+    "adaptive_di_threshold",
     "entry_lock_wait_seconds",
     "max_consecutive_losses",
     "max_shares_per_order",
@@ -322,6 +330,24 @@ class SkopaqConfig(BaseSettings):
     swing_slippage_pct: float = 0.001
     swing_notional_inr: float = 100_000.0       # sizes the charge estimate only
     swing_model_gate_enabled: bool = False
+    # Refuse entries while the champion adaptive model says the market is unlike its
+    # training data (Dissimilarity Index above its threshold)
+    block_model_outliers: bool = False
+
+    # ── Adaptive AI (FreqAI-style, skopaq/adaptive/) ─────────────────────────
+    # Retrain automatically at the end of a session when older than the interval; a new
+    # model only ever becomes a candidate / shadow (promotion stays an admin's decision)
+    adaptive_auto_retrain: bool = False
+    adaptive_retrain_hours: float = 24.0
+    adaptive_symbols: str = ""                  # empty: scalp_symbols
+    adaptive_correlated: str = ""               # e.g. "HDFCBANK,ICICIBANK" (their features)
+    adaptive_days: int = 30                     # history fetched per retrain
+    adaptive_train_days: int = 20               # sliding training window
+    adaptive_retrain_days: int = 5              # block length of the rolling backtest
+    adaptive_model_kind: str = "lightgbm"       # lightgbm | xgboost | catboost | logistic
+    adaptive_target: str = "forward"            # forward | setup
+    adaptive_horizon_bars: int = 15
+    adaptive_di_threshold: float = 1.5
     signal_journal_dir: str = "~/.skopaq/signals"  # every candidate + decision (learning data)
     model_dir: str = "~/.skopaq/models"        # candidate / shadow / champion models
     # Mirror signal / order / model journals to Supabase (migration 005), best effort

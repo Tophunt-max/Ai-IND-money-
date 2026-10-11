@@ -174,3 +174,27 @@ def test_lifecycle_contract_note_regimes_and_drift_endpoints(client, monkeypatch
     assert client.get("/api/dashboard/learning/regimes", headers=AUTH).json()["approved"]
     assert client.get("/api/dashboard/learning/drift",
                       headers=AUTH).json()["available"] is False
+
+
+def test_adaptive_status_and_parameter_approval(client):
+    from skopaq.adaptive.hyperopt import ParamsStore
+
+    body = client.get("/api/dashboard/learning/adaptive", headers=AUTH).json()
+    assert body["enabled"] is False and body["versions"] == []
+    assert body["config"]["model_kind"] == "lightgbm"
+    store = ParamsStore(client.tmp / "models")
+    store.save_candidate({"best_params": {"rr": 2.0}, "better_on_holdout": False,
+                          "holdout_current": {"net": 1, "trades": 5},
+                          "holdout_best": {"net": 0, "trades": 5}})
+    r = client.post("/api/dashboard/learning/params/approve", headers=AUTH,
+                    json={"reason": "try it out"})
+    assert r.status_code == 409                       # not better on the holdout
+    store.save_candidate({"best_params": {"rr": 2.0}, "better_on_holdout": True,
+                          "holdout_current": {"net": 1, "trades": 5},
+                          "holdout_best": {"net": 9, "trades": 5}})
+    r = client.post("/api/dashboard/learning/params/approve", headers=AUTH,
+                    json={"reason": "beat the holdout"})
+    assert r.status_code == 200 and store.params() == {"rr": 2.0}
+    assert client.post("/api/dashboard/learning/params/rollback", headers=AUTH,
+                       json={"reason": "roll it back"}).status_code == 200
+    assert store.params() is None
