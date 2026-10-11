@@ -118,6 +118,7 @@ def train_config_from(config: Any):
 
     g = lambda n, d: getattr(config, n, d)  # noqa: E731
     return TrainConfig(
+        continual=g("adaptive_continual_learning", False) is True,
         model_kind=str(g("adaptive_model_kind", "lightgbm") or "lightgbm"),
         weight_factor=float(g("adaptive_weight_factor", 0.0) or 0.0),
         pipeline=PipelineConfig(
@@ -129,9 +130,11 @@ def train_config_from(config: Any):
 
 
 def strategy_from(config: Any):
-    from skopaq.adaptive.strategy import load_strategy
+    """The strategy to train: the dashboard's selection (a saved no-code spec, the .env
+    code strategy or the default — ``skopaq.adaptive.spec.resolve``)."""
+    from skopaq.adaptive.spec import resolve
 
-    s = load_strategy(str(getattr(config, "adaptive_strategy", "") or ""))
+    s = resolve(config)
     corr = tuple(x.strip().upper() for x in str(getattr(config, "adaptive_correlated", "")
                                                  or "").split(",") if x.strip())
     if corr and not s.correlated:

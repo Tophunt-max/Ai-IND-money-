@@ -27,6 +27,7 @@ More reads: ``/control/lifecycle`` (each order's states today), ``/learning/drif
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -457,7 +458,8 @@ async def learning_adaptive() -> dict:
                                 "task": info["task"], "targets": info["targets"],
                                 "rule": info["rule"], "pipeline": info["pipeline"],
                                 "importance": info.get("importance", [])[:8],
-                                "features": len(info["features"])})
+                                "features": len(info["features"]),
+                                "continued_from": (info.get("continual") or {}).get("parent")})
             except artifacts.IntegrityError as exc:
                 bundles.append({"version": d.name, "ok": False, "error": str(exc)})
             except Exception as exc:
@@ -532,6 +534,7 @@ async def learning_rl() -> dict:
                              "test_sessions": rep.get("test_sessions"),
                              "train_sessions": rep.get("train_sessions"),
                              "exits": rep.get("exits"), "actions": rep.get("actions"),
+                             "continued_from": (rep.get("continual") or {}).get("parent"),
                              "gate_failures": v.get("gate_failures") or [],
                              "shadow_since": v.get("shadow_since"),
                              "approved_by": v.get("approved_by")})
@@ -577,3 +580,99 @@ async def learning_rl_rollback(body: PromoteBody,
     to = await asyncio.to_thread(_rl_registry().rollback, by=user.email, reason=body.reason)
     await _notify_audit(user, f"↩️ RL policy rollback to {to or 'none'}: {body.reason}")
     return {"ok": True, "champion": to}
+
+
+# ── Your strategy (no-code specs) ────────────────────────────────────────────
+
+
+def _strategy_store():
+    from skopaq.adaptive.spec import StrategyStore
+    from skopaq.learning.registry import model_dir
+
+    return StrategyStore(model_dir(SkopaqConfig()))
+
+
+@router.get("/learning/strategies")
+async def learning_strategies() -> dict:
+    from skopaq.adaptive.spec import ENTRY_TYPES, FEATURES, TARGETS, TIMEFRAMES
+
+    config = SkopaqConfig()
+    store = _strategy_store()
+
+    def read() -> dict:
+        sel = store.active()
+        code = str(config.adaptive_strategy or "")
+        if sel is None:
+            in_use = {"kind": "env" if code else "default"}
+        else:
+            in_use = {k: sel.get(k) for k in ("kind", "name", "set_by", "at", "reason")}
+        return {"in_use": in_use, "selected": sel is not None,
+                "env_strategy": code.rpartition(":")[2] if code else "",
+                "continual": {"adaptive": bool(config.adaptive_continual_learning),
+                              "rl": bool(config.rl_continual_learning)},
+                "specs": store.list(), "history": list(reversed(store.history(30))),
+                "catalog": {"features": {k: {"kind": v[0], "about": v[1]}
+                                         for k, v in FEATURES.items()},
+                            "targets": {k: {"task": v[0], "about": v[1]}
+                                        for k, v in TARGETS.items()},
+                            "entry_types": list(ENTRY_TYPES), "timeframes": list(TIMEFRAMES)}}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+class StrategyBody(BaseModel):
+    spec: dict
+
+
+@router.post("/learning/strategies")
+async def learning_strategy_save(body: StrategyBody,
+                                 user: DashboardUser = Depends(require_admin)) -> dict:
+    """Validate (fixed indicator list, look-ahead guard) and save a no-code strategy."""
+    from skopaq.adaptive.spec import SpecError
+    from skopaq.adaptive.strategy import LookAheadError
+
+    if len(json.dumps(body.spec)) > 8000:
+        raise HTTPException(413, "Strategy too large")
+    try:
+        entry = await asyncio.to_thread(_strategy_store().save, body.spec, by=user.email)
+    except (SpecError, LookAheadError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await _notify_audit(user, f"🧩 Strategy {entry['spec']['name']} saved "
+                              f"(revision {entry['revision']})")
+    return {"ok": True, "strategy": entry}
+
+
+class ActivateBody(BaseModel):
+    choice: str = Field(..., min_length=3, max_length=60)
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
+@router.post("/learning/strategies/activate")
+async def learning_strategy_activate(body: ActivateBody,
+                                     user: DashboardUser = Depends(require_admin)) -> dict:
+    """Which strategy the next training uses: ``default``, ``env`` or a saved spec."""
+    if body.choice == "env" and not SkopaqConfig().adaptive_strategy:
+        raise HTTPException(409, "No code strategy is set in .env (SKOPAQ_ADAPTIVE_STRATEGY)")
+    try:
+        sel = await asyncio.to_thread(_strategy_store().activate, body.choice,
+                                      by=user.email, reason=body.reason)
+    except KeyError:
+        raise HTTPException(404, "No such strategy") from None
+    await _notify_audit(user, f"🧩 Training strategy set to {sel.get('name') or sel['kind']}: "
+                              f"{body.reason} (models trained with it are candidates)")
+    return {"ok": True, "in_use": sel}
+
+
+@router.delete("/learning/strategies/{name}")
+async def learning_strategy_delete(name: str,
+                                   user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.spec import SpecError
+
+    try:
+        await asyncio.to_thread(_strategy_store().delete, name, by=user.email)
+    except KeyError:
+        raise HTTPException(404, "No such strategy") from None
+    except SpecError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🧩 Strategy {name} deleted")
+    return {"ok": True}

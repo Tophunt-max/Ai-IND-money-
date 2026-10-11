@@ -153,6 +153,52 @@ Rollback restores the previous champion.
   current ones on the other 30 %. Only then can an admin approve them, and rollback is
   supported. Risk limits are never part of the search.
 
+## Your strategy without code (dashboard)
+
+**AI learning → Your strategy** (admin) builds a strategy from fixed lists, saved as JSON
+in `<model_dir>/strategies/` (`skopaq/adaptive/spec.py`):
+
+- **Timeframes:** 1m base plus up to three of 3m–1h. **Periods:** up to four (2–200).
+  **Shifted copies:** 0–5. **Correlated symbols:** up to five.
+- **Features:** rsi, roc, atr_pct, bb_width, sma_dist, ema_dist, zscore, rel_vol, stoch_k,
+  willr, cci (per period), pct_change, ema_gap, macd_hist, body, close_pos, vwap_dist,
+  minute_of_session, day_of_week. Every one looks backwards only.
+- **Targets (1–4):** `win` (classifier: beats `min_move_pct` after `horizon` bars),
+  `forward_return`, `max_up`, `max_down` (regressors).
+- **Entry rule:** `auto` (the threshold validated in training), `probability ≥`,
+  `zscore ≥` or `value ≥`.
+
+The server validates every field and runs the look-ahead guard before saving; nothing in a
+spec is executed as code. **Use** selects what training learns (a saved spec, the `.env`
+code strategy or the built-in default), logged with who and why. `skopaq adaptive-train
+--strategy my_spec` (or `spec.json`) trains it directly. A bundle stores its spec, so live
+predictions rebuild the same strategy without any `.env` setting. A model trained on it is
+a candidate like any other.
+
+## Continual learning
+
+FreqAI's `continual_learning`: `SKOPAQ_ADAPTIVE_CONTINUAL_LEARNING=true` or
+`adaptive-train --continual`. A run continues the previous model of the same strategy and
+model kind (champion, else shadow, else the newest bundle), instead of starting from
+scratch:
+
+| Model | Continued by |
+|---|---|
+| LightGBM / XGBoost / CatBoost | adding trees to the previous ensemble (`init_model` / `xgb_model`) |
+| MLP / transformer | starting from the previous weights |
+| logistic / ridge | starting from the previous coefficients |
+| random / extra-trees forest, XGBoost RF | cannot be continued: trained afresh |
+
+The parent's fitted pipeline (scaler, PCA, detectors) is kept frozen, so the continued
+model keeps the input space it learned. Other features, targets or task mean a fresh fit,
+with the reason in `report["continual"]`. The rolling backtest chains its retrains the
+same way. The bundle records its parent (shown on the dashboard).
+
+RL: `SKOPAQ_RL_CONTINUAL_LEARNING=true` or `rl-train --continual` continues the previous
+policy of the same algorithm and network size (weights and observation scaling); DQN
+starts with less exploration. In both cases the result is still a candidate behind the
+gates, the shadow period and an admin's approval.
+
 ## Reinforcement learning: PPO, A2C, DQN
 
 FreqAI drives stable-baselines3; here the three algorithms are compact native PyTorch

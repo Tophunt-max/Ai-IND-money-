@@ -12,7 +12,7 @@ type Stats = { trades: number; net: number; profit_factor: number | null; win_ra
 interface Policy {
   version: string; state: string; created_at?: string; algo?: string; model?: Stats; baseline?: Stats;
   test_sessions?: number; train_sessions?: number; exits?: Record<string, number>; actions?: Record<string, number>;
-  gate_failures: string[]; shadow_since?: string | null; approved_by?: string | null;
+  gate_failures: string[]; shadow_since?: string | null; approved_by?: string | null; continued_from?: string | null;
 }
 export interface RLStatus {
   enabled: boolean; in_scalp_strategies: boolean; allow_live: boolean; paper_use_shadow: boolean; torch: boolean;
@@ -77,6 +77,7 @@ export default function RLAgents() {
                   <td><div className="flex items-center gap-2"><Badge tone={tone(p.state)}>{p.state}</Badge><span className="text-gray-100">{p.version}</span></div>
                     <div className="text-[11px] text-gray-500">{(p.algo || "").toUpperCase()} · {p.train_sessions} train / {p.test_sessions} test sessions{p.created_at ? ` · ${when(p.created_at)}` : ""}</div>
                     {p.approved_by && <div className="text-[11px] text-gray-500">approved by {p.approved_by}</div>}
+                    {p.continued_from && <div className="text-[11px] text-sky-300">continued from {p.continued_from}</div>}
                     {p.gate_failures.length > 0 && <div className="text-[11px] text-amber-300">{p.gate_failures.slice(0, 3).join(" · ")}</div>}</td>
                   <td className="text-xs">{net(p.model)}
                     {p.model && <div className="text-gray-500">PF {p.model.profit_factor ?? "—"} · DD {inr(p.model.max_drawdown ?? 0, 0)} · charges {inr(p.model.charges ?? 0, 0)}</div>}</td>

@@ -229,3 +229,37 @@ def test_rl_status_and_promotion_need_an_admin_and_the_shadow_days(client):
                        json={"reason": "looks good"}).status_code == 404
     assert client.post("/api/dashboard/learning/rl/rollback", headers=AUTH,
                        json={"reason": "nothing to roll"}).json()["champion"] is None
+
+
+def test_users_build_and_select_their_own_strategy(client, monkeypatch):
+    monkeypatch.delenv("SKOPAQ_ADAPTIVE_STRATEGY", raising=False)
+    spec = {"name": "my_mom", "timeframes": [60, 300], "periods": [10], "shifted": 1,
+            "features": ["rsi", "ema_gap"], "targets": [{"type": "win", "horizon": 10}],
+            "entry": {"type": "auto"}}
+    body = client.get("/api/dashboard/learning/strategies", headers=AUTH).json()
+    assert body["in_use"] == {"kind": "default"} and body["specs"] == []
+    assert "rsi" in body["catalog"]["features"] and "win" in body["catalog"]["targets"]
+    _as_viewer()
+    assert client.post("/api/dashboard/learning/strategies",
+                       json={"spec": spec}).status_code == 403
+    from skopaq.api.server import app
+    app.dependency_overrides.clear()
+    bad = client.post("/api/dashboard/learning/strategies", headers=AUTH,
+                      json={"spec": {**spec, "features": ["os.system"]}})
+    assert bad.status_code == 422 and "unknown" in bad.json()["detail"]
+    r = client.post("/api/dashboard/learning/strategies", headers=AUTH, json={"spec": spec})
+    assert r.status_code == 200 and r.json()["strategy"]["revision"] == 1
+    assert client.post("/api/dashboard/learning/strategies/activate", headers=AUTH,
+                       json={"choice": "env", "reason": "use my code"}).status_code == 409
+    assert client.post("/api/dashboard/learning/strategies/activate", headers=AUTH,
+                       json={"choice": "nothing", "reason": "use it"}).status_code == 404
+    r = client.post("/api/dashboard/learning/strategies/activate", headers=AUTH,
+                    json={"choice": "my_mom", "reason": "try my strategy"})
+    assert r.status_code == 200
+    body = client.get("/api/dashboard/learning/strategies", headers=AUTH).json()
+    assert body["in_use"]["kind"] == "spec" and body["in_use"]["name"] == "my_mom"
+    assert client.delete("/api/dashboard/learning/strategies/my_mom",
+                         headers=AUTH).status_code == 409          # in use
+    from skopaq.adaptive.retrain import strategy_from
+    from skopaq.config import SkopaqConfig
+    assert strategy_from(SkopaqConfig()).name == "my_mom"

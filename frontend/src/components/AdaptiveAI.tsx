@@ -23,7 +23,7 @@ interface BundleInfo {
   strategy?: string; model?: string; task?: string; targets?: string[]; features?: number;
   rule?: { type: string; threshold?: number; k?: number };
   pipeline?: { kept: number; input_columns: number; pca_components: number; svm: boolean; di: boolean; dbscan: boolean; removed: Record<string, number> };
-  importance?: [string, number][];
+  importance?: [string, number][]; continued_from?: string | null;
 }
 interface Adaptive {
   bundles?: BundleInfo[]; model_kinds?: Record<string, boolean>; strategy?: string;
@@ -102,7 +102,8 @@ export default function AdaptiveAI() {
                   <tr key={b.version} className="align-top">
                     <td><div className="text-gray-100">{b.version}</div>
                       <div className="text-[11px] text-gray-500">{b.strategy} · {b.features} features · {(b.targets || []).join(", ")}</div>
-                      {b.importance?.length ? <div className="text-[11px] text-gray-500">top: {b.importance.slice(0, 3).map(([n]) => n).join(", ")}</div> : null}</td>
+                      {b.importance?.length ? <div className="text-[11px] text-gray-500">top: {b.importance.slice(0, 3).map(([n]) => n).join(", ")}</div> : null}
+                      {b.continued_from && <div className="text-[11px] text-sky-300">continued from {b.continued_from}</div>}</td>
                     <td className="text-xs">{b.model}<div className="text-gray-500">{b.task}</div></td>
                     <td className="text-xs">{b.pipeline ? <>
                       {b.pipeline.kept}/{b.pipeline.input_columns} cols{b.pipeline.pca_components ? ` → ${b.pipeline.pca_components} PCA` : ""}

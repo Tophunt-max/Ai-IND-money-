@@ -84,6 +84,15 @@ All notable changes to SkopaqTrader. The format follows
   gate: the shadow policy on paper, live only as the champion with
   `SKOPAQ_RL_ALLOW_LIVE` (`.env` only). `skopaq rl-train|rl-status|rl-promote|rl-rollback`,
   dashboard card with promote / rollback.
+- **Continual learning** (`SKOPAQ_ADAPTIVE_CONTINUAL_LEARNING`, `SKOPAQ_RL_CONTINUAL_LEARNING`,
+  `--continual`): a run continues the previous model of the same strategy and kind —
+  boosted trees added to the previous ensemble, PyTorch / logistic from the previous
+  weights, the parent's pipeline kept frozen, the rolling backtest chained; RL policies
+  from the previous weights and scaling. Lineage recorded in the bundle and registry.
+- **Your strategy without code:** a dashboard builder (features, timeframes, periods,
+  correlated symbols, targets, entry rule) validated on the server with the look-ahead
+  guard, saved per revision, and selected for training with an audit trail; bundles
+  rebuild their spec on load; `adaptive-train --strategy <name|spec.json>`.
 - Dashboard: order lifecycle, charges reconciliation, risk capacity on the home page,
   regime map and drift on AI learning, chart studies (EMA, patterns, signal levels), an
   offline banner; Vitest + Testing Library tests and a CI job for the dashboard.

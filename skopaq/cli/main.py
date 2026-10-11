@@ -588,8 +588,9 @@ def _fetch_history(config, symbols: list[str], days: int) -> dict:
 def adaptive_train(
     symbols: str = typer.Option("", help="Symbols (default SKOPAQ_ADAPTIVE_SYMBOLS, else "
                                          "the scalp symbols)."),
-    strategy: str = typer.Option("", help="Your strategy: path/to/file.py:ClassName "
-                                          "(default SKOPAQ_ADAPTIVE_STRATEGY / built-in)."),
+    strategy: str = typer.Option("", help="Your strategy: a saved no-code strategy's name, "
+                                          "spec.json, or path/to/file.py:ClassName (default: "
+                                          "the dashboard's selection / .env / built-in)."),
     correlated: str = typer.Option("", help="Correlated symbols whose features are added."),
     days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_ADAPTIVE_DAYS)."),
     model: str = typer.Option("", help="lightgbm | xgboost | xgboost_rf | catboost | "
@@ -604,6 +605,9 @@ def adaptive_train(
     noise: Optional[float] = typer.Option(None, help="Training noise std (0 = off)."),
     weight_factor: Optional[float] = typer.Option(None, help="Recent-row weighting "
                                                              "(0 = off, e.g. 0.9)."),
+    continual: Optional[bool] = typer.Option(None, "--continual/--fresh",
+                                             help="Continue the previous model (default "
+                                                  "SKOPAQ_ADAPTIVE_CONTINUAL_LEARNING)."),
 ) -> None:
     """Train your adaptive strategy (no orders): look-ahead check, data pipeline, model per
     target, rolling retrain backtest; saved as a verified bundle, registered as a
@@ -624,7 +628,19 @@ def adaptive_train(
 
     _setup_logging("WARNING")
     config = SkopaqConfig()
-    strat = load_strategy(strategy) if strategy else strategy_from(config)
+    from skopaq.adaptive.spec import SpecError, SpecStrategy, StrategyStore
+
+    try:
+        if strategy and ":" not in strategy and not strategy.endswith(".json"):
+            saved = StrategyStore(model_dir(config)).get(strategy)
+            if saved is None:
+                raise SpecError(f"no saved strategy {strategy!r}")
+            strat = SpecStrategy(saved["spec"])
+        else:
+            strat = load_strategy(strategy) if strategy else strategy_from(config)
+    except (SpecError, OSError, ValueError) as exc:
+        console.print(f"[red]Strategy not loaded:[/red] {exc}")
+        raise typer.Exit(2)
     if correlated:
         strat.correlated = tuple(x.strip().upper() for x in correlated.split(",") if x.strip())
     cfg = config_with(train_config_from(config), scaler=scaler or None, pca=pca, svm=svm,
@@ -633,6 +649,8 @@ def adaptive_train(
         cfg = replace(cfg, model_kind=model)
     if weight_factor is not None:
         cfg = replace(cfg, weight_factor=weight_factor)
+    if continual is not None:
+        cfg = replace(cfg, continual=continual)
     names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
     n_days = days or int(config.adaptive_days)
     hist = _fetch_history(config, names, n_days)
@@ -661,6 +679,11 @@ def adaptive_train(
     console.print(f"  rolling retrain: {roll.get('retrains', 0)}×; every row "
                   f"{roll.get('baseline', {}).get('net')}, model {roll.get('model', {}).get('net')}")
     console.print(f"  top features: {[n for n, _ in rep.get('importance', [])[:5]]}")
+    cont = rep.get("continual") or {}
+    if cont.get("enabled"):
+        how = (f"continued from {cont['parent']} {cont.get('models', '')}"
+               if cont.get("parent") else f"fresh — {cont.get('fresh')}")
+        console.print(f"  continual: {how}")
     for fail in entry.get("gate_failures") or []:
         console.print(f"  [yellow]gate:[/yellow] {fail}")
 
@@ -784,6 +807,9 @@ def rl_train(
     days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_RL_DAYS)."),
     timesteps: int = typer.Option(0, help="Training steps (default SKOPAQ_RL_TIMESTEPS)."),
     seed: int = typer.Option(7, help="Random seed (reproducible runs)."),
+    continual: Optional[bool] = typer.Option(None, "--continual/--fresh",
+                                             help="Continue the previous policy (default "
+                                                  "SKOPAQ_RL_CONTINUAL_LEARNING)."),
 ) -> None:
     """Train a PPO / A2C / DQN trading policy in the scalper's own rules (net of charges),
     test it on later unseen days and register it as an RL candidate. Passing the gates
@@ -805,7 +831,8 @@ def rl_train(
     if not torch_available():
         console.print("RL agents need PyTorch: pip install 'skopaq[torch]'")
         raise typer.Exit(2)
-    cfg = config_from(config, algo=algo or None, timesteps=timesteps or None, seed=seed)
+    cfg = config_from(config, algo=algo or None, timesteps=timesteps or None, seed=seed,
+                      continual=continual)
     if cfg.algo not in ALGOS:
         console.print(f"Unknown algorithm {cfg.algo!r}: one of {', '.join(ALGOS)}")
         raise typer.Exit(2)
@@ -825,6 +852,10 @@ def rl_train(
     console.print(f"  test (unseen days): {rep['model']}")
     console.print(f"  baseline ({rep['baseline_name']}): {rep['baseline']}")
     console.print(f"  exits {rep['exits']}  actions {rep['actions']}")
+    cont = rep.get("continual") or {}
+    if cont.get("enabled"):
+        console.print("  continual: " + (f"continued from {cont['parent']}" if cont.get("parent")
+                                         else f"fresh — {cont.get('fresh')}"))
     for fail in out.get("gate_failures") or []:
         console.print(f"  [yellow]gate:[/yellow] {fail}")
 

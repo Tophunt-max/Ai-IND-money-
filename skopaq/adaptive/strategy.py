@@ -30,7 +30,8 @@ what they are — and their horizon (``label_period``) sets the embargo between 
 validation and test.
 
 Load your own class with ``SKOPAQ_ADAPTIVE_STRATEGY=path/to/file.py:ClassName`` (an
-.env setting, not editable from the dashboard: it runs code).
+.env setting, not editable from the dashboard: it runs code). Without code, build one in
+the dashboard (``skopaq.adaptive.spec``): it is data, validated, and selectable there.
 """
 
 from __future__ import annotations
@@ -262,10 +263,17 @@ def check_lookahead(strategy: AdaptiveStrategy, candles: Sequence[Any], *,
 
 
 def load_strategy(spec: str = "") -> AdaptiveStrategy:
-    """``path/to/file.py:ClassName`` → an instance; empty → the default strategy."""
+    """``path/to/file.py:ClassName`` → an instance; ``file.json`` → a no-code spec
+    (``skopaq.adaptive.spec``); empty → the default strategy."""
     spec = (spec or "").strip()
     if not spec:
         return AdaptiveStrategy()
+    if spec.endswith(".json"):
+        import json as _json
+
+        from skopaq.adaptive.spec import SpecStrategy
+
+        return SpecStrategy(_json.loads(Path(spec).expanduser().read_text()))
     path, _, cls_name = spec.rpartition(":")
     if not path or not cls_name:
         raise ValueError("SKOPAQ_ADAPTIVE_STRATEGY must be 'path/to/file.py:ClassName'")

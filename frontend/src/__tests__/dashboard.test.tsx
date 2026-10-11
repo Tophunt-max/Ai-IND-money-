@@ -8,6 +8,7 @@ import CandleChart from "@/components/CandleChart";
 import OfflineBanner from "@/components/OfflineBanner";
 import RiskCapacity from "@/components/RiskCapacity";
 import RLAgents, { rlTradingMode, type RLStatus } from "@/components/RLAgents";
+import StrategyBuilder, { EMPTY, specProblems } from "@/components/StrategyBuilder";
 import { api, ApiError } from "@/lib/api";
 
 class RO { observe() {} disconnect() {} }
@@ -135,5 +136,34 @@ describe("RLAgents", () => {
     await waitFor(() => expect(screen.getAllByText("rl-ppo-1").length).toBeGreaterThan(0));
     expect(screen.getByText("Promote")).toBeTruthy();
     expect(screen.getByText(/target 20, stop 25, agent 7/)).toBeTruthy();
+  });
+});
+
+describe("StrategyBuilder", () => {
+  const task = (t: string) => (t === "win" ? "classifier" : "regressor");
+  const catalog = {
+    features: { rsi: { kind: "period", about: "RSI" }, ema_gap: { kind: "basic", about: "EMA gap" } },
+    targets: { win: { task: "classifier", about: "win" }, forward_return: { task: "regressor", about: "fwd" } },
+    entry_types: ["auto", "probability", "zscore", "value"], timeframes: [60, 300, 900],
+  };
+
+  it("flags what the server would refuse", () => {
+    expect(specProblems({ ...EMPTY, name: "my_mom" }, task)).toEqual([]);
+    expect(specProblems({ ...EMPTY, name: "X" }, task)[0]).toMatch(/name/);
+    expect(specProblems({ ...EMPTY, name: "abc", timeframes: [300] }, task)).toContain("the first timeframe must be 1m");
+    expect(specProblems({ ...EMPTY, name: "abc", targets: [{ type: "win", horizon: 5 }, { type: "forward_return", horizon: 5 }] }, task)[0]).toMatch(/targets/);
+    expect(specProblems({ ...EMPTY, name: "abc", entry: { type: "zscore", min: 1 } }, task)[0]).toMatch(/regression/);
+  });
+
+  it("lists saved strategies, the one in use, and saves a new one", async () => {
+    respond({ "/learning/strategies": {
+      in_use: { kind: "spec", name: "my_mom" }, env_strategy: "", continual: { adaptive: true, rl: false }, catalog,
+      specs: [{ spec: { ...EMPTY, name: "my_mom", features: ["rsi"] }, saved_by: "a@x", saved_at: "2026-10-11T10:00:00Z", revision: 2 }],
+    } });
+    render(<StrategyBuilder />);
+    await waitFor(() => expect(screen.getAllByText("my_mom").length).toBeGreaterThan(0));
+    expect(screen.getByText("in use")).toBeTruthy();
+    expect(screen.getByText("adaptive on")).toBeTruthy();
+    expect(screen.getByText("training: my_mom")).toBeTruthy();
   });
 });

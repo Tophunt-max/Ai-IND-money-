@@ -24,6 +24,17 @@ mean/std, live prediction mean/std (rolling, like FreqAI's ``fit_live_prediction
 z-score, ``do_predict`` (1 ok, 0 outlier, -1 not enough data), DI value and every
 detector's flag, the entry decision and its rule, the model's age, the most important
 features. ``rolling_backtest`` retrains on a sliding window and predicts the next block.
+
+**Continual learning** (``TrainConfig.continual``, ``SKOPAQ_ADAPTIVE_CONTINUAL_LEARNING``,
+``--continual``): instead of starting from scratch, a run continues from the previous
+model of the same strategy and model kind (the champion, else the shadow, else the newest
+bundle — ``find_parent``). The parent's fitted pipeline is kept frozen (the continued model
+keeps its input space) and each target's model is warm-started from the parent's
+(``models.BaseModel.fit(init=…)``). A parent with other features, targets or task, or a
+model kind that cannot be continued, means a fresh fit, with the reason in
+``report["continual"]``. The rolling backtest then chains its retrains the same way, so it
+emulates continual retraining. A continued model is still only a candidate: the same
+gates, shadow period and admin approval apply.
 """
 
 from __future__ import annotations
@@ -72,6 +83,7 @@ class TrainConfig:
     entry_end_min: int = 330
     min_rows: int = 300
     seed: int = 7
+    continual: bool = False
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -164,6 +176,7 @@ class Fitted:
     trained_at: str = ""
     rows: dict = field(default_factory=dict)
     strategy: Optional[AdaptiveStrategy] = None
+    continual: dict = field(default_factory=dict)
 
     # ── scoring ─────────────────────────────────────────────────────────
 
@@ -214,17 +227,45 @@ def _choose_rule(task: str, pred: np.ndarray, net: np.ndarray, min_trades: int) 
     return best or {"type": "zscore", "k": 1.0}
 
 
+def parent_problem(parent: Any, feats: list[str], tgts: list[str], task: str) -> Optional[str]:
+    """Why ``parent`` cannot be continued with these columns (None: it can)."""
+    if parent is None:
+        return "no previous model"
+    if list(parent.features) != list(feats):
+        return "the previous model has other features (strategy or data changed)"
+    if getattr(parent, "task", task) != task:
+        return f"the previous model is a {parent.task}"
+    missing = [t for t in tgts if t not in parent.models]
+    if missing:
+        return f"the previous model has no {missing[0]} target"
+    return None
+
+
 def fit(strategy: AdaptiveStrategy, train: pd.DataFrame, val: pd.DataFrame,
-        cfg: TrainConfig) -> Fitted:
+        cfg: TrainConfig, parent: Any = None) -> Fitted:
+    """``parent``: a previous ``Fitted`` / ``AdaptiveBundle`` to continue (continual
+    learning); ignored, with the reason recorded, when it does not match."""
     feats, tgts = feature_columns(train), target_columns(train)
     if not tgts:
         raise ValueError("the strategy set no targets (columns starting with '&')")
     task = strategy.model_type
     X = train[feats].to_numpy(float)
     w = recency_weights(len(train), cfg.weight_factor)
-    pipe = Pipeline(cfg.pipeline)
     Y = {t: train[t].to_numpy(float) for t in tgts}
-    Z, kept = pipe.fit_transform(X, feats, w, *Y.values())
+    why_not = parent_problem(parent, feats, tgts, task) if cfg.continual else "off"
+    continual: dict[str, Any] = {"enabled": cfg.continual,
+                                 "parent": getattr(parent, "version", None)
+                                 if why_not is None else None}
+    if why_not is None:
+        pipe = Pipeline.from_dict(parent.pipeline.to_dict())        # frozen copy
+        Z, kept = pipe.apply_frozen(X, w, *Y.values(), noise_std=cfg.pipeline.noise_std,
+                                    seed=cfg.seed)
+        continual["pipeline"] = "kept from the parent"
+    else:
+        pipe = Pipeline(cfg.pipeline)
+        Z, kept = pipe.fit_transform(X, feats, w, *Y.values())
+        if cfg.continual:
+            continual["fresh"] = why_not
     w_kept, ys = kept[0], dict(zip(tgts, kept[1:]))
     Zv = pipe.transform(val[feats].to_numpy(float)) if len(val) else None
     models, imp = {}, np.zeros(len(pipe.keep) if not pipe.pca_components
@@ -234,7 +275,12 @@ def fit(strategy: AdaptiveStrategy, train: pd.DataFrame, val: pd.DataFrame,
         if task == "classifier" and len(set(np.unique(y))) < 2:
             raise ValueError(f"target {t}: the training rows have one class only")
         m = make(cfg.model_kind, task, cfg.model_params, cfg.seed)
-        m.fit(Z, y, w_kept, Zv, val[t].to_numpy(float) if Zv is not None else None)
+        init = parent.models.get(t) if why_not is None else None
+        m.fit(Z, y, w_kept, Zv, val[t].to_numpy(float) if Zv is not None else None,
+              init=init)
+        if why_not is None:
+            continual.setdefault("models", {})[t] = (
+                "continued" if m.continued else (m.can_continue(init) or "fresh"))
         models[t] = m
         for i, v in m.importance.items():
             if i < len(imp):
@@ -261,7 +307,7 @@ def fit(strategy: AdaptiveStrategy, train: pd.DataFrame, val: pd.DataFrame,
                   importance=importance,
                   trained_at=pd.Timestamp(train["_decided_at"].max()).isoformat(),
                   rows={"train": len(train), "train_kept": pipe.fitted_rows,
-                        "validation": len(val)}, strategy=strategy)
+                        "validation": len(val)}, strategy=strategy, continual=continual)
 
 
 def evaluate(fitted: Fitted, test: pd.DataFrame) -> dict:
@@ -311,7 +357,10 @@ def save(fitted: Fitted, strategy: AdaptiveStrategy, directory: Path, *, version
                          "periods": list(strategy.periods), "shifted": strategy.shifted,
                          "correlated": list(strategy.correlated),
                          "label_period": strategy.label_period,
-                         "model_type": strategy.model_type},
+                         "model_type": strategy.model_type,
+                         **({"spec": strategy.spec} if getattr(strategy, "spec", None)
+                            else {})},
+            "continual": fitted.continual,
             "features": fitted.features, "targets": fitted.targets, "task": fitted.task,
             "primary": fitted.primary, "rule": fitted.rule, "label_stats": fitted.label_stats,
             "pred_stats": fitted.pred_stats, "importance": fitted.importance,
@@ -472,6 +521,10 @@ def _strategy_from_info(info: dict) -> AdaptiveStrategy:
 
     from skopaq.adaptive.strategy import load_strategy
 
+    if info.get("spec"):                 # a no-code strategy: rebuilt from its stored spec
+        from skopaq.adaptive.spec import SpecStrategy
+
+        return SpecStrategy(info["spec"])
     spec = os.environ.get("SKOPAQ_ADAPTIVE_STRATEGY", "")
     if spec:
         s = load_strategy(spec)
@@ -514,13 +567,16 @@ def train_bundle(strategy: AdaptiveStrategy, history: Mapping[str, Sequence[Any]
     if len(frame) < cfg.min_rows:
         raise ValueError(f"{len(frame)} rows < {cfg.min_rows}: not enough history")
     tr, va, te = split(frame, cfg)
-    fitted = fit(strategy, tr, va, cfg)
+    parent = find_parent(registry, strategy.name, cfg.model_kind) if (
+        cfg.continual and registry is not None) else None
+    fitted = fit(strategy, tr, va, cfg, parent=parent)
     report = evaluate(fitted, te)
+    report["continual"] = fitted.continual
     report.update(model_kind=cfg.model_kind, features=len(fitted.features),
                   targets=fitted.targets, rule=fitted.rule, pipeline=fitted.pipeline.describe(),
                   importance=fitted.importance[:10], leakage=[],
                   weight_factor=cfg.weight_factor)
-    report["rolling"] = rolling_backtest(strategy, frame, cfg)
+    report["rolling"] = rolling_backtest(strategy, frame, cfg, parent=parent)
     dataset = {"rows": len(frame), "symbols": sorted(history),
                "correlated": list(strategy.correlated), "strategy": strategy.name,
                "first": str(frame["_decided_at"].min()), "last": str(frame["_decided_at"].max()),
@@ -537,15 +593,45 @@ def train_bundle(strategy: AdaptiveStrategy, history: Mapping[str, Sequence[Any]
         model={"kind": "adaptive-bundle-v1", "bundle": version, "path": str(bdir),
                "manifest_sha": sha},
         report=report, params={"threshold": fitted.rule.get("threshold")}, dataset=dataset,
-        strategy_id=f"adaptive.{strategy.name}", notes=notes or f"{cfg.model_kind}")
+        strategy_id=f"adaptive.{strategy.name}",
+        notes=notes or (f"{cfg.model_kind}, continued from {fitted.continual['parent']}"
+                        if fitted.continual.get("parent") else f"{cfg.model_kind}"))
     entry["gate_failures"] = registry.evaluate_candidate(entry["version"])
     return registry.get(entry["version"]) or entry
 
 
+def find_parent(registry: Any, strategy_name: str, model_kind: str) -> Any:
+    """The model a continual run continues: champion, else shadow, else the newest
+    registered bundle — of the same strategy and model kind, and verified on load."""
+    if registry is None:
+        return None
+    sid = f"adaptive.{strategy_name}"
+    entries = [registry.champion(), registry.shadow()]
+    entries += [registry.get(v["version"]) for v in reversed(registry.versions())
+                if v.get("strategy_id") == sid]
+    for e in entries:
+        if not e or e.get("strategy_id") != sid:
+            continue
+        m = e.get("model") or {}
+        if m.get("kind") != "adaptive-bundle-v1":
+            continue
+        try:
+            b = load_bundle_model(m)
+        except Exception as exc:
+            logger.warning("Continual learning: %s not usable (%s)", e.get("version"), exc)
+            continue
+        kinds = {spec["meta"]["kind"] for spec in b.info["models"].values()}
+        if kinds == {model_kind}:
+            b.version = e["version"]
+            return b
+    return None
+
+
 def rolling_backtest(strategy: AdaptiveStrategy, frame: pd.DataFrame, cfg: TrainConfig, *,
-                     train_days: int = 15, retrain_days: int = 5) -> dict:
+                     train_days: int = 15, retrain_days: int = 5, parent: Any = None) -> dict:
     """Retrain every ``retrain_days`` on the previous ``train_days`` (sliding window) and
-    predict the next block, out of sample."""
+    predict the next block, out of sample. With ``cfg.continual`` each retrain continues
+    the previous block's model (the first one ``parent``, if any), as live would."""
     days = sorted(pd.to_datetime(frame["_decided_at"]).dt.date.unique())
     if len(days) <= train_days:
         return {"retrains": 0, "reason": f"{len(days)} day(s) <= train_days {train_days}"}
@@ -562,9 +648,12 @@ def rolling_backtest(strategy: AdaptiveStrategy, frame: pd.DataFrame, cfg: Train
             continue
         cut = int(len(tr) * 0.8)
         try:
-            fitted = fit(strategy, tr.iloc[:cut], tr.iloc[cut:], cfg)
+            fitted = fit(strategy, tr.iloc[:cut], tr.iloc[cut:], cfg, parent=parent)
         except ValueError:
             continue
+        if cfg.continual:
+            fitted.version = f"rolling-{len(blocks)}"          # type: ignore[attr-defined]
+            parent = fitted
         preds, outs = fitted.score_matrix(te[fitted.features].to_numpy(float))
         take = fitted.entries(preds)
         net = te["_net"].to_numpy(float)
@@ -574,8 +663,10 @@ def rolling_backtest(strategy: AdaptiveStrategy, frame: pd.DataFrame, cfg: Train
         blocks.append({"from": str(min(ted)), "to": str(max(ted)), "train_rows": len(tr),
                        "test_rows": len(te), "baseline_net": round(float(net.sum()), 2),
                        "model_net": round(float(net[take].sum()), 2),
-                       "model_di_net": round(float(net[take & ~outs["any"]].sum()), 2)})
-    return {"retrains": len(blocks), "blocks": blocks, "baseline": trade_stats(base).as_dict(),
+                       "model_di_net": round(float(net[take & ~outs["any"]].sum()), 2),
+                       "continued": bool(fitted.continual.get("parent"))})
+    return {"retrains": len(blocks), "blocks": blocks, "continual": cfg.continual,
+            "baseline": trade_stats(base).as_dict(),
             "model": trade_stats(gated).as_dict(), "model_di": trade_stats(gated_c).as_dict()}
 
 

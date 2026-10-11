@@ -222,6 +222,20 @@ class Pipeline:
         self.fitted_rows = int(mask.sum())
         return Zk, [np.asarray(e)[mask] for e in extra]
 
+    def apply_frozen(self, X: np.ndarray, *extra: np.ndarray,
+                     noise_std: float = 0.0, seed: int = 7
+                     ) -> tuple[np.ndarray, list[np.ndarray]]:
+        """Continual learning: transform new training rows with this *already fitted*
+        pipeline (the continued model keeps the input space it learned), drop the rows its
+        detectors flag, add training noise. Nothing is refitted."""
+        Z = self.transform(np.asarray(X, float))
+        mask = ~self.outliers(Z)["any"]
+        Zk = Z[mask]
+        if noise_std > 0:
+            Zk = Zk + np.random.default_rng(seed).normal(0.0, noise_std, Zk.shape)
+        self.fitted_rows = int(mask.sum())
+        return Zk, [np.asarray(e)[mask] for e in extra]
+
     # ── storage ─────────────────────────────────────────────────────────
 
     def to_dict(self) -> dict:

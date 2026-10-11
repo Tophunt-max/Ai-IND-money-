@@ -18,6 +18,14 @@ ft_transformer            PyTorch (feature-token  ``torch.safetensors``
 
 Every model is deterministic for a given seed (one thread where the library allows it).
 ``task`` is ``classifier`` (probability of class 1) or ``regressor`` (a value).
+
+**Continual learning** (FreqAI's ``continual_learning``): ``fit(..., init=previous)``
+continues from a previous model of the same kind instead of starting from scratch —
+LightGBM / XGBoost / CatBoost add trees to the previous ensemble (``init_model`` /
+``xgb_model``), the PyTorch models start from the previous weights, the logistic model
+from the previous coefficients. Random / extra-trees forests (exported as arrays) and
+the XGBoost random forest cannot be continued: ``supports_continual`` is False and they
+train afresh. ``continued`` says what happened.
 """
 
 from __future__ import annotations
@@ -70,8 +78,21 @@ class BaseModel:
         self.task, self.params, self.seed = task, dict(params or {}), seed
         self.best_iteration: Optional[int] = None
         self.importance: dict[int, float] = {}
+        self.continued = False
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None) -> "BaseModel":
+    supports_continual = True
+
+    def can_continue(self, init: Optional["BaseModel"]) -> Optional[str]:
+        """None when ``init`` can be continued, else why not."""
+        if init is None:
+            return "no previous model"
+        if not self.supports_continual:
+            return f"{self.kind} cannot be continued (trained afresh)"
+        if init.kind != self.kind or init.task != self.task:
+            return f"previous model is {init.kind}/{init.task}"
+        return None
+
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None) -> "BaseModel":
         raise NotImplementedError
 
     def predict(self, X) -> np.ndarray:
@@ -85,7 +106,8 @@ class BaseModel:
 
     def meta(self) -> dict:
         return {"kind": self.kind, "task": self.task, "params": self.params,
-                "seed": self.seed, "best_iteration": self.best_iteration}
+                "seed": self.seed, "best_iteration": self.best_iteration,
+                "continued": self.continued}
 
 
 # ── gradient boosting ────────────────────────────────────────────────────────
@@ -94,7 +116,7 @@ class BaseModel:
 class LightGBMModel(BaseModel):
     kind = "lightgbm"
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None):
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None):
         import lightgbm as lgb
 
         p = {"objective": "binary" if self.task == "classifier" else "regression",
@@ -108,8 +130,11 @@ class LightGBMModel(BaseModel):
         if X_val is not None and len(X_val):
             sets.append(lgb.Dataset(X_val, y_val, reference=train))
             cbs.append(lgb.early_stopping(30, verbose=False))
-        self._b = lgb.train(p, train, num_boost_round=rounds, valid_sets=sets, callbacks=cbs)
-        self.best_iteration = int(self._b.best_iteration or rounds)
+        base = init._b if self.can_continue(init) is None else None
+        self.continued = base is not None
+        self._b = lgb.train(p, train, num_boost_round=rounds, valid_sets=sets, callbacks=cbs,
+                            init_model=base)
+        self.best_iteration = int(self._b.best_iteration or self._b.current_iteration())
         gain = self._b.feature_importance("gain")
         self.importance = {i: float(v) for i, v in enumerate(gain) if v > 0}
         return self
@@ -133,7 +158,11 @@ class XGBoostModel(BaseModel):
     kind = "xgboost"
     random_forest = False
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None):
+    @property
+    def supports_continual(self) -> bool:          # type: ignore[override]
+        return not self.random_forest
+
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None):
         import xgboost as xgb
 
         p = {"objective": "binary:logistic" if self.task == "classifier" else "reg:squarederror",
@@ -150,8 +179,12 @@ class XGBoostModel(BaseModel):
         evals, es = [], None
         if X_val is not None and len(X_val) and not self.random_forest:
             evals, es = [(xgb.DMatrix(X_val, label=y_val), "val")], 30
+        base = None
+        if self.can_continue(init) is None:
+            base = init._b if init.best_iteration is None else init._b[:init.best_iteration + 1]
+        self.continued = base is not None
         self._b = xgb.train(p, dtr, num_boost_round=rounds, evals=evals,
-                            early_stopping_rounds=es, verbose_eval=False)
+                            early_stopping_rounds=es, verbose_eval=False, xgb_model=base)
         self.best_iteration = getattr(self._b, "best_iteration", None)
         score = self._b.get_score(importance_type="gain")
         self.importance = {int(k[1:]): float(v) for k, v in score.items() if k.startswith("f")}
@@ -187,7 +220,7 @@ class XGBoostRFModel(XGBoostModel):
 class CatBoostModel(BaseModel):
     kind = "catboost"
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None):
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None):
         from catboost import CatBoostClassifier, CatBoostRegressor
 
         p = {"iterations": 500, "depth": 5, "learning_rate": 0.05, "l2_leaf_reg": 3.0,
@@ -198,6 +231,9 @@ class CatBoostModel(BaseModel):
         kw = {}
         if X_val is not None and len(X_val):
             kw = {"eval_set": (X_val, y_val), "early_stopping_rounds": 30}
+        if self.can_continue(init) is None:
+            kw["init_model"] = init._m
+            self.continued = True
         self._m.fit(X, y, sample_weight=w, **kw)
         self.best_iteration = int(self._m.get_best_iteration() or p["iterations"])
         imp = self._m.get_feature_importance()
@@ -227,8 +263,9 @@ class CatBoostModel(BaseModel):
 class ForestModel(BaseModel):
     kind = "random_forest"
     extra = False
+    supports_continual = False
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None):
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None):
         from sklearn import ensemble
 
         name = ("ExtraTrees" if self.extra else "RandomForest") + (
@@ -298,7 +335,7 @@ class LinearModel(BaseModel):
 
     kind = "linear"
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None):
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None):
         X, y = np.asarray(X, float), np.asarray(y, float)
         w = np.ones(len(y)) if w is None else np.asarray(w, float)
         lam = float(self.params.get("l2", 1.0)) / len(y)
@@ -310,6 +347,8 @@ class LinearModel(BaseModel):
                                         A.T @ (w * y) / w.sum())
         else:
             beta = np.zeros(A.shape[1])
+            if self.can_continue(init) is None and len(init.coef) == A.shape[1]:
+                beta, self.continued = np.array(init.coef, float), True
             for _ in range(100):
                 p = 1 / (1 + np.exp(-A @ beta))
                 g = A.T @ (w * (p - y)) / w.sum() + reg @ beta
@@ -343,7 +382,7 @@ class _TorchModel(BaseModel):
     def _net(self, n_in: int):
         raise NotImplementedError
 
-    def fit(self, X, y, w=None, X_val=None, y_val=None):
+    def fit(self, X, y, w=None, X_val=None, y_val=None, init=None):
         import torch
 
         torch.manual_seed(self.seed)
@@ -353,6 +392,9 @@ class _TorchModel(BaseModel):
         w = torch.ones(len(y)) if w is None else torch.tensor(np.asarray(w, np.float32))
         self.n_in = X.shape[1]
         self._m = self._net(self.n_in)
+        if self.can_continue(init) is None and getattr(init, "n_in", None) == self.n_in:
+            self._m.load_state_dict(init._m.state_dict())
+            self.continued = True
         opt = torch.optim.AdamW(self._m.parameters(), lr=float(self.params.get("lr", 1e-3)),
                                 weight_decay=float(self.params.get("weight_decay", 1e-4)))
         epochs = int(self.params.get("epochs", 60))

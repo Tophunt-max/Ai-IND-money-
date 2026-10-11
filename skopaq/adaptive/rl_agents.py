@@ -19,6 +19,12 @@ profit factor, bootstrap CI of the expectancy, drawdown) against a buy-and-hold 
 (``<model_dir>/rl``): it reaches ``shadow`` only by passing the gates and ``champion``
 only after the shadow days and a named admin approval — see ``rl_live``.
 
+**Continual learning** (``RLConfig.continual``, ``SKOPAQ_RL_CONTINUAL_LEARNING``,
+``--continual``): training starts from the previous policy of the same algorithm (RL
+champion, else shadow, else the newest — ``find_parent``) with its weights and its
+observation scaling kept, instead of from random weights; DQN explores less
+(``continual_eps_start``). It is still a candidate behind the same gates.
+
 Nothing here places orders.
 """
 
@@ -92,6 +98,8 @@ class RLConfig:
     eps_start: float = 1.0
     eps_end: float = 0.05
     eps_frac: float = 0.6
+    continual: bool = False
+    continual_eps_start: float = 0.2      # DQN: a continued policy explores less
     env: EnvConfig = field(default_factory=EnvConfig)
 
     def as_dict(self) -> dict:
@@ -347,17 +355,27 @@ def _train_dqn(net, runner: _Runner, cfg: RLConfig) -> dict:
     return {"steps": cfg.timesteps, "updates": updates}
 
 
-def train_policy(sessions, cfg: RLConfig):
-    """``(net, normalizer, info)`` trained on ``sessions`` (``precompute`` output)."""
+def train_policy(sessions, cfg: RLConfig, init: Any = None):
+    """``(net, normalizer, info)`` trained on ``sessions`` (``precompute`` output).
+    ``init``: a loaded ``rl_live.RLPolicy`` to continue (continual learning)."""
+    from dataclasses import replace
+
     if not torch_available():
         raise RuntimeError("RL agents need PyTorch: pip install 'skopaq[torch]'")
     if not sessions:
         raise ValueError("no training sessions with enough bars")
     rng = _seed(cfg.seed)
-    norm = Normalizer.fit(sessions)
     net = build_net(cfg.algo, cfg.hidden)
+    if init is not None:
+        net.load_state_dict(init.net.state_dict())
+        norm = init.norm                     # the input scaling the weights were trained on
+        if cfg.algo == "dqn":
+            cfg = replace(cfg, eps_start=min(cfg.eps_start, cfg.continual_eps_start))
+    else:
+        norm = Normalizer.fit(sessions)
     runner = _Runner(sessions, cfg, norm, rng)
     info = (_train_dqn if cfg.algo == "dqn" else _train_actor_critic)(net, runner, cfg)
+    info["continued_from"] = getattr(init, "version", None)
     net.eval()
     eps = runner.episode_net
     info["episodes"] = len(eps)
@@ -459,6 +477,34 @@ def split_sessions(history: Mapping[str, Sequence[Sequence[Any]]], train_frac: f
     return train, test
 
 
+def find_parent(registry: Optional[ModelRegistry], cfg: RLConfig) -> tuple[Any, str]:
+    """``(policy, why)``: the policy a continual run continues (verified on load), or
+    None and the reason."""
+    if registry is None:
+        return None, "no registry"
+    from skopaq.adaptive.rl_live import RLPolicy
+
+    entries = [registry.champion(), registry.shadow()]
+    entries += [registry.get(v["version"]) for v in reversed(registry.versions())]
+    why = "no previous policy"
+    for e in entries:
+        if not e or (e.get("model") or {}).get("kind") != RL_KIND:
+            continue
+        if e["model"].get("algo") != cfg.algo:
+            why = f"no previous {cfg.algo.upper()} policy"
+            continue
+        try:
+            p = RLPolicy(e["model"]["path"], version=e["version"])
+        except Exception as exc:
+            why = f"{e['version']} not usable: {exc}"
+            continue
+        if int(p.meta.get("hidden", -1)) != cfg.hidden:
+            why = f"{e['version']} has another network size"
+            continue
+        return p, ""
+    return None, why
+
+
 def train_and_register(history: Mapping[str, Sequence[Sequence[Any]]], cfg: RLConfig, *,
                        registry: Optional[ModelRegistry] = None) -> dict:
     """Train, evaluate out of sample, save and (with a registry) register + gate."""
@@ -466,8 +512,12 @@ def train_and_register(history: Mapping[str, Sequence[Sequence[Any]]], cfg: RLCo
     if not test:
         raise ValueError("not enough sessions: some must be kept back for the test")
     t0 = datetime.now(timezone.utc)
-    net, norm, info = train_policy(train, cfg)
+    parent, why = find_parent(registry, cfg) if cfg.continual else (None, "off")
+    net, norm, info = train_policy(train, cfg, init=parent)
     report = evaluate_policy(net, norm, test, cfg.env)
+    report["continual"] = {"enabled": cfg.continual,
+                           "parent": parent.version if parent is not None else None,
+                           **({"fresh": why} if cfg.continual and parent is None else {})}
     report.update(algo=cfg.algo, train_sessions=len(train), test_sessions=len(test),
                   training=info, seconds=round((datetime.now(timezone.utc) - t0)
                                                .total_seconds(), 1))
@@ -479,12 +529,15 @@ def train_and_register(history: Mapping[str, Sequence[Sequence[Any]]], cfg: RLCo
     dataset = {"symbols": sorted(history), "fingerprint": _fingerprint(history),
                "train_sessions": len(train), "test_sessions": len(test)}
     path = save_policy(net, norm, cfg, registry.dir / "artifacts", name=name,
-                       extra={"dataset": dataset, "trained_at": t0.isoformat()})
+                       extra={"dataset": dataset, "trained_at": t0.isoformat(),
+                              "continued_from": report["continual"]["parent"]})
     entry = registry.register(model={"kind": RL_KIND, "bundle": name, "path": str(path),
                                      "algo": cfg.algo},
                               report=report, params={"rl": cfg.as_dict()}, dataset=dataset,
                               strategy_id=f"rl.{cfg.algo}",
-                              notes=f"{cfg.algo.upper()} on {', '.join(sorted(history))}")
+                              notes=f"{cfg.algo.upper()} on {', '.join(sorted(history))}"
+                              + (f", continued from {report['continual']['parent']}"
+                                 if report["continual"]["parent"] else ""))
     fails = registry.evaluate_candidate(entry["version"], gates=RL_GATES)
     out.update(version=entry["version"], bundle=name, path=str(path), gate_failures=fails,
                state="shadow" if not fails else "candidate")
@@ -507,6 +560,9 @@ def config_from(config: Any, **over: Any) -> RLConfig:
                     min_reward_to_cost=s.min_reward_to_cost,
                     min_net_rr=s.qualify_rules.min_net_rr)
     algo = str(over.pop("algo", None) or getattr(config, "rl_algo", "ppo") or "ppo").lower()
+    cont = over.pop("continual", None)
+    over["continual"] = (getattr(config, "rl_continual_learning", False) is True
+                         if cont is None else bool(cont))
     steps = int(over.pop("timesteps", None) or getattr(config, "rl_timesteps", 60_000))
     return RLConfig(algo=algo, timesteps=steps, env=env, **over)
 
