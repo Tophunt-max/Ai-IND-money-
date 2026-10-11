@@ -348,6 +348,17 @@ class SkopaqConfig(BaseSettings):
     adaptive_target: str = "forward"            # forward | setup
     adaptive_horizon_bars: int = 15
     adaptive_di_threshold: float = 1.5
+    # Your strategy (features + targets): "path/to/file.py:ClassName"; empty = the default
+    # one. It runs code, so it is set in .env only, never from the dashboard
+    adaptive_strategy: str = ""
+    # Data pipeline (skopaq/adaptive/pipeline.py)
+    adaptive_scaler: str = "minmax"            # minmax | standard | robust | none
+    adaptive_pca: bool = False
+    adaptive_svm: bool = False
+    adaptive_dbscan: bool = False
+    adaptive_noise_std: float = 0.0
+    adaptive_weight_factor: float = 0.0        # 0 = equal weights; e.g. 0.9 favours recent rows
+    adaptive_keep_models: int = 10             # bundles kept (champion / shadow always kept)
     signal_journal_dir: str = "~/.skopaq/signals"  # every candidate + decision (learning data)
     model_dir: str = "~/.skopaq/models"        # candidate / shadow / champion models
     # Mirror signal / order / model journals to Supabase (migration 005), best effort

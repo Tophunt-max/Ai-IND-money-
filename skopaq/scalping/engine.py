@@ -213,6 +213,12 @@ class ScalpEngine:
                 logger.warning("Scalper: price feed subscription failed — REST quotes",
                                exc_info=True)
         await self._adopt()
+        try:                       # a bundle model's feature warm-up: earlier days' bars
+            n = await self._gate.seed_history(self._client, list(self.codes))
+            if n:
+                logger.info("Scalper: adaptive model history seeded for %d symbol(s)", n)
+        except Exception:
+            logger.debug("Adaptive history not seeded", exc_info=True)
 
     async def _seed(self, symbol: str) -> None:
         """Today's candles so far (1-minute history from REST)."""

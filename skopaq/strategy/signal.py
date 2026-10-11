@@ -83,6 +83,7 @@ class QualifyRules:
     max_participation: Optional[float] = 0.10   # qty / average bar volume (when known)
     min_model_prob: Optional[float] = None      # champion model gate (None = off)
     block_model_outliers: bool = False          # refuse when the market is unlike training
+    require_model_entry: bool = False           # a bundle's own entry rule must say yes
 
 
 @dataclass
@@ -212,6 +213,14 @@ def qualify(c: SignalCandidate, rules: QualifyRules = QualifyRules(), *,
             passed.append(f"model P(net win) {c.model_prob:.2f}")
 
     adaptive = ev.get("adaptive") or {}
+    if rules.require_model_entry and adaptive:
+        if adaptive.get("do_predict") == -1:
+            reasons.append("model: not enough data for its features")
+        elif not adaptive.get("entry"):
+            reasons.append(f"model {adaptive.get('version', '')}: no entry "
+                           f"({adaptive.get('entry_rule', '')}, score {adaptive.get('score')})")
+        else:
+            passed.append(f"model entry ({adaptive.get('entry_rule')})")
     if rules.block_model_outliers and adaptive.get("outlier"):
         reasons.append(f"market unlike the model's training data (dissimilarity "
                        f"{adaptive.get('di', 0):.2f} > {adaptive.get('di_threshold', 0):.2f})")

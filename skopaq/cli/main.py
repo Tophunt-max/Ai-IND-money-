@@ -588,60 +588,148 @@ def _fetch_history(config, symbols: list[str], days: int) -> dict:
 def adaptive_train(
     symbols: str = typer.Option("", help="Symbols (default SKOPAQ_ADAPTIVE_SYMBOLS, else "
                                          "the scalp symbols)."),
+    strategy: str = typer.Option("", help="Your strategy: path/to/file.py:ClassName "
+                                          "(default SKOPAQ_ADAPTIVE_STRATEGY / built-in)."),
     correlated: str = typer.Option("", help="Correlated symbols whose features are added."),
-    days: int = typer.Option(0, help="Days of 1-minute history (default "
-                                     "SKOPAQ_ADAPTIVE_DAYS)."),
-    model: str = typer.Option("", help="lightgbm | xgboost | catboost | logistic."),
-    target: str = typer.Option("", help="forward (every bar) | setup (strategy setups)."),
+    days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_ADAPTIVE_DAYS)."),
+    model: str = typer.Option("", help="lightgbm | xgboost | xgboost_rf | catboost | "
+                                       "random_forest | extra_trees | linear | mlp | "
+                                       "ft_transformer."),
+    scaler: str = typer.Option("", help="minmax | standard | robust | none."),
+    pca: Optional[bool] = typer.Option(None, "--pca/--no-pca", help="PCA (99.9 % variance)."),
+    svm: Optional[bool] = typer.Option(None, "--svm/--no-svm", help="One-class SVM outliers."),
+    dbscan: Optional[bool] = typer.Option(None, "--dbscan/--no-dbscan",
+                                          help="DBSCAN outliers."),
+    di: Optional[float] = typer.Option(None, help="Dissimilarity Index threshold (0 = off)."),
+    noise: Optional[float] = typer.Option(None, help="Training noise std (0 = off)."),
+    weight_factor: Optional[float] = typer.Option(None, help="Recent-row weighting "
+                                                             "(0 = off, e.g. 0.9)."),
 ) -> None:
-    """FreqAI-style training (no orders): expanded features, outlier filter, Dissimilarity
-    Index, model, rolling backtest with periodic retraining; registered as a candidate and
-    gated (passing = shadow; promotion stays an admin's decision)."""
+    """Train your adaptive strategy (no orders): look-ahead check, data pipeline, model per
+    target, rolling retrain backtest; saved as a verified bundle, registered as a
+    candidate and gated (passing = shadow; promotion stays an admin's decision)."""
     from dataclasses import replace
 
-    from skopaq.adaptive.features import FeatureConfig
-    from skopaq.adaptive.retrain import config_from, symbols_from, train_and_register
+    from skopaq.adaptive.framework import config_with, train_bundle
+    from skopaq.adaptive.retrain import (
+        purge_bundles,
+        strategy_from,
+        symbols_from,
+        train_config_from,
+    )
+    from skopaq.adaptive.strategy import LookAheadError, load_strategy
     from skopaq.config import SkopaqConfig
     from skopaq.db.mirror import mirror_from_config
     from skopaq.learning.registry import ModelRegistry, model_dir
-    from skopaq.scalping.settings import ScalpSettings
 
     _setup_logging("WARNING")
     config = SkopaqConfig()
-    cfg = config_from(config)
+    strat = load_strategy(strategy) if strategy else strategy_from(config)
+    if correlated:
+        strat.correlated = tuple(x.strip().upper() for x in correlated.split(",") if x.strip())
+    cfg = config_with(train_config_from(config), scaler=scaler or None, pca=pca, svm=svm,
+                      dbscan=dbscan, di_threshold=di, noise_std=noise)
     if model:
         cfg = replace(cfg, model_kind=model)
-    if target:
-        cfg = replace(cfg, target=target)
-    if correlated:
-        cfg = replace(cfg, features=FeatureConfig(correlated=tuple(
-            s.strip().upper() for s in correlated.split(",") if s.strip())))
+    if weight_factor is not None:
+        cfg = replace(cfg, weight_factor=weight_factor)
     names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
     n_days = days or int(config.adaptive_days)
     hist = _fetch_history(config, names, n_days)
-    corr = _fetch_history(config, list(cfg.features.correlated), n_days) \
-        if cfg.features.correlated else {}
+    corr = _fetch_history(config, list(strat.correlated), n_days) if strat.correlated else {}
     registry = ModelRegistry(model_dir(config))
     registry.mirror = mirror_from_config(config)
     try:
-        entry = train_and_register(hist, cfg, registry, correlated=corr,
-                                   settings=ScalpSettings.from_config(config))
-    except ValueError as exc:
+        entry = train_bundle(strat, hist, cfg, correlated=corr, registry=registry)
+    except LookAheadError as exc:
+        console.print(f"[red]Refused: {exc}[/red]")
+        raise typer.Exit(2)
+    except (ValueError, ImportError) as exc:
         console.print(f"Not trained: {exc}")
         raise typer.Exit(2)
+    purge_bundles(registry, int(config.adaptive_keep_models))
     rep = entry["report"]
-    console.print(f"Candidate {entry['version']} ({rep.get('model_kind')}, "
-                  f"{rep.get('features')} features) — state {entry['state']}")
-    console.print(f"  test: baseline {rep['baseline']}")
-    console.print(f"        model    {rep.get('model')}")
-    console.print(f"        model+DI {rep.get('model_di')} (outliers {rep.get('outlier_rate')})")
+    console.print(f"Candidate {entry['version']} ({cfg.model_kind}, strategy {strat.name}, "
+                  f"{rep.get('features')} features, targets {rep.get('targets')}) — "
+                  f"state {entry['state']}")
+    console.print(f"  pipeline: {rep.get('pipeline')}")
+    console.print(f"  entry rule: {rep.get('rule')}")
+    console.print(f"  test: every row {rep['baseline']}")
+    console.print(f"        model     {rep.get('model')}")
+    console.print(f"        model, no outliers {rep.get('model_di')} ({rep.get('outliers')})")
     roll = rep.get("rolling") or {}
-    console.print(f"  rolling retrain backtest: {roll.get('retrains', 0)} retrain(s); "
-                  f"baseline {roll.get('baseline', {}).get('net')}, model "
-                  f"{roll.get('model', {}).get('net')}, model+DI "
-                  f"{roll.get('model_di', {}).get('net')}")
+    console.print(f"  rolling retrain: {roll.get('retrains', 0)}×; every row "
+                  f"{roll.get('baseline', {}).get('net')}, model {roll.get('model', {}).get('net')}")
+    console.print(f"  top features: {[n for n, _ in rep.get('importance', [])[:5]]}")
     for fail in entry.get("gate_failures") or []:
         console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
+@app.command("model-export")
+def model_export(version: str = typer.Argument(..., help="Registry version."),
+                 file: str = typer.Argument(..., help="Target .tar.gz.")) -> None:
+    """Export a verified model bundle (to move it to another host)."""
+    from pathlib import Path
+
+    from skopaq.adaptive import artifacts
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import ModelRegistry, model_dir
+
+    reg = ModelRegistry(model_dir(SkopaqConfig()))
+    entry = reg.get(version)
+    bundle = (entry or {}).get("model", {}).get("bundle")
+    if not bundle:
+        console.print("Not a bundle model")
+        raise typer.Exit(1)
+    artifacts.export_bundle(Path(reg.dir) / "artifacts" / bundle, Path(file))
+    (Path(file).with_suffix(".entry.json")).write_text(__import__("json").dumps(entry, indent=1))
+    console.print(f"Exported {bundle} → {file} (+ registry entry)")
+
+
+@app.command("model-import")
+def model_import(file: str = typer.Argument(..., help="A bundle .tar.gz from model-export.")
+                 ) -> None:
+    """Import a bundle as a new *candidate* (it is gated again here, never champion)."""
+    import json
+    from pathlib import Path
+
+    from skopaq.adaptive import artifacts
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import ModelRegistry, model_dir
+
+    reg = ModelRegistry(model_dir(SkopaqConfig()))
+    dest = artifacts.import_bundle(Path(file), Path(reg.dir) / "artifacts")
+    manifest = artifacts.verify(dest)
+    report = json.loads((dest / "report.json").read_text())
+    entry = reg.register(
+        model={"kind": "adaptive-bundle-v1", "bundle": dest.name, "path": str(dest),
+               "manifest_sha": manifest["files"]["bundle.json"]["sha256"]},
+        report=report, params={}, dataset=manifest.get("dataset") or {},
+        strategy_id="adaptive.imported", notes=f"imported from {Path(file).name}")
+    fails = reg.evaluate_candidate(entry["version"])
+    console.print(f"Imported {dest.name} as {entry['version']}; gates: {fails or 'passed'}")
+
+
+@app.command("model-verify")
+def model_verify() -> None:
+    """Check every stored bundle against its manifest (exit 1 on a mismatch)."""
+    from pathlib import Path
+
+    from skopaq.adaptive import artifacts
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    root = Path(model_dir(SkopaqConfig())) / "artifacts"
+    bad = 0
+    for d in sorted(root.glob("*")) if root.is_dir() else []:
+        try:
+            m = artifacts.verify(d)
+            console.print(f"  ok   {d.name} ({len(m['files'])} files)")
+        except artifacts.IntegrityError as exc:
+            bad += 1
+            console.print(f"  [red]FAIL[/red] {exc}")
+    if bad:
+        raise typer.Exit(1)
 
 
 @app.command("hyperopt")

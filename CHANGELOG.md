@@ -68,6 +68,15 @@ All notable changes to SkopaqTrader. The format follows
   module; `skopaq adaptive-train`, `skopaq hyperopt`, `skopaq rl-research`; the
   Adaptive AI card on the dashboard. Look-ahead guard: candles after the decision are
   dropped whatever the caller passes.
+- **Adaptive framework**: your own strategy (FreqAI-style feature / target hooks,
+  regressors, custom entry rule) with a look-ahead guard that refuses future-peeking
+  features; data pipeline with scaler choice, PCA, one-class SVM, Dissimilarity Index,
+  DBSCAN and noise (all JSON, no pickle); recency `weight_factor`; models LightGBM,
+  XGBoost (+RF), CatBoost, random forest, extra trees, linear, PyTorch MLP and a tabular
+  transformer, multi-target, early stopping; rich predictions (per-target value, label and
+  live prediction mean/std, z-score, `do_predict`, DI and detector flags, entry rule,
+  model age, top features); verified bundles (SHA-256 manifest, library versions,
+  export / import / verify, retention); `skopaq model-export|import|verify`.
 - Dashboard: order lifecycle, charges reconciliation, risk capacity on the home page,
   regime map and drift on AI learning, chart studies (EMA, patterns, signal levels), an
   offline banner; Vitest + Testing Library tests and a CI job for the dashboard.

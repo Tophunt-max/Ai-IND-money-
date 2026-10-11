@@ -45,12 +45,17 @@ class _Models:
                            exc_info=True)
 
     def score(self, model, features: dict, *, candles=None, as_of=None,
-              correlated=None) -> tuple[Optional[float], Optional[dict]]:
+              correlated=None, symbol: str = "") -> tuple[Optional[float], Optional[dict]]:
         """(probability, adaptive details). Adaptive models (``candles_based``) build their
-        own expanded features from the candles; the others use the evidence features."""
+        own expanded features from the candles; the others use the evidence features.
+        Bundles (``rich``) return their full prediction output."""
         if model is None:
             return None, None
         try:
+            if getattr(model, "rich", False):
+                r = model.predict_full(candles or [], as_of, correlated, symbol)
+                score = r.get("score")
+                return (float(score) if score is not None else None), r
             if getattr(model, "candles_based", False):
                 prob, di, outlier = model.predict(candles or [], as_of, correlated)
                 thr = model.di.threshold if model.di is not None else None
@@ -85,8 +90,41 @@ class SignalGate:
                 thr = getattr(self.models.champion, "threshold", None)
             self.rules = QualifyRules(**{**self.rules.__dict__,
                                          "min_model_prob": float(thr) if thr else 0.5})
+        if model_gate and getattr(self.models.champion, "rich", False):
+            # A bundle decides with its own validated entry rule (probability threshold,
+            # mean + k·std, or the strategy's entry_signal)
+            self.rules = QualifyRules(**{**self.rules.__dict__, "min_model_prob": None,
+                                         "require_model_entry": True})
         if block_outliers:
             self.rules = QualifyRules(**{**self.rules.__dict__, "block_model_outliers": True})
+
+    async def seed_history(self, client: Any, symbols: Sequence[str], days: int = 3) -> int:
+        """Give a bundle champion / shadow earlier days' candles of ``symbols`` and its
+        correlated symbols (best effort; returns how many symbols were seeded)."""
+        bundles = [m for m in (self.models.champion, self.models.shadow)
+                   if hasattr(m, "seed_history")]
+        if not bundles or client is None:
+            return 0
+        from datetime import datetime, timedelta, timezone
+
+        from skopaq.scalping.backtest import fetch_days
+
+        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+        wanted = set(s.upper() for s in symbols)
+        for b in bundles:
+            wanted |= set(b.strategy.correlated)
+        done = 0
+        for sym in sorted(wanted):
+            try:
+                hist = await fetch_days(client, sym, days + 1)
+            except Exception:
+                continue
+            past = [c for d in hist for c in d if c.start.date() < today]
+            if past:
+                for b in bundles:
+                    b.seed_history(sym, past)
+                done += 1
+        return done
 
     # ── Strategy selection ──────────────────────────────────────────────
 
@@ -142,7 +180,8 @@ class SignalGate:
                                            decided_at=decided_at)
         except Exception:
             feats = {}
-        kw = {"candles": list(candles), "as_of": decided_at, "correlated": correlated}
+        kw = {"candles": list(candles), "as_of": decided_at, "correlated": correlated,
+              "symbol": symbol}
         c.model_prob, adaptive = self.models.score(self.models.champion, feats, **kw)
         c.model_version = self.models.champion_version
         if adaptive is not None:

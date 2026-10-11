@@ -78,6 +78,7 @@ LOCKED: dict[str, str] = {
     "api_shared_state_enabled": "API access (replicas)",
     "signal_journal_dir": "shared state directory",
     "model_dir": "shared state directory",
+    "adaptive_strategy": "runs code: .env / ENV_FILE only",
     "entry_lock_wait_seconds": "sequential-entry safety",
     "account_lease_enabled": "sequential-entry safety (cross-host)",
 }

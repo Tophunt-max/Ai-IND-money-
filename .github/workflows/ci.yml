@@ -52,6 +52,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev,ml]"
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install safetensors
       - run: python -m pytest tests/unit/learning tests/unit/strategy -q
 
   frontend:

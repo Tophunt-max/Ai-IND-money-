@@ -18,7 +18,15 @@ interface Version {
 }
 interface Params { version: string; best_params: Record<string, number>; holdout_current: { net: number; trades: number };
   holdout_best: { net: number; trades: number }; better_on_holdout: boolean; approved_by?: string; created_at: string }
+interface BundleInfo {
+  version: string; ok: boolean; error?: string; files?: number; bytes?: number; created_at?: string;
+  strategy?: string; model?: string; task?: string; targets?: string[]; features?: number;
+  rule?: { type: string; threshold?: number; k?: number };
+  pipeline?: { kept: number; input_columns: number; pca_components: number; svm: boolean; di: boolean; dbscan: boolean; removed: Record<string, number> };
+  importance?: [string, number][];
+}
 interface Adaptive {
+  bundles?: BundleInfo[]; model_kinds?: Record<string, boolean>; strategy?: string;
   enabled: boolean; retrain_hours: number; config: { model_kind: string; target: string; horizon_bars: number; train_days: number; di_threshold: number; features: { correlated: string[]; timeframes: number[] } };
   state: { ok?: boolean; finished_at?: string; version?: string; state?: string; error?: string };
   versions: Version[]; params: { approved: Params | null; candidate: Params | null };
@@ -81,6 +89,34 @@ export default function AdaptiveAI() {
               {latest.gate_failures.length > 0 && <div className="text-[11px] text-amber-300">{latest.gate_failures.slice(0, 4).join(" · ")}</div>}
             </>
           )}
+          <div className="border-t border-white/[0.06] pt-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium text-gray-200">Model bundles <span className="text-xs text-gray-500">· strategy: {d.strategy}</span></span>
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(d.model_kinds || {}).map(([k, ok]) => <Badge key={k} tone={ok ? "ok" : "neutral"}>{k}</Badge>)}
+              </div>
+            </div>
+            {!d.bundles?.length ? <div className="text-xs text-gray-500">No bundles yet.</div> : (
+              <Table head={["Bundle", "Model", "Pipeline", "Entry rule", "Integrity"]}>
+                {d.bundles.map((b) => (
+                  <tr key={b.version} className="align-top">
+                    <td><div className="text-gray-100">{b.version}</div>
+                      <div className="text-[11px] text-gray-500">{b.strategy} · {b.features} features · {(b.targets || []).join(", ")}</div>
+                      {b.importance?.length ? <div className="text-[11px] text-gray-500">top: {b.importance.slice(0, 3).map(([n]) => n).join(", ")}</div> : null}</td>
+                    <td className="text-xs">{b.model}<div className="text-gray-500">{b.task}</div></td>
+                    <td className="text-xs">{b.pipeline ? <>
+                      {b.pipeline.kept}/{b.pipeline.input_columns} cols{b.pipeline.pca_components ? ` → ${b.pipeline.pca_components} PCA` : ""}
+                      <div className="text-gray-500">{["svm", "di", "dbscan"].filter((k) => (b.pipeline as any)[k]).join(" · ") || "no outlier filter"}</div>
+                      {Object.keys(b.pipeline.removed || {}).length > 0 && <div className="text-gray-500">removed {Object.entries(b.pipeline.removed).map(([k, v]) => `${k} ${v}`).join(", ")}</div>}
+                    </> : "—"}</td>
+                    <td className="text-xs">{b.rule ? (b.rule.type === "probability" ? `P ≥ ${b.rule.threshold}` : `mean + ${b.rule.k}·std`) : "—"}</td>
+                    <td className="text-xs">{b.ok ? <Badge tone="ok">verified</Badge> : <Badge tone="error">{b.error?.slice(0, 40) || "failed"}</Badge>}
+                      {b.bytes != null && <div className="text-gray-500">{(b.bytes / 1024).toFixed(0)} KB · {b.files} files</div>}</td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+          </div>
           <div className="border-t border-white/[0.06] pt-4">
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-gray-200">Strategy parameters (hyperopt)</span>

@@ -67,6 +67,13 @@ ml = [
     "xgboost>=2.0",
     "catboost>=1.2",
     "optuna>=3.6",
+    "scikit-learn>=1.4",  # random_forest / extra_trees models, SVM / DBSCAN outliers
+]
+# Neural models (adaptive-train --model mlp | ft_transformer); CPU wheels:
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch = [
+    "torch>=2.2",
+    "safetensors>=0.4",
 ]
 # Runtime integrations installed in the Docker image (Dockerfile) and into the Mac host's
 # MCP Python (docs/deployment/mac-mini.md). redis is already a core dependency.

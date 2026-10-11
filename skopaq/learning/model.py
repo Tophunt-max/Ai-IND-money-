@@ -338,6 +338,10 @@ def load_model(d: dict):
         from skopaq.adaptive.engine import AdaptiveModel
 
         return AdaptiveModel.from_dict(d)
+    if kind == "adaptive-bundle-v1":
+        from skopaq.adaptive.framework import load_bundle_model
+
+        return load_bundle_model(d)
     if kind in _LOADERS:
         return _LOADERS[kind].from_dict(d)
     raise ValueError(f"unknown model kind {kind!r}")

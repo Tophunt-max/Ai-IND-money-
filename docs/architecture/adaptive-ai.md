@@ -24,6 +24,107 @@ is copied. FreqAI is also tied to Freqtrade's crypto exchange layer.
 - the same set for each correlated symbol;
 - session minute and day of the week.
 
+## Your own strategy (full control)
+
+Subclass `skopaq.adaptive.strategy.AdaptiveStrategy`. These hooks match FreqAI's:
+
+- `feature_engineering_expand_all(df, period, metadata)` — runs once per timeframe and period;
+- `feature_engineering_expand_basic(df, metadata)` — once per timeframe;
+- `feature_engineering_standard(df, metadata)` — once, on the base timeframe;
+- `set_targets(df, metadata)` — sets the targets;
+- `entry_signal(prediction, metadata)` (optional) — decides an entry from the prediction.
+
+Naming: features start with `%` and targets with `&`. Set `model_type = "regressor"` to
+predict values instead of classes. A full example is in
+`examples/adaptive_strategy_example.py`. Use your class with
+`--strategy file.py:Class` or `SKOPAQ_ADAPTIVE_STRATEGY` (set in .env only, because it
+runs code).
+
+Higher timeframes are resampled from the base bars and joined only once they have closed.
+Shifted copies and the correlated symbols' features are added automatically.
+
+**Look-ahead guard.** Features are recomputed with the history cut at several points. If
+any earlier value changes (for example `shift(-1)` or a centred window), training is
+refused. FreqAI has no such check.
+
+## Data pipeline
+
+`skopaq/adaptive/pipeline.py` is fitted on the training rows only. The steps, in order:
+
+1. Variance threshold.
+2. Scaler: `minmax` (FreqAI's default), `standard`, `robust` or `none`.
+3. **PCA** (99.9 % of variance).
+4. Outlier detectors, each optional:
+   - **One-class SVM** — removes training outliers and flags live points;
+   - **Dissimilarity Index**;
+   - **DBSCAN** — removes training noise and flags live points far from every core point.
+5. Training **noise**.
+
+`weight_factor` weights recent rows more, using FreqAI's formula. All fitted parameters
+are stored as JSON. The SVM and DBSCAN checks are re-implemented in NumPy from the stored
+support and core points.
+
+## Models
+
+| kind | library | task | saved as |
+|---|---|---|---|
+| lightgbm | LightGBM | classifier / regressor, early stopping | `lightgbm.txt` |
+| xgboost, xgboost_rf | XGBoost | both, early stopping | `xgboost.json` |
+| catboost | CatBoost | both, early stopping | `catboost.cbm` |
+| random_forest, extra_trees | scikit-learn | both | `trees.npz` (arrays, no pickle) |
+| linear | NumPy | logistic / ridge | `linear.json` |
+| mlp, ft_transformer | PyTorch | both, early stopping | `torch.safetensors` |
+
+Each target gets its own model (multi-target).
+
+## Prediction output
+
+Each prediction returns:
+
+- **Per target:**
+  - `value`;
+  - training `label_mean` / `label_std`;
+  - `pred_mean` / `pred_std`, taken from the last 500 live predictions once there are 20,
+    otherwise from validation (like FreqAI's `fit_live_predictions`);
+  - `zscore`.
+- **Data check:** `do_predict` (1 ok, 0 outlier, -1 not enough data) and the `missing_features`
+  count.
+- **Outliers:** the `di` value and each detector's flag (`detectors`).
+- **Entry:** `entry`, plus the `entry_rule` used: a probability threshold or mean + k·std,
+  chosen on validation, or the strategy's `entry_signal`. Backtests and live use the same
+  rule.
+- **Model:** `version`, `age_hours`, `top_features`.
+
+The scalper's signals store this output in `evidence.adaptive`. With the model gate on, a
+bundle decides with its own entry rule.
+
+## Model saving
+
+Each model is saved as a bundle in `<model_dir>/artifacts/<version>/`:
+
+- the model files;
+- `pipeline.json.gz`;
+- `bundle.json`, which holds the strategy layout, features, targets, statistics, entry rule
+  and feature importance;
+- `report.json`;
+- `manifest.json`, which holds the SHA-256 and size of every file, the library and Python
+  versions, and the training data fingerprint.
+
+On load, every file is checked against its hash, and any change refuses the model. The
+commands:
+
+- `skopaq model-verify` — checks all bundles;
+- `skopaq model-export VERSION file.tar.gz` and `skopaq model-import file.tar.gz` — move a
+  bundle between hosts. The import refuses `..` paths and links, and lands as a candidate
+  that is gated again;
+- `SKOPAQ_ADAPTIVE_KEEP_MODELS` — retention. The champion, shadow and rollback target are
+  never deleted.
+
+Install the optional libraries:
+
+- `pip install -e ".[ml]"` — LightGBM, XGBoost, CatBoost, Optuna, scikit-learn;
+- `.[torch]` — PyTorch, using the CPU wheels.
+
 ## Where it differs from FreqAI, deliberately
 
 FreqAI uses a retrained model at once. Here a retrained model is only a **candidate**:

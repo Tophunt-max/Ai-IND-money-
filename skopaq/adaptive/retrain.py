@@ -111,6 +111,52 @@ def train_and_register(days_by_symbol: Mapping[str, Sequence[Sequence[Any]]], cf
     return registry.get(entry["version"]) or entry
 
 
+def train_config_from(config: Any):
+    """The framework's ``TrainConfig`` from the ``adaptive_*`` settings."""
+    from skopaq.adaptive.framework import TrainConfig
+    from skopaq.adaptive.pipeline import PipelineConfig
+
+    g = lambda n, d: getattr(config, n, d)  # noqa: E731
+    return TrainConfig(
+        model_kind=str(g("adaptive_model_kind", "lightgbm") or "lightgbm"),
+        weight_factor=float(g("adaptive_weight_factor", 0.0) or 0.0),
+        pipeline=PipelineConfig(
+            scaler=str(g("adaptive_scaler", "minmax") or "minmax"),
+            pca=g("adaptive_pca", False) is True, svm=g("adaptive_svm", False) is True,
+            dbscan=g("adaptive_dbscan", False) is True,
+            di_threshold=float(g("adaptive_di_threshold", 1.5) or 0.0),
+            noise_std=float(g("adaptive_noise_std", 0.0) or 0.0)))
+
+
+def strategy_from(config: Any):
+    from skopaq.adaptive.strategy import load_strategy
+
+    s = load_strategy(str(getattr(config, "adaptive_strategy", "") or ""))
+    corr = tuple(x.strip().upper() for x in str(getattr(config, "adaptive_correlated", "")
+                                                 or "").split(",") if x.strip())
+    if corr and not s.correlated:
+        s.correlated = corr
+    hb = getattr(config, "adaptive_horizon_bars", None)
+    if isinstance(hb, int) and hb > 0 and type(s).__name__ == "AdaptiveStrategy":
+        s.label_period = hb
+    return s
+
+
+def purge_bundles(registry: Any, keep: int) -> list[str]:
+    from skopaq.adaptive import artifacts
+
+    protected = set()
+    for name in ("champion", "shadow"):
+        v = registry._pointer(name)
+        e = registry.get(v) if v else None
+        if e:
+            protected.add((e.get("model") or {}).get("bundle"))
+            prev = registry.get(e.get("rollback_to")) if e.get("rollback_to") else None
+            if prev:
+                protected.add((prev.get("model") or {}).get("bundle"))
+    return artifacts.purge(Path(registry.dir) / "artifacts", keep=keep, protected=protected)
+
+
 async def run_retrain(config: Any, client: Any, registry: Any, *,
                       now: Optional[datetime] = None) -> dict:
     """Fetch the history from the broker and retrain (never raises; the result is saved
@@ -137,12 +183,20 @@ async def run_retrain(config: Any, client: Any, registry: Any, *,
                 logger.warning("Adaptive: no history for correlated %s (%s)", sym, exc)
         if not any(days.values()):
             raise ValueError("no candle history fetched")
-        settings = None
-        if cfg.target == "setup":
-            from skopaq.scalping.settings import ScalpSettings
+        from skopaq.adaptive.framework import train_bundle
 
-            settings = ScalpSettings.from_config(config)
-        entry = train_and_register(days, cfg, registry, correlated=corr, settings=settings)
+        strategy = strategy_from(config)
+        for sym in strategy.correlated:
+            if sym not in corr:
+                try:
+                    corr[sym] = await fetch_days(client, sym, int(getattr(
+                        config, "adaptive_days", 30) or 30))
+                except Exception as exc:
+                    logger.warning("Adaptive: no history for correlated %s (%s)", sym, exc)
+        entry = train_bundle(strategy, days, train_config_from(config), correlated=corr,
+                             registry=registry)
+        state["purged"] = purge_bundles(registry, int(getattr(config, "adaptive_keep_models",
+                                                              10) or 10))
         state.update(ok=True, version=entry["version"], state=entry["state"],
                      gate_failures=entry.get("gate_failures", []),
                      rolling=(entry.get("report") or {}).get("rolling", {}).get("model"))

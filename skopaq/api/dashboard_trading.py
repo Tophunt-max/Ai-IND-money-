@@ -437,7 +437,35 @@ async def learning_adaptive() -> dict:
         approved = store.approved()
         if approved:
             approved.pop("previous", None)
+        from pathlib import Path as _P
+
+        from skopaq.adaptive import artifacts
+        from skopaq.adaptive.models import KINDS, available
+
+        bundles = []
+        root = _P(reg.dir) / "artifacts"
+        for d in sorted(root.glob("*"), key=lambda x: x.stat().st_mtime,
+                        reverse=True)[:10] if root.is_dir() else []:
+            try:
+                m = artifacts.verify(d)
+                info = __import__("json").loads((d / "bundle.json").read_text())
+                bundles.append({"version": d.name, "ok": True, "files": len(m["files"]),
+                                "bytes": sum(f["bytes"] for f in m["files"].values()),
+                                "libraries": m.get("libraries"), "created_at": m["created_at"],
+                                "strategy": info["strategy"]["name"],
+                                "model": next(iter(info["models"].values()))["meta"]["kind"],
+                                "task": info["task"], "targets": info["targets"],
+                                "rule": info["rule"], "pipeline": info["pipeline"],
+                                "importance": info.get("importance", [])[:8],
+                                "features": len(info["features"])})
+            except artifacts.IntegrityError as exc:
+                bundles.append({"version": d.name, "ok": False, "error": str(exc)})
+            except Exception as exc:
+                bundles.append({"version": d.name, "ok": False, "error": str(exc)[:200]})
         return {"enabled": bool(config.adaptive_auto_retrain),
+                "bundles": bundles,
+                "model_kinds": {k: available(k) for k in KINDS},
+                "strategy": config.adaptive_strategy or "built-in default",
                 "retrain_hours": config.adaptive_retrain_hours,
                 "config": config_from(config).as_dict(),
                 "state": read_state(reg.dir), "versions": list(reversed(versions))[:10],
