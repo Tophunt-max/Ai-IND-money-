@@ -14,7 +14,7 @@ is copied. FreqAI is also tied to Freqtrade's crypto exchange layer.
 | Periodic live retraining | `adaptive_auto_retrain`: retrains at the end of a session after `adaptive_retrain_hours` (see "Where it differs") |
 | Backtesting that emulates retraining | `engine.rolling_backtest`: trains on the last `train_days`, predicts the next `retrain_days`, repeats. Every prediction is out of sample |
 | Hyperopt | `hyperopt.hyperopt` (Optuna TPE, fixed seed) for the scalper's strategy parameters |
-| Reinforcement learning | `rl.py`: environment net of charges and a tabular Q-learning baseline. Research only, never wired to orders |
+| Reinforcement learning | PPO, A2C and DQN (`rl_agents.py`, PyTorch) in an environment that replays the scalper's own rules net of charges (`rl_env.py`). A policy trades as the `rl_policy` scalp strategy behind every gate (`rl_live.py`, see below). `rl.py` stays a tabular research baseline |
 
 `FeatureExpander` builds, for each timeframe (1, 5 and 15 minutes) and each period:
 
@@ -153,12 +153,52 @@ Rollback restores the previous champion.
   current ones on the other 30 %. Only then can an admin approve them, and rollback is
   supported. Risk limits are never part of the search.
 
+## Reinforcement learning: PPO, A2C, DQN
+
+FreqAI drives stable-baselines3; here the three algorithms are compact native PyTorch
+implementations (`skopaq/adaptive/rl_agents.py`), saved as `safetensors` + JSON with a
+SHA-256 manifest (no pickle).
+
+**Environment** (`rl_env.py`): one session of 1-minute candles, decided on each close and
+filled at the next open with slippage. Actions: hold, enter long, exit (masked when they
+do not apply). Every entry gets the live geometry (ATR stop bounded 0.4–2.5 ATR, `rr`
+target) and is managed by the scalper's own `update_trail` / `exit_reason` (stop, trail,
+target, time stop) and the square-off time; the agent can only exit earlier. An entry the
+live scalper would refuse on cost (its reward-to-charges check, or net reward/risk after
+charges and slippage below `SKOPAQ_SCALP_MIN_NET_RR`) is not taken in training either. The reward is
+the change of equity after every charge, so the rewards of a day add up to its net P&L.
+Observations: 10 point-in-time features plus the position state.
+
+**Evaluation:** trained on each symbol's earlier sessions, replayed greedily on its later
+unseen sessions; the report (net, profit factor, bootstrap CI, drawdown, charges, exits)
+goes through the registry's gates against a buy-and-hold baseline.
+
+**Live / paper trading** (`rl_live.py`), opt in with `SKOPAQ_RL_ENABLED=true` and
+`rl_policy` in `SKOPAQ_SCALP_STRATEGIES`:
+
+| | Policy used |
+|---|---|
+| Paper account | RL champion, else the shadow policy (`SKOPAQ_RL_PAPER_USE_SHADOW`) |
+| Live account | the RL champion only (gates passed, shadow days, named admin approval) **and** `SKOPAQ_RL_ALLOW_LIVE=true` in `.env` (locked against dashboard overrides) |
+
+On a closed candle the policy's *enter* becomes a scalp `Setup` that passes the regime map,
+the cost check, `SignalGate` qualification (net R:R after charges, spread, liquidity,
+model gate), sizing, the entry gate and the safety checker (kill switch, limits, funds)
+like any other strategy; the decision and its action scores are journalled as
+`evidence.rl`. Its *exit* sells a position it opened through the normal exit path; it
+cannot move a stop or a target. RL registry: `<model_dir>/rl` (separate from the
+model gate's champion). Dashboard: **AI learning → Reinforcement learning**.
+
 ## Commands (no orders)
 
 ```bash
 skopaq adaptive-train --symbols RELIANCE,TCS,INFY --correlated HDFCBANK --days 30 --model lightgbm
 skopaq hyperopt --symbols RELIANCE,TCS --days 30 --trials 60
 skopaq rl-research RELIANCE --days 30
+skopaq rl-train --symbols RELIANCE,TCS --algo ppo --days 60      # or a2c / dqn
+skopaq rl-status
+skopaq rl-promote <version> --by "Your Name" --reason "7 paper days reviewed"
+skopaq rl-rollback --by "Your Name" --reason "..."
 ```
 
 To install the optional libraries: `pip install -e ".[ml]"` (LightGBM, XGBoost, CatBoost,
@@ -175,6 +215,7 @@ The dashboard's **AI learning → Adaptive AI** card shows:
 
 - Results on synthetic data in the tests prove the mechanics, not an edge. Use real INDstocks
   history: the token is set in `.env`.
-- The RL module is a baseline simulator, not a strategy.
+- An RL policy learns from the same few weeks the gates test it on later; with little data
+  PPO / A2C often learn "never trade" (charges dominate), which is the honest outcome.
 - Feature expansion costs a few milliseconds per bar: training on 30 days × 10 symbols takes
   minutes. The daemon's retrain has a 15-minute budget.

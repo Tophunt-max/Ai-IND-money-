@@ -7,6 +7,7 @@ vi.mock("@/components/AuthGate", () => ({ useAuth: () => ({ isAdmin: true, user:
 import CandleChart from "@/components/CandleChart";
 import OfflineBanner from "@/components/OfflineBanner";
 import RiskCapacity from "@/components/RiskCapacity";
+import RLAgents, { rlTradingMode, type RLStatus } from "@/components/RLAgents";
 import { api, ApiError } from "@/lib/api";
 
 class RO { observe() {} disconnect() {} }
@@ -107,5 +108,32 @@ describe("OfflineBanner", () => {
     online.mockReturnValue(true);
     await act(async () => { window.dispatchEvent(new Event("online")); });
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("RLAgents", () => {
+  const base: RLStatus = {
+    enabled: true, in_scalp_strategies: true, allow_live: false, paper_use_shadow: true, torch: true,
+    algos: ["ppo", "a2c", "dqn"], algo: "ppo", paper_policy: "rl-ppo-1", live_policy: null,
+    champion: null, shadow: "rl-ppo-1", shadow_days: 7,
+    versions: [{ version: "rl-ppo-1", state: "shadow", algo: "ppo", train_sessions: 40, test_sessions: 18,
+      model: { trades: 52, net: 1840, profit_factor: 1.3, max_drawdown: 900, charges: 2100 },
+      baseline: { trades: 18, net: 400, profit_factor: 1.1 }, exits: { target: 20, stop: 25, agent: 7 }, gate_failures: [] }],
+  };
+
+  it("trades a shadow policy on paper only, never live without the switch and a champion", () => {
+    expect(rlTradingMode(base)).toEqual({ paper: "on · shadow", live: "off (SKOPAQ_RL_ALLOW_LIVE)" });
+    expect(rlTradingMode({ ...base, allow_live: true }).live).toBe("needs an approved champion");
+    expect(rlTradingMode({ ...base, allow_live: true, champion: "rl-ppo-1", live_policy: "rl-ppo-1", paper_policy: "rl-ppo-1" }))
+      .toEqual({ paper: "on · champion", live: "on · champion" });
+    expect(rlTradingMode({ ...base, in_scalp_strategies: false })).toEqual({ paper: "off", live: "off" });
+  });
+
+  it("lists the policies with their unseen-day results and a promote button for shadow", async () => {
+    respond({ "/learning/rl": base });
+    render(<RLAgents />);
+    await waitFor(() => expect(screen.getAllByText("rl-ppo-1").length).toBeGreaterThan(0));
+    expect(screen.getByText("Promote")).toBeTruthy();
+    expect(screen.getByText(/target 20, stop 25, agent 7/)).toBeTruthy();
   });
 });

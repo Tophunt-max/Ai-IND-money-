@@ -776,6 +776,113 @@ def rl_research(
     console.print(research_run(hist[symbol.upper()], epochs=epochs))
 
 
+@app.command("rl-train")
+def rl_train(
+    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_RL_SYMBOLS, else the "
+                                         "adaptive / scalp symbols)."),
+    algo: str = typer.Option("", help="ppo | a2c | dqn (default SKOPAQ_RL_ALGO)."),
+    days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_RL_DAYS)."),
+    timesteps: int = typer.Option(0, help="Training steps (default SKOPAQ_RL_TIMESTEPS)."),
+    seed: int = typer.Option(7, help="Random seed (reproducible runs)."),
+) -> None:
+    """Train a PPO / A2C / DQN trading policy in the scalper's own rules (net of charges),
+    test it on later unseen days and register it as an RL candidate. Passing the gates
+    makes it the shadow policy (paper trading only); live needs an admin's promotion."""
+    from skopaq.adaptive.rl_agents import (
+        ALGOS,
+        config_from,
+        rl_registry,
+        symbols_from,
+        torch_available,
+        train_and_register,
+    )
+    from skopaq.config import SkopaqConfig
+    from skopaq.db.mirror import mirror_from_config
+    from skopaq.learning.registry import model_dir
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    if not torch_available():
+        console.print("RL agents need PyTorch: pip install 'skopaq[torch]'")
+        raise typer.Exit(2)
+    cfg = config_from(config, algo=algo or None, timesteps=timesteps or None, seed=seed)
+    if cfg.algo not in ALGOS:
+        console.print(f"Unknown algorithm {cfg.algo!r}: one of {', '.join(ALGOS)}")
+        raise typer.Exit(2)
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
+    hist = _fetch_history(config, names, days or int(config.rl_days))
+    registry = rl_registry(model_dir(config))
+    registry.mirror = mirror_from_config(config)
+    try:
+        out = train_and_register(hist, cfg, registry=registry)
+    except ValueError as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    rep = out["report"]
+    console.print(f"RL {cfg.algo.upper()} {out['version']} — state {out['state']} "
+                  f"({rep['train_sessions']} training / {rep['test_sessions']} test sessions, "
+                  f"{rep['seconds']} s)")
+    console.print(f"  test (unseen days): {rep['model']}")
+    console.print(f"  baseline ({rep['baseline_name']}): {rep['baseline']}")
+    console.print(f"  exits {rep['exits']}  actions {rep['actions']}")
+    for fail in out.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
+@app.command("rl-status")
+def rl_status() -> None:
+    """The RL registry: champion, shadow and recent policies."""
+    from skopaq.adaptive.rl_agents import rl_registry
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    config = SkopaqConfig()
+    reg = rl_registry(model_dir(config))
+    champ, shadow = reg.champion(), reg.shadow()
+    console.print(f"enabled={config.rl_enabled} allow_live={config.rl_allow_live} "
+                  f"paper_use_shadow={config.rl_paper_use_shadow}")
+    console.print(f"champion: {champ['version'] if champ else None}")
+    console.print(f"shadow:   {shadow['version'] if shadow else None}")
+    for v in reg.versions()[-10:]:
+        m = (v.get("report") or {}).get("model") or {}
+        console.print(f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
+                      f"{m.get('trades')} PF {m.get('profit_factor')}")
+
+
+@app.command("rl-promote")
+def rl_promote(
+    version: str = typer.Argument(..., help="The shadow policy's version."),
+    approved_by: str = typer.Option(..., "--by", help="Your name (recorded)."),
+    reason: str = typer.Option(..., help="Why (recorded)."),
+) -> None:
+    """Shadow → champion after the shadow days (the only way an RL policy can trade live)."""
+    from skopaq.adaptive.rl_agents import RL_GATES, rl_registry
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    reg = rl_registry(model_dir(SkopaqConfig()))
+    try:
+        reg.promote(version, approved_by=approved_by, reason=reason, gates=RL_GATES)
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]Not promoted:[/red] {exc}")
+        raise typer.Exit(2)
+    console.print(f"{version} is the RL champion (previous one kept for rollback)")
+
+
+@app.command("rl-rollback")
+def rl_rollback(
+    by: str = typer.Option(..., help="Your name (recorded)."),
+    reason: str = typer.Option(..., help="Why (recorded)."),
+) -> None:
+    """Make the previous RL champion the champion again (none: no RL champion)."""
+    from skopaq.adaptive.rl_agents import rl_registry
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.registry import model_dir
+
+    prev = rl_registry(model_dir(SkopaqConfig())).rollback(by=by, reason=reason)
+    console.print(f"RL champion is now {prev}")
+
+
 @app.command("charges-reconcile")
 def charges_reconcile(
     file: str = typer.Argument(..., help="The broker's contract-note CSV export."),

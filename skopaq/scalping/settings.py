@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import time, timedelta
 from typing import Any
 
-from skopaq.scalping.strategies import STRATEGY_NAMES, StrategyParams
+from skopaq.scalping.strategies import RL_STRATEGY, STRATEGY_NAMES, StrategyParams
 from skopaq.strategy.signal import QualifyRules
 
 DEFAULT_SYMBOLS = ("RELIANCE,HDFCBANK,ICICIBANK,INFY,TCS,SBIN,AXISBANK,KOTAKBANK,LT,"
@@ -85,9 +85,10 @@ class ScalpSettings:
     @classmethod
     def _from_config(cls, config: Any) -> "ScalpSettings":
         g = lambda name, default=None: getattr(config, name, default)  # noqa: E731
+        known = STRATEGY_NAMES + (RL_STRATEGY,)
         strategies = tuple(s.lower() for s in _list(g("scalp_strategies"),
                                                      ",".join(STRATEGY_NAMES))
-                           if s.lower() in STRATEGY_NAMES) or STRATEGY_NAMES
+                           if s.lower() in known) or STRATEGY_NAMES
         entry_start = _hhmm(g("scalp_entry_start"), time(9, 30))
         entry_end = _hhmm(g("scalp_entry_end"), time(14, 45))
         flatten_at = _hhmm(g("scalp_flatten_at"), time(15, 10))

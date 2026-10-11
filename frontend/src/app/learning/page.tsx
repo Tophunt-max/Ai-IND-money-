@@ -6,6 +6,7 @@ import { useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Progress, Skeleton, StatCard, Table } from "@/components/ui";
 import { api, inr } from "@/lib/api";
 import AdaptiveAI from "@/components/AdaptiveAI";
+import RLAgents from "@/components/RLAgents";
 import ModelRegistry from "@/components/ModelRegistry";
 import RegimeDrift from "@/components/RegimeDrift";
 import { useApi } from "@/lib/hooks";
@@ -136,6 +137,7 @@ export default function LearningPage() {
       <PageTitle title="AI learning" icon={Sparkles} subtitle="What the system learns from its own signals and trades" />
       <ModelRegistry />
       <AdaptiveAI />
+      <RLAgents />
       <RegimeDrift />
       <ErrorBox error={error} />
 

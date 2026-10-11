@@ -46,7 +46,7 @@ from skopaq.market.candles import Candle, LiveSeries
 from skopaq.scalping.costs import round_trip_cost
 from skopaq.scalping.rules import ScalpPosition, exit_reason, update_trail
 from skopaq.scalping.settings import ScalpSettings
-from skopaq.scalping.strategies import Setup, atr_last, evaluate
+from skopaq.scalping.strategies import RL_STRATEGY, Setup, atr_last, evaluate
 from skopaq.finance.charges import EQUITY_INTRADAY, leg_charges
 from skopaq.strategy.gate import SignalGate, gate_from_config
 from skopaq.strategy.journal import SignalJournal
@@ -162,6 +162,7 @@ class ScalpEngine:
             self._gate.journal = signals
         self._signals = self._gate.journal
         self.spreads: dict[str, float] = {}       # symbol -> last REST bid/ask spread
+        self._rl: Any = None                      # skopaq.adaptive.rl_live.RLRuntime
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -219,6 +220,13 @@ class ScalpEngine:
                 logger.info("Scalper: adaptive model history seeded for %d symbol(s)", n)
         except Exception:
             logger.debug("Adaptive history not seeded", exc_info=True)
+        if RL_STRATEGY in self.settings.strategies:
+            try:                   # an RL policy: one more strategy behind the same gates
+                from skopaq.adaptive.rl_live import RLRuntime
+                self._rl = RLRuntime.from_config(self.config, paper=self._paper,
+                                                 params=self.settings.params)
+            except Exception:
+                logger.exception("Scalper: RL policy not loaded — rule strategies only")
 
     async def _seed(self, symbol: str) -> None:
         """Today's candles so far (1-minute history from REST)."""
@@ -397,8 +405,25 @@ class ScalpEngine:
             return "trading is paused (kill switch)"
         return None
 
+    async def _rl_exits(self, symbols: set[str], now: datetime) -> None:
+        """An RL position's policy may sell it early on a closed candle (never later:
+        the stop, trail, target, time stop and square-off keep running)."""
+        if self._rl is None:
+            return
+        for symbol in sorted(symbols):
+            pos = self.positions.get(symbol)
+            if pos is None or pos.exiting or pos.strategy != RL_STRATEGY:
+                continue
+            held = int((now - pos.opened_at).total_seconds() // self.settings.candle_seconds)
+            if self._rl.wants_exit(symbol, list(self.series[symbol].candles),
+                                   entry=pos.entry, bars_held=held):
+                price = self.prices.get(symbol) or self.series[symbol].candles[-1].close
+                await self._exit(pos, price, f"SCALP RL EXIT ({self._rl.version})")
+
     async def _entries(self, now: datetime) -> None:
         pending, self._pending = self._pending, set()
+        if pending:
+            await self._rl_exits(pending, now)
         if not pending or self._can_enter(now) is not None:
             return
         swing = await self._swing_symbols()
@@ -415,6 +440,8 @@ class ScalpEngine:
             if not names:
                 continue
             setup = evaluate(self.series[symbol].candles, names, self.settings.params)
+            if setup is None and RL_STRATEGY in names and self._rl is not None:
+                setup = self._rl.entry_setup(symbol, list(self.series[symbol].candles))
             if setup is not None:
                 await self._enter(symbol, setup, now)
 
@@ -500,6 +527,8 @@ class ScalpEngine:
         extra = {}
         if symbol in self.spreads:
             extra["spread_pct"] = self.spreads[symbol]
+        if setup.strategy == RL_STRATEGY and self._rl is not None:
+            extra.update(self._rl.evidence(symbol))
         candidate, decision = self._gate.decide(
             strategy_id=f"scalp.{setup.strategy}", symbol=symbol, product=EQUITY_INTRADAY,
             direction=1, decided_at=now.astimezone(_IST), timeframe_s=s.candle_seconds,

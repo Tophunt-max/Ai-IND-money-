@@ -198,3 +198,34 @@ def test_adaptive_status_and_parameter_approval(client):
     assert client.post("/api/dashboard/learning/params/rollback", headers=AUTH,
                        json={"reason": "roll it back"}).status_code == 200
     assert store.params() is None
+
+
+def test_rl_status_and_promotion_need_an_admin_and_the_shadow_days(client):
+    from skopaq.adaptive.rl_agents import rl_registry
+
+    body = client.get("/api/dashboard/learning/rl", headers=AUTH).json()
+    assert body["enabled"] is False and body["allow_live"] is False
+    assert body["algos"] == ["ppo", "a2c", "dqn"] and body["live_policy"] is None
+    reg = rl_registry(client.tmp / "models")
+    entry = reg.register(model={"kind": "rl-policy-v1", "bundle": "b", "path": "/nowhere"},
+                         report={"algo": "ppo", "model": {"net": 5.0}}, params={},
+                         dataset={}, strategy_id="rl.ppo")
+    v = entry["version"]
+    entry.update(state="shadow", shadow_since=datetime.now(timezone.utc).isoformat())
+    reg._write_json(reg._path(v), entry)
+    reg._set_pointer("shadow", v)
+    body = client.get("/api/dashboard/learning/rl", headers=AUTH).json()
+    assert body["shadow"] == v and body["paper_policy"] == v and body["live_policy"] is None
+    assert body["versions"][0]["state"] == "shadow"
+    _as_viewer()
+    assert client.post(f"/api/dashboard/learning/rl/{v}/promote",
+                       json={"reason": "looks good"}).status_code == 403
+    from skopaq.api.server import app
+    app.dependency_overrides.clear()
+    r = client.post(f"/api/dashboard/learning/rl/{v}/promote", headers=AUTH,
+                    json={"reason": "looks good"})
+    assert r.status_code == 409 and "days of paper" in r.json()["detail"]
+    assert client.post("/api/dashboard/learning/rl/nope-x/promote", headers=AUTH,
+                       json={"reason": "looks good"}).status_code == 404
+    assert client.post("/api/dashboard/learning/rl/rollback", headers=AUTH,
+                       json={"reason": "nothing to roll"}).json()["champion"] is None

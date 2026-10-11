@@ -77,6 +77,13 @@ All notable changes to SkopaqTrader. The format follows
   live prediction mean/std, z-score, `do_predict`, DI and detector flags, entry rule,
   model age, top features); verified bundles (SHA-256 manifest, library versions,
   export / import / verify, retention); `skopaq model-export|import|verify`.
+- **RL agents (PPO, A2C, DQN)** in native PyTorch, trained in a replay of the scalper's own
+  rules net of charges and tested on later unseen days; policies saved as safetensors with
+  a SHA-256 manifest in a separate RL registry (candidate → shadow → admin-approved
+  champion, rollback). A policy trades as the `rl_policy` scalp strategy behind every
+  gate: the shadow policy on paper, live only as the champion with
+  `SKOPAQ_RL_ALLOW_LIVE` (`.env` only). `skopaq rl-train|rl-status|rl-promote|rl-rollback`,
+  dashboard card with promote / rollback.
 - Dashboard: order lifecycle, charges reconciliation, risk capacity on the home page,
   regime map and drift on AI learning, chart studies (EMA, patterns, signal levels), an
   offline banner; Vitest + Testing Library tests and a CI job for the dashboard.

@@ -72,6 +72,12 @@ _LENIENT_FIELDS = (
     "adaptive_retrain_days",
     "adaptive_horizon_bars",
     "adaptive_di_threshold",
+    "rl_enabled",
+    "rl_allow_live",
+    "rl_paper_use_shadow",
+    "rl_timesteps",
+    "rl_days",
+    "rl_stop_atr",
     "entry_lock_wait_seconds",
     "max_consecutive_losses",
     "max_shares_per_order",
@@ -359,6 +365,19 @@ class SkopaqConfig(BaseSettings):
     adaptive_noise_std: float = 0.0
     adaptive_weight_factor: float = 0.0        # 0 = equal weights; e.g. 0.9 favours recent rows
     adaptive_keep_models: int = 10             # bundles kept (champion / shadow always kept)
+
+    # ── Reinforcement learning (PPO / A2C / DQN, skopaq/adaptive/rl_*.py) ────
+    # The policy trades as the scalper's "rl_policy" strategy (add it to
+    # SKOPAQ_SCALP_STRATEGIES) behind every gate. Paper: the RL champion, else its shadow
+    # policy. Live: the admin-approved champion only, and only with rl_allow_live
+    rl_enabled: bool = False
+    rl_allow_live: bool = False                # .env only (locked against overrides)
+    rl_paper_use_shadow: bool = True
+    rl_algo: str = "ppo"                       # ppo | a2c | dqn
+    rl_timesteps: int = 60_000
+    rl_days: int = 60                          # history per training run
+    rl_symbols: str = ""                       # empty: adaptive_symbols, else scalp_symbols
+    rl_stop_atr: float = 1.5                   # the entry's stop distance (bounded 0.4–2.5 ATR)
     signal_journal_dir: str = "~/.skopaq/signals"  # every candidate + decision (learning data)
     model_dir: str = "~/.skopaq/models"        # candidate / shadow / champion models
     # Mirror signal / order / model journals to Supabase (migration 005), best effort

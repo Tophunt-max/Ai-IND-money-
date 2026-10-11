@@ -11,10 +11,9 @@ trains on the first days and evaluates greedily on later days it never saw, repo
 net P&L, trades and charges next to a buy-nothing and a buy-and-hold baseline.
 
 This module deliberately has no path to the executor: ``RESEARCH_ONLY`` is checked by
-the tests, and a policy from here would have to be re-implemented as a rule strategy and
-go through the normal backtest → gates → shadow → approval path to ever trade. A
-stable-baselines3 agent can be plugged into ``TradingEnv`` (``reset`` / ``step``) for
-deeper research once this simulator is trusted.
+the tests. The tradable agents (PPO / A2C / DQN) are ``rl_env`` / ``rl_agents`` /
+``rl_live``: they replay the scalper's own exit rules and reach paper or live trading only
+through the RL registry's gates and the scalper's signal and risk gates.
 """
 
 from __future__ import annotations

@@ -79,6 +79,7 @@ LOCKED: dict[str, str] = {
     "signal_journal_dir": "shared state directory",
     "model_dir": "shared state directory",
     "adaptive_strategy": "runs code: .env / ENV_FILE only",
+    "rl_allow_live": "live trading by an RL policy: .env / ENV_FILE only",
     "entry_lock_wait_seconds": "sequential-entry safety",
     "account_lease_enabled": "sequential-entry safety (cross-host)",
 }

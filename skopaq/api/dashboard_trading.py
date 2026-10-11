@@ -500,3 +500,80 @@ async def learning_params_rollback(body: PromoteBody,
     prev = await asyncio.to_thread(ParamsStore(model_dir(SkopaqConfig())).rollback)
     await _notify_audit(user, f"↩️ Strategy parameters rolled back: {body.reason}")
     return {"ok": True, "approved": (prev or {}).get("version")}
+
+
+# ── Reinforcement learning (PPO / A2C / DQN) ─────────────────────────────────
+
+
+def _rl_registry():
+    from skopaq.adaptive.rl_agents import rl_registry
+    from skopaq.learning.registry import model_dir
+
+    return rl_registry(model_dir(SkopaqConfig()))
+
+
+@router.get("/learning/rl")
+async def learning_rl() -> dict:
+    from skopaq.adaptive.rl_agents import ALGOS, RL_GATES, torch_available
+
+    config = SkopaqConfig()
+    reg = _rl_registry()
+
+    def read() -> dict:
+        champ, shadow = reg.champion(), reg.shadow()
+        live_ok = bool(config.rl_allow_live) and champ is not None
+        active = (champ or (shadow if config.rl_paper_use_shadow else None))
+        versions = []
+        for v in reversed(reg.versions()[-15:]):
+            rep = v.get("report") or {}
+            versions.append({"version": v["version"], "state": v["state"],
+                             "created_at": v.get("created_at"), "algo": rep.get("algo"),
+                             "model": rep.get("model"), "baseline": rep.get("baseline"),
+                             "test_sessions": rep.get("test_sessions"),
+                             "train_sessions": rep.get("train_sessions"),
+                             "exits": rep.get("exits"), "actions": rep.get("actions"),
+                             "gate_failures": v.get("gate_failures") or [],
+                             "shadow_since": v.get("shadow_since"),
+                             "approved_by": v.get("approved_by")})
+        strategies = [s.strip().lower() for s in str(config.scalp_strategies).split(",")]
+        return {"enabled": bool(config.rl_enabled),
+                "in_scalp_strategies": "rl_policy" in strategies,
+                "allow_live": bool(config.rl_allow_live),
+                "paper_use_shadow": bool(config.rl_paper_use_shadow),
+                "torch": torch_available(), "algos": list(ALGOS), "algo": config.rl_algo,
+                "paper_policy": active["version"] if active else None,
+                "live_policy": champ["version"] if live_ok else None,
+                "champion": champ["version"] if champ else None,
+                "shadow": shadow["version"] if shadow else None,
+                "shadow_days": RL_GATES.shadow_days, "versions": versions,
+                "history": list(reversed(reg.history(30)))}
+
+    return _finite(await asyncio.to_thread(read))
+
+
+@router.post("/learning/rl/{version}/promote")
+async def learning_rl_promote(version: str, body: PromoteBody,
+                              user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.adaptive.rl_agents import RL_GATES
+
+    if not re.match(r"^[A-Za-z0-9_\-]{3,80}$", version):
+        raise HTTPException(422, "Not a policy version")
+    reg = _rl_registry()
+    try:
+        await asyncio.to_thread(reg.promote, version, approved_by=user.email,
+                                reason=body.reason, gates=RL_GATES)
+    except KeyError:
+        raise HTTPException(404, "No such RL policy") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🤖 RL policy {version} promoted to champion: {body.reason} "
+                              "(live only with SKOPAQ_RL_ALLOW_LIVE, from the next session)")
+    return {"ok": True, "champion": version}
+
+
+@router.post("/learning/rl/rollback")
+async def learning_rl_rollback(body: PromoteBody,
+                               user: DashboardUser = Depends(require_admin)) -> dict:
+    to = await asyncio.to_thread(_rl_registry().rollback, by=user.email, reason=body.reason)
+    await _notify_audit(user, f"↩️ RL policy rollback to {to or 'none'}: {body.reason}")
+    return {"ok": True, "champion": to}
