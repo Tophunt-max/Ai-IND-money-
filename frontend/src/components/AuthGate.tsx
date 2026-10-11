@@ -49,7 +49,7 @@ const AuthContext = createContext<AuthState>({
 export const useAuth = () => useContext(AuthContext);
 
 /** Pages that work without a login (the link from the password-reset email). */
-const PUBLIC_PATHS = ["/reset-password"];
+const PUBLIC_PATHS = ["/reset-password", "/offline"];
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const path = usePathname();

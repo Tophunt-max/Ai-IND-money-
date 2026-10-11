@@ -391,6 +391,7 @@ class SkopaqConfig(BaseSettings):
 
     # Dashboard control: status, stop/start requests and commands (shared home volume)
     control_dir: str = "~/.skopaq/control"
+    alerts_file: str = "~/.skopaq/alerts.json"  # price alerts + the dashboard notification feed
 
     # ── Daemon (autonomous session) ──────────────────────────────────
     daemon_max_trades_per_session: int = 3  # Max BUY orders per day

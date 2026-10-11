@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 
+import { useThemeColors } from "@/lib/themeColors";
+
 export interface Point {
   t: number; // unix seconds, or any increasing number
   v: number;
@@ -24,6 +26,7 @@ export default function Chart({
   baseline?: number; // colour above/below this (default: first point)
 }) {
   const ref = useRef<SVGSVGElement>(null);
+  const tc = useThemeColors();
   const [hover, setHover] = useState<number | null>(null);
   const W = 600;
   const H = height;
@@ -56,7 +59,7 @@ export default function Chart({
   const base = baseline ?? points[0].v;
   const last = points[points.length - 1].v;
   const up = last >= base;
-  const stroke = up ? "#0ecb81" : "#f6465d";
+  const stroke = up ? tc.up : tc.down;
   const gid = up ? "chart-up" : "chart-down";
 
   const move = (clientX: number) => {
@@ -105,12 +108,12 @@ export default function Chart({
         </defs>
         {[0.25, 0.5, 0.75].map((f) => (
           <line key={f} x1={pad.l} x2={W - pad.r} y1={pad.t + f * (H - pad.t - pad.b)} y2={pad.t + f * (H - pad.t - pad.b)}
-            stroke="rgba(255,255,255,0.04)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            stroke={tc.grid} strokeWidth="1" vectorEffect="non-scaling-stroke" />
         ))}
         {baseline !== undefined && (
           <line
             x1={pad.l} x2={W - pad.r} y1={geo.y(baseline)} y2={geo.y(baseline)}
-            stroke="rgba(255,255,255,0.18)" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke"
+            stroke={tc.axis} strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke"
           />
         )}
         <path d={geo.area} fill={`url(#${gid})`} />
@@ -119,9 +122,9 @@ export default function Chart({
           <>
             <line
               x1={geo.x(hover)} x2={geo.x(hover)} y1={pad.t} y2={H - pad.b}
-              stroke="rgba(255,255,255,0.25)" strokeWidth="1" vectorEffect="non-scaling-stroke"
+              stroke={tc.axis} strokeWidth="1" vectorEffect="non-scaling-stroke"
             />
-            <circle cx={geo.x(hover)} cy={geo.y(h.v)} r="4.5" fill={stroke} stroke="#0b0e11" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+            <circle cx={geo.x(hover)} cy={geo.y(h.v)} r="4.5" fill={stroke} stroke={tc.surface} strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </>
         )}
       </svg>

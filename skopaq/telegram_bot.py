@@ -588,6 +588,20 @@ async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error: {exc}")
 
 
+async def job_price_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every minute while NSE is open: fire the dashboard's price alerts (Telegram)."""
+    from skopaq.api.dashboard_market import _market_open
+
+    if not _market_open() or not _is_trading_day_ist():
+        return
+    try:
+        from skopaq.alerts import check_now
+
+        await check_now()
+    except Exception:
+        logger.warning("Price alert check failed", exc_info=True)
+
+
 async def cmd_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """INDstocks token status."""
     alert_chat_ids.add(update.message.chat.id)
@@ -665,6 +679,9 @@ def main() -> None:
         days=weekdays,
         name="eod_summary",
     )
+
+    # Price alerts set on the dashboard (fire once; the dashboard's stream fires them too)
+    app.job_queue.run_repeating(job_price_alerts, interval=60, first=30, name="price_alerts")
 
     # Container health check (docker compose): the heartbeat file's age
     from skopaq.config import SkopaqConfig

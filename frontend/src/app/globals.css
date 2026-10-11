@@ -2,25 +2,123 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Colour tokens as "r g b" triplets (tailwind.config.js). Light first, .dark overrides. */
 @layer base {
   :root {
+    color-scheme: light;
+    --ink-950: 243 245 249;   /* page */
+    --ink-900: 255 255 255;   /* cards */
+    --ink-850: 247 248 251;   /* inputs, segmented controls */
+    --ink-800: 238 241 246;
+    --ink-700: 226 231 239;
+    --ink-600: 205 212 224;
+    --white: 16 22 34;        /* strongest text; white/[x] = dark tints */
+    --gray-50: 3 7 18;
+    --gray-100: 17 24 39;
+    --gray-200: 31 41 55;
+    --gray-300: 55 65 81;
+    --gray-400: 75 85 99;
+    --gray-500: 107 114 128;
+    --gray-600: 148 155 168;
+    --gray-700: 203 208 216;
+    --gray-800: 226 229 235;
+    --gray-900: 241 243 246;
+    --gray-950: 249 250 251;
+    --brand-50: 238 240 255;
+    --brand-100: 30 38 120;
+    --brand-200: 40 52 160;
+    --brand-300: 61 79 224;
+    --brand-400: 83 103 255;
+    --brand-500: 83 103 255;
+    --brand-600: 61 79 224;
+    --brand-700: 45 60 190;
+    --emerald-100: 5 70 52;
+    --emerald-200: 6 95 70;
+    --emerald-300: 0 125 94;
+    --emerald-400: 0 158 120;
+    --emerald-500: 0 179 134;
+    --emerald-600: 0 149 111;
+    --rose-100: 120 24 14;
+    --rose-200: 160 34 20;
+    --rose-300: 196 48 28;
+    --rose-400: 221 70 44;
+    --rose-500: 235 91 60;
+    --rose-600: 201 74 47;
+    --amber-100: 110 50 10;
+    --amber-200: 140 62 12;
+    --amber-300: 176 82 8;
+    --amber-400: 214 118 6;
+    --amber-500: 245 158 11;
+    --amber-600: 217 119 6;
+    --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05), 0 1px 3px rgb(16 24 40 / 0.04);
+    --shadow-pop: 0 12px 32px -8px rgb(16 24 40 / 0.18), 0 2px 6px rgb(16 24 40 / 0.06);
+    --chart-grid: 16 22 34;
+  }
+  .dark {
     color-scheme: dark;
+    --ink-950: 13 15 19;
+    --ink-900: 22 25 31;
+    --ink-850: 28 32 39;
+    --ink-800: 34 39 47;
+    --ink-700: 46 52 62;
+    --ink-600: 62 69 81;
+    --white: 255 255 255;
+    --gray-50: 249 250 251;
+    --gray-100: 243 244 246;
+    --gray-200: 229 231 235;
+    --gray-300: 209 213 219;
+    --gray-400: 156 163 175;
+    --gray-500: 107 114 128;
+    --gray-600: 75 85 99;
+    --gray-700: 55 65 81;
+    --gray-800: 31 41 55;
+    --gray-900: 17 24 39;
+    --gray-950: 3 7 18;
+    --brand-50: 26 30 64;
+    --brand-100: 236 238 255;
+    --brand-200: 206 212 255;
+    --brand-300: 165 176 255;
+    --brand-400: 123 136 255;
+    --brand-500: 83 103 255;
+    --brand-600: 61 79 224;
+    --brand-700: 45 60 190;
+    --emerald-100: 209 250 229;
+    --emerald-200: 167 243 208;
+    --emerald-300: 74 222 160;
+    --emerald-400: 0 208 156;
+    --emerald-500: 0 179 134;
+    --emerald-600: 0 153 115;
+    --rose-100: 255 228 222;
+    --rose-200: 255 199 186;
+    --rose-300: 255 143 122;
+    --rose-400: 245 104 78;
+    --rose-500: 235 91 60;
+    --rose-600: 209 74 46;
+    --amber-100: 254 243 199;
+    --amber-200: 253 230 138;
+    --amber-300: 252 211 77;
+    --amber-400: 251 191 36;
+    --amber-500: 245 158 11;
+    --amber-600: 217 119 6;
+    --shadow-card: 0 0 0 1px rgb(255 255 255 / 0.04) inset;
+    --shadow-pop: 0 16px 40px -10px rgb(0 0 0 / 0.7);
+    --chart-grid: 255 255 255;
   }
   html {
     -webkit-tap-highlight-color: transparent;
     -webkit-text-size-adjust: 100%;
   }
   body {
-    @apply bg-ink-950 text-gray-100 antialiased;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "tnum";
+    @apply bg-ink-950 text-gray-200 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     overscroll-behavior-y: none;
   }
   ::selection {
-    @apply bg-brand-500/40 text-white;
+    @apply bg-brand-500/30;
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: #353c47 transparent;
+    scrollbar-color: rgb(var(--ink-600)) transparent;
   }
   *::-webkit-scrollbar {
     width: 6px;
@@ -35,28 +133,36 @@
   @media (min-width: 640px) {
     input, select, textarea { font-size: 14px; }
   }
+  /* Compact density (Settings → Appearance) */
+  .density-compact .surface { border-radius: 12px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+  }
+  .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after {
+    animation-duration: 1ms !important; transition-duration: 1ms !important;
+  }
 }
 
 @layer components {
-  /* A terminal panel: flat, hairline border */
+  /* A card: white on a soft grey page (light), a raised panel (dark) */
   .surface {
-    @apply rounded-xl border border-white/[0.06] bg-ink-900 shadow-card;
+    @apply rounded-2xl border border-white/[0.06] bg-ink-900 shadow-card;
   }
   .field {
-    @apply w-full rounded-lg border border-white/[0.08] bg-ink-850 px-3 py-2 text-sm text-gray-100
+    @apply w-full rounded-xl border border-white/[0.1] bg-ink-850 px-3 py-2 text-sm text-gray-100
       placeholder:text-gray-500 outline-none transition
-      focus:border-brand-500/70 focus:ring-1 focus:ring-brand-500/40;
+      focus:border-brand-500/70 focus:ring-2 focus:ring-brand-500/20;
   }
   .label {
-    @apply mb-1 block text-[11px] font-medium uppercase tracking-wide text-gray-500;
+    @apply mb-1 block text-xs font-medium text-gray-500;
   }
   .link {
-    @apply text-brand-300 hover:text-brand-200 transition-colors;
+    @apply text-brand-300 transition-colors hover:text-brand-400;
   }
-  /* Prices and quantities: monospace, tabular */
+  /* Prices and quantities: tabular figures */
   .num {
-    @apply font-mono;
     font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum", "cv11";
     letter-spacing: -0.01em;
   }
   .no-scrollbar {
@@ -67,4 +173,17 @@
   }
   .up { @apply text-emerald-400; }
   .down { @apply text-rose-400; }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-ink-900 px-3 py-1.5
+      text-xs font-medium text-gray-300 transition hover:border-brand-500/40 hover:text-white;
+  }
+  .chip-active {
+    @apply border-brand-500/50 bg-brand-500/10 text-brand-300;
+  }
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-white/[0.12] bg-ink-850 px-1
+      font-mono text-[10px] font-medium text-gray-400;
+  }
+  .grid-line { stroke: rgb(var(--chart-grid) / 0.07); }
+  .grid-line-soft { stroke: rgb(var(--chart-grid) / 0.04); }
 }

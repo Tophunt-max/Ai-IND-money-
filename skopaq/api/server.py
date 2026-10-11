@@ -74,6 +74,10 @@ from skopaq.api.dashboard_trading import router as dashboard_trading_router  # n
 
 app.include_router(dashboard_trading_router)
 
+from skopaq.api.dashboard_market import router as dashboard_market_router  # noqa: E402
+
+app.include_router(dashboard_market_router)
+
 
 @app.get("/health")
 async def health() -> dict:

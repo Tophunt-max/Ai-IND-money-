@@ -1,14 +1,17 @@
 "use client";
 
-import { Activity, CandlestickChart, LineChart } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CandlestickChart, Check, LineChart, Maximize2, Minimize2, SlidersHorizontal } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import CandleChart, { type Candle, type Level, type Marker, type Overlay } from "@/components/CandleChart";
+import CandleChart, { type Candle, type Level, type Marker } from "@/components/CandleChart";
 import Chart from "@/components/Chart";
-import { ErrorBox, Segmented, Skeleton } from "@/components/ui";
+import { cx, ErrorBox, Segmented, Skeleton } from "@/components/ui";
 import { inr } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { STUDIES } from "@/lib/indicators";
+import { useQuote } from "@/lib/live";
 import { useAgo, useMarketOpen } from "@/lib/market";
+import { setPrefs, usePrefs, type IndicatorKey } from "@/lib/prefs";
 
 const RANGES = ["1d", "5d", "1mo", "3mo", "6mo", "1y", "5y"] as const;
 const INTRADAY = new Set(["1d", "5d"]);
@@ -20,51 +23,100 @@ interface History {
   source?: "indstocks" | "yahoo";
 }
 
-/** Price chart of one symbol: candles or line, range buttons, refreshed automatically. */
-export default function PriceChart({ symbol, initial = "1d" }: { symbol: string; initial?: string }) {
-  const [range, setRange] = useState(initial);
-  const [kind, setKind] = useState<"candle" | "line">("candle");
-  // Taller on a desktop, a thumb-friendly height on a phone
-  const [height, setHeight] = useState(340);
+/** The latest candle follows the live price between history refreshes (display only). */
+export function withLivePrice(candles: Candle[], ltp: number | null | undefined, now = Date.now()): Candle[] {
+  if (!ltp || !candles.length) return candles;
+  const last = candles[candles.length - 1];
+  const day = (t: number) => new Date((t + 19800) * 1000).toISOString().slice(0, 10);
+  if (day(last.t) !== day(Math.floor(now / 1000))) return candles;   // only today's candle moves
+  const merged = { ...last, c: ltp, h: Math.max(last.h ?? ltp, ltp), l: Math.min(last.l ?? ltp, ltp) };
+  return [...candles.slice(0, -1), merged];
+}
+
+function StudiesMenu() {
+  const [p] = usePrefs();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const set = () => setHeight(window.innerWidth < 640 ? 300 : window.innerWidth < 1024 ? 360 : 420);
+    if (!open) return;
+    const fn = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [open]);
+  const toggle = (k: IndicatorKey) => setPrefs((x) => ({ indicators: x.indicators.includes(k) ? x.indicators.filter((i) => i !== k) : [...x.indicators, k] }));
+  const active = p.indicators.filter((k) => k !== "volume" && k !== "levels").length;
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className={cx("inline-flex h-8 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold ring-1 ring-inset transition",
+          open || active ? "bg-brand-500/10 text-brand-300 ring-brand-500/30" : "text-gray-400 ring-white/[0.1] hover:text-white")}>
+        <SlidersHorizontal className="h-3.5 w-3.5" /> Indicators{active ? ` · ${active}` : ""}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-2 w-60 rounded-2xl border border-white/[0.06] bg-ink-900 p-1.5 shadow-pop animate-scale-in">
+          {STUDIES.map((s) => {
+            const on = p.indicators.includes(s.key as IndicatorKey);
+            return (
+              <button key={s.key} type="button" onClick={() => toggle(s.key as IndicatorKey)}
+                className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm text-gray-300 hover:bg-white/[0.05]">
+                <span>{s.label}</span>
+                <span className={cx("grid h-5 w-5 place-items-center rounded-md border", on ? "border-brand-500 bg-brand-500 text-onaccent" : "border-white/[0.15]")}>
+                  {on && <Check className="h-3.5 w-3.5" />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Price chart of one symbol: candles or line, ranges, indicators, drawings, levels. */
+export default function PriceChart({ symbol, initial, extraLevels = [] }: { symbol: string; initial?: string; extraLevels?: Level[] }) {
+  const [prefs] = usePrefs();
+  const [range, setRange] = useState(initial || prefs.chartRange || "1d");
+  const kind = prefs.chartType;
+  const [full, setFull] = useState(false);
+  const [height, setHeight] = useState(360);
+  useEffect(() => {
+    const set = () => setHeight(full ? Math.max(360, window.innerHeight - 170)
+      : window.innerWidth < 640 ? 320 : window.innerWidth < 1024 ? 380 : 440);
     set();
     window.addEventListener("resize", set);
     return () => window.removeEventListener("resize", set);
-  }, []);
+  }, [full]);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
   const open = useMarketOpen();
-  // While NSE is open: intraday charts every 15 s, daily ones every minute (today's candle
-  // follows the live price). Closed: every 5 minutes.
-  // INDstocks charts are live: the 1D chart every 10 s
-  const [fast, setFast] = useState(false);
-  const every = open ? (INTRADAY.has(range) ? (fast ? 10000 : 15000) : 60000) : 300000;
+  const every = open ? (INTRADAY.has(range) ? 30000 : 120000) : 300000;
   const { data, error, loading, updatedAt } = useApi<History>(
-    symbol ? `/api/dashboard/market/history?symbol=${encodeURIComponent(symbol)}&range=${range}` : null,
-    every,
-  );
+    symbol ? `/api/dashboard/market/history?symbol=${encodeURIComponent(symbol)}&range=${range}` : null, every);
   const ago = useAgo(updatedAt);
-  // Indicator overlays, pattern markers and the latest signal's levels (evidence only)
-  const [studies, setStudies] = useState(true);
   const isIdx = symbol.startsWith("^");
-  const analysis = useApi<{ overlays: Overlay[]; patterns: Marker[]; indicators?: Record<string, number | null> }>(
-    studies && symbol && !isIdx ? `/api/dashboard/market/analysis?symbol=${encodeURIComponent(symbol)}&range=${range}` : null,
-    every * 2,
-  );
-  const sig = useApi<{ signals: { status: string; entry: number; stop: number; target: number; decided_at: string }[] }>(
-    studies && symbol && !isIdx ? `/api/dashboard/signals?days=1&limit=20&symbol=${encodeURIComponent(symbol)}` : null,
-    60000,
-  );
+  const studies = prefs.indicators;
+  const analysis = useApi<{ patterns: Marker[] }>(
+    studies.includes("patterns") && symbol && !isIdx ? `/api/dashboard/market/analysis?symbol=${encodeURIComponent(symbol)}&range=${range}` : null, every * 2);
+  const sig = useApi<{ signals: { status: string; entry: number; stop: number; target: number }[] }>(
+    studies.includes("levels") && symbol && !isIdx ? `/api/dashboard/signals?days=1&limit=20&symbol=${encodeURIComponent(symbol)}` : null, 60000);
   const latest = sig.data?.signals?.[0];
-  const levels: Level[] = latest ? [
-    { label: `${latest.status === "QUALIFIED" ? "Entry" : "Rejected entry"}`, price: latest.entry, tone: "entry" },
-    { label: "Stop", price: latest.stop, tone: "stop" },
-    { label: "Target", price: latest.target, tone: "target" },
-  ] : [];
-  const live = data?.source === "indstocks";
-  useEffect(() => setFast(live), [live]);
+  const levels: Level[] = [
+    ...(latest ? [
+      { label: latest.status === "QUALIFIED" ? "Signal entry" : "Rejected entry", price: latest.entry, tone: "entry" as const },
+      { label: "Signal stop", price: latest.stop, tone: "stop" as const },
+      { label: "Signal target", price: latest.target, tone: "target" as const },
+    ] : []),
+    ...extraLevels,
+  ];
+  const q = useQuote(symbol);
   const intraday = INTRADAY.has(range);
-  const isIndex = symbol.startsWith("^");
-  const format = (v: number) => (isIndex ? v.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : inr(v));
+  const candles = useMemo(() => (data ? withLivePrice(data.candles, q?.ltp) : []), [data, q?.ltp]);
+  const live = data?.source === "indstocks" || q?.source === "indstocks";
+  const format = (v: number) => (isIdx ? v.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : inr(v));
   const timeLabel = (t: number) =>
     new Date(t * 1000).toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
@@ -73,51 +125,45 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
         : { day: "2-digit", month: "short", ...(range === "5y" || range === "1y" ? { year: "2-digit" } : {}) }),
     });
 
-  return (
+  const body = (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <Segmented size="sm" value={range} onChange={setRange}
+        <Segmented size="sm" value={range} onChange={(r) => { setRange(r); setPrefs({ chartRange: r }); }}
           options={RANGES.map((r) => ({ value: r as string, label: r.toUpperCase() }))} />
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
-            <span className={`h-1.5 w-1.5 rounded-full ${open ? "animate-pulse bg-emerald-400" : "bg-gray-600"}`} />
-            {open ? (data?.live ? "Live" : "Auto") : "Market closed"} · {live ? "INDstocks" : data ? "Yahoo (delayed)" : ""} · {ago}
+        <div className="flex items-center gap-1.5">
+          <span className="hidden items-center gap-1.5 text-[11px] text-gray-500 sm:flex">
+            <span className={cx("h-1.5 w-1.5 rounded-full", open ? "animate-pulse bg-emerald-400" : "bg-gray-500")} />
+            {open ? (live ? "Live" : "Delayed") : "Closed"} · {ago}
           </span>
-          {!isIdx && (
-            <button type="button" onClick={() => setStudies(!studies)} title="EMA 9/21, candle patterns, signal levels"
-              className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition ${studies ? "bg-brand-500/15 text-brand-200 ring-brand-500/30" : "text-gray-400 ring-white/10"}`}>
-              <Activity className="h-3.5 w-3.5" /> Studies
-            </button>
-          )}
-          <Segmented size="sm" value={kind} onChange={setKind} options={[
+          {kind === "candle" && <StudiesMenu />}
+          <Segmented size="sm" value={kind} onChange={(k) => setPrefs({ chartType: k })} options={[
             { value: "candle", label: <CandlestickChart className="h-4 w-4" aria-label="Candles" /> },
             { value: "line", label: <LineChart className="h-4 w-4" aria-label="Line" /> },
           ]} />
+          <button type="button" onClick={() => setFull(!full)} aria-label={full ? "Exit full screen" : "Full screen"}
+            className="grid h-8 w-8 place-items-center rounded-xl text-gray-400 ring-1 ring-inset ring-white/[0.1] hover:text-white">
+            {full ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
         </div>
       </div>
       <ErrorBox error={error} />
       {loading && !data ? (
         <div style={{ height }}><Skeleton className="h-full w-full" /></div>
       ) : data && kind === "candle" ? (
-        <>
-          <CandleChart candles={data.candles} format={format} timeLabel={timeLabel} live={!!data.live} height={height} rsi={studies}
-            overlays={studies ? analysis.data?.overlays : undefined}
-            markers={studies ? analysis.data?.patterns : undefined}
-            levels={studies ? levels : undefined} />
-          {studies && !isIdx && (
-            <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-gray-500">
-              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded bg-amber-400" /> EMA 9</span>
-              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded bg-violet-400" /> EMA 21 · RSI</span>
-              <span>pinch / wheel to zoom</span>
-              <span>triangles: candle patterns (green bullish, red bearish)</span>
-              {latest ? <span>levels: today&apos;s latest signal ({latest.status})</span> : <span>no signal today</span>}
-              {analysis.error && <span className="text-amber-300">studies unavailable</span>}
-            </div>
-          )}
-        </>
+        <CandleChart candles={candles} format={format} timeLabel={timeLabel} live={live} height={height}
+          studies={isIdx ? studies.filter((s) => s !== "patterns" && s !== "levels") : studies}
+          intraday={intraday} markers={analysis.data?.patterns} levels={levels} drawKey={symbol} />
       ) : data ? (
-        <Chart points={data.candles.map((c) => ({ t: c.t, v: c.c }))} height={height - 40} format={format} timeLabel={timeLabel} />
+        <Chart points={candles.map((c) => ({ t: c.t, v: c.c }))} height={height - 40} format={format} timeLabel={timeLabel} />
       ) : null}
+    </div>
+  );
+
+  if (!full) return body;
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-ink-950 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:p-6">
+      <div className="mb-3 text-lg font-bold text-white">{symbol.replace("^", "")}</div>
+      {body}
     </div>
   );
 }

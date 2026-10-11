@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Dependency-free SVG charts in the terminal theme. All are responsive (they measure their
+ * Dependency-free SVG charts in the app theme (light or dark). All are responsive (they measure their
  * box), work with touch (tap / drag shows the value) and with a mouse.
  *
  * - ``EquityChart``: an equity or cumulative-P&L line with its drawdown pane underneath.
@@ -12,10 +12,12 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-export const UP = "#0ecb81";
-export const DOWN = "#f6465d";
-export const ACCENT = "#5b8cff";
-const GRID = "rgba(255,255,255,0.05)";
+import { useThemeColors } from "@/lib/themeColors";
+
+// Static fallbacks (tests, legends); the charts themselves use the theme's colours
+export const UP = "#00b386";
+export const DOWN = "#eb5b3c";
+export const ACCENT = "#5367ff";
 
 function useWidth(min = 240) {
   const ref = useRef<HTMLDivElement>(null);
@@ -70,6 +72,8 @@ export function EquityChart({
   title?: ReactNode;
 }) {
   const { ref, w } = useWidth();
+  const t = useThemeColors();
+  const GRID = t.grid;
   const [hover, setHover] = useState<number | null>(null);
   const ddH = drawdown ? Math.round(height * 0.28) : 0;
   const mainH = height - ddH - (drawdown ? 10 : 0);
@@ -94,11 +98,11 @@ export function EquityChart({
   const line = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
   const ref0 = baseline ?? points[0].v;
   const last = points[points.length - 1].v;
-  const col = last >= ref0 ? UP : DOWN;
+  const col = last >= ref0 ? t.up : t.down;
   const area = `${line} L${x(points.length - 1).toFixed(1)},${mainH - pad.b} L${x(0).toFixed(1)},${mainH - pad.b} Z`;
   const ddArea = `M${x(0)},${ddTop} ` + dd.abs.map((v, i) => `L${x(i).toFixed(1)},${yd(v).toFixed(1)}`).join(" ")
     + ` L${x(points.length - 1)},${ddTop} Z`;
-  const gid = `eq-${col.slice(1)}`;
+  const gid = `eq-${last >= ref0 ? "up" : "down"}-${t.dark ? "d" : "l"}`;
 
   const move = (clientX: number) => {
     const r = ref.current?.getBoundingClientRect();
@@ -134,20 +138,20 @@ export function EquityChart({
             <line key={i} x1={pad.l} x2={w - pad.r} y1={y(v)} y2={y(v)} stroke={GRID} />
           ))}
           {baseline !== undefined && (
-            <line x1={pad.l} x2={w - pad.r} y1={y(baseline)} y2={y(baseline)} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" />
+            <line x1={pad.l} x2={w - pad.r} y1={y(baseline)} y2={y(baseline)} stroke={t.axis} strokeDasharray="4 4" />
           )}
           <path d={area} fill={`url(#${gid})`} />
-          <path d={line} fill="none" stroke={col} strokeWidth={1.8} strokeLinejoin="round" />
+          <path d={line} fill="none" stroke={col} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           {drawdown && (
             <>
               <line x1={pad.l} x2={w - pad.r} y1={ddTop} y2={ddTop} stroke={GRID} />
-              <path d={ddArea} fill={DOWN} fillOpacity={0.28} stroke={DOWN} strokeOpacity={0.7} strokeWidth={1} />
+              <path d={ddArea} fill={t.down} fillOpacity={0.22} stroke={t.down} strokeOpacity={0.7} strokeWidth={1} />
             </>
           )}
           {h !== null && (
             <>
-              <line x1={x(h)} x2={x(h)} y1={pad.t} y2={height} stroke="rgba(255,255,255,0.25)" />
-              <circle cx={x(h)} cy={y(points[h].v)} r={3.5} fill={col} stroke="#0b0e11" strokeWidth={2} />
+              <line x1={x(h)} x2={x(h)} y1={pad.t} y2={height} stroke={t.axis} strokeDasharray="3 3" />
+              <circle cx={x(h)} cy={y(points[h].v)} r={4} fill={col} stroke={t.surface} strokeWidth={2} />
             </>
           )}
         </svg>
@@ -182,6 +186,8 @@ export function BarChart({
   zeroLine?: boolean;
 }) {
   const { ref, w } = useWidth();
+  const t = useThemeColors();
+  const GRID = t.grid;
   const [hover, setHover] = useState<number | null>(null);
   if (!bars.length) return <div className="py-8 text-center text-sm text-gray-500">No data yet.</div>;
   const pad = { l: 2, r: 52, t: 6, b: 2 };
@@ -218,13 +224,13 @@ export function BarChart({
         <svg width={w} height={height} className="block" role="img" aria-label="bar chart">
           {niceTicks(min, max, 3).map((v, i) => <line key={i} x1={pad.l} x2={w - pad.r} y1={y(v)} y2={y(v)} stroke={GRID} />)}
           {bars.map((b, i) => {
-            const col = b.tone === "accent" ? ACCENT : b.tone === "down" || (!b.tone && b.v < 0) ? DOWN : UP;
+            const col = b.tone === "accent" ? t.accent : b.tone === "down" || (!b.tone && b.v < 0) ? t.down : t.up;
             const top = Math.min(y(b.v), zero);
             const bh = Math.max(b.v === 0 ? 0 : 1.5, Math.abs(y(b.v) - zero));
-            return <rect key={i} data-bar x={pad.l + step * i + (step - bw) / 2} y={top} width={bw} height={bh} rx={bw > 4 ? 1.5 : 0}
+            return <rect key={i} data-bar x={pad.l + step * i + (step - bw) / 2} y={top} width={bw} height={bh} rx={bw > 4 ? 2.5 : 0}
               fill={col} opacity={hover === null || hover === i ? 0.9 : 0.45} />;
           })}
-          {zeroLine && <line x1={pad.l} x2={w - pad.r} y1={zero} y2={zero} stroke="rgba(255,255,255,0.18)" />}
+          {zeroLine && <line x1={pad.l} x2={w - pad.r} y1={zero} y2={zero} stroke={t.axis} />}
         </svg>
         {niceTicks(min, max, 2).map((v, i) => (
           <span key={i} className="num pointer-events-none absolute right-0 -translate-y-1/2 pr-1 text-[10px] text-gray-500" style={{ top: y(v) }}>{format(v)}</span>
@@ -244,6 +250,7 @@ export function BarChart({
 export interface Slice { label: string; v: number; color: string }
 
 export function Donut({ slices, size = 120, center }: { slices: Slice[]; size?: number; center?: ReactNode }) {
+  const t = useThemeColors();
   const total = slices.reduce((s, x) => s + Math.max(0, x.v), 0);
   const r = size / 2 - 8;
   const c = 2 * Math.PI * r;
@@ -252,10 +259,10 @@ export function Donut({ slices, size = 120, center }: { slices: Slice[]; size?: 
     <div className="flex items-center gap-4">
       <div className="relative shrink-0" style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90" role="img" aria-label="donut chart">
-          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={12} />
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={t.grid} strokeWidth={12} />
           {total > 0 && slices.filter((s) => s.v > 0).map((s) => {
             const len = (s.v / total) * c;
-            const el = <circle key={s.label} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={s.color} strokeWidth={12}
+            const el = <circle key={s.label} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={s.color} strokeWidth={12} strokeLinecap="butt"
               strokeDasharray={`${len} ${c - len}`} strokeDashoffset={-off} />;
             off += len;
             return el;
@@ -280,12 +287,13 @@ export function Donut({ slices, size = 120, center }: { slices: Slice[]; size?: 
 // ── Sparkline ────────────────────────────────────────────────────────────────
 
 export function Sparkline({ values, width = 64, height = 22, color }: { values: number[]; width?: number; height?: number; color?: string }) {
+  const t = useThemeColors();
   if (values.length < 2) return <svg width={width} height={height} />;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
   const pts = values.map((v, i) => `${((i / (values.length - 1)) * width).toFixed(1)},${(height - 1 - ((v - min) / span) * (height - 2)).toFixed(1)}`).join(" ");
-  const col = color ?? (values[values.length - 1] >= values[0] ? UP : DOWN);
+  const col = color ?? (values[values.length - 1] >= values[0] ? t.up : t.down);
   return (
     <svg width={width} height={height} className="block" aria-hidden>
       <path d={`M${pts.split(" ").join(" L")}`} fill="none" stroke={col} strokeWidth={1.4} />
