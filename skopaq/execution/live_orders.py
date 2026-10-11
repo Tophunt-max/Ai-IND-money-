@@ -842,6 +842,7 @@ class LiveOrderWorker:
         self._deadlines = deadlines
         self._registry = registry
         self._journal = journal
+        self._cancel_journalled: set[str] = set()
         self._alerter = alerter
         self._sleep = sleep
         self._clock = clock
@@ -1506,6 +1507,9 @@ class LiveOrderWorker:
             await self._call(self._client.cancel_order,
                              CancelOrderRequest(order_id=order_id, segment=segment))
             logger.info("Cancel sent for order %s", order_id)
+            if order_id not in self._cancel_journalled:   # CANCEL_PENDING, once
+                self._cancel_journalled.add(order_id)
+                self._journal_event("cancel_sent", order_id)
             return "retry"
         except BrokerError as exc:
             text = str(exc).lower()

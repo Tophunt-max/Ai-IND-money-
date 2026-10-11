@@ -6,6 +6,7 @@ import { useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Progress, Skeleton, StatCard, Table } from "@/components/ui";
 import { api, inr } from "@/lib/api";
 import ModelRegistry from "@/components/ModelRegistry";
+import RegimeDrift from "@/components/RegimeDrift";
 import { useApi } from "@/lib/hooks";
 
 type Row = Record<string, any>;
@@ -133,6 +134,7 @@ export default function LearningPage() {
     <div className="space-y-6">
       <PageTitle title="AI learning" icon={Sparkles} subtitle="What the system learns from its own signals and trades" />
       <ModelRegistry />
+      <RegimeDrift />
       <ErrorBox error={error} />
 
       {loading && !data ? <Skeleton className="h-32" /> : data && !data.available ? (

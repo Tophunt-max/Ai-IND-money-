@@ -13,6 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useApi } from "@/lib/hooks";
 
 import { useAuth } from "./AuthGate";
+import OfflineBanner from "./OfflineBanner";
 import { useModeChanged } from "./ModeSwitch";
 import { Badge, cx } from "./ui";
 
@@ -197,6 +198,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       </header>
 
       <main className="lg:pl-64">
+        <OfflineBanner />
         <div className="mx-auto max-w-6xl px-4 py-6 pb-28 md:px-8 md:py-8 lg:pb-12">{children}</div>
       </main>
 

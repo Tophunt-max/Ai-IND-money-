@@ -17,6 +17,11 @@ Actions (admins; logged and sent to Telegram):
 - ``POST /api/dashboard/control/reconcile/{internal_id}/resolve``  after checking the broker
 - ``POST /api/dashboard/learning/models/{version}/promote``        shadow → champion
 - ``POST /api/dashboard/learning/rollback``                        previous champion back
+- ``POST /api/dashboard/learning/regimes/approve``                  approve the regime map
+- ``POST /api/dashboard/finance/contract-note``                     reconcile charges
+
+More reads: ``/control/lifecycle`` (each order's states today), ``/learning/drift``,
+``/learning/regimes``, ``/finance/reconciliation``.
 """
 
 from __future__ import annotations
@@ -63,7 +68,8 @@ async def _notify_audit(user: DashboardUser, action: str) -> None:
 @router.get("/signals")
 async def signals(days: int = Query(1, ge=1, le=30),
                   status: Optional[str] = Query(None, pattern="^(QUALIFIED|REJECTED|EXPIRED)$"),
-                  limit: int = Query(200, ge=1, le=2000)) -> dict:
+                  limit: int = Query(200, ge=1, le=2000),
+                  symbol: Optional[str] = Query(None, min_length=1, max_length=40)) -> dict:
     from skopaq.strategy.journal import SignalJournal
 
     journal = SignalJournal.from_config(SkopaqConfig())
@@ -74,6 +80,8 @@ async def signals(days: int = Query(1, ge=1, le=30),
         rows = journal.signals(sorted(wanted))
         if status:
             rows = [r for r in rows if r.get("status") == status]
+        if symbol:
+            rows = [r for r in rows if str(r.get("symbol", "")).upper() == symbol.upper()]
         return rows[-limit:]
 
     rows = await asyncio.to_thread(read)
@@ -161,6 +169,11 @@ async def reconcile_resolve(internal_id: str, body: ResolveBody,
 
 # ── Market analysis ──────────────────────────────────────────────────────────
 
+_MARKER_PATTERNS = frozenset({
+    "bullish_engulfing", "bearish_engulfing", "hammer", "shooting_star", "inverted_hammer",
+    "morning_star", "evening_star", "breakout_up", "breakout_down", "breakout_retest",
+    "failed_breakout_up", "failed_breakout_down", "support_rejection", "resistance_rejection",
+})
 _INTERVAL_S = {"1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "60m": 3600,
                "1h": 3600, "1d": 86400, "1wk": 604800}
 
@@ -188,10 +201,12 @@ def _analysis(candles: list[dict], interval: str, source: str) -> dict:
         prior = bars[:i]
         lv = ind.support_resistance(prior) if len(prior) >= 5 else ind.Levels(None, None)
         res = detect(bars[:i + 1], support=lv.support, resistance=lv.resistance)
-        if res.patterns:
+        # Chart markers: the reversal / breakout patterns only (inside bars, dojis and
+        # plain pin bars are on most bars and would bury the chart)
+        strong = [p.name for p in res.patterns if p.name in _MARKER_PATTERNS]
+        if strong:
             patterns.append({"t": int(bars[i].start.timestamp()), "bias": res.bias,
-                             "names": [p.name for p in res.patterns
-                                       if p.name not in ("inside_bar", "doji")] or res.names})
+                             "names": strong})
     # Daily bars are not checked for intraday staleness: only their validity/order
     quality = check_series(bars, step, bars[-1].start + timedelta(seconds=step),
                            max_missing=10 ** 6 if step >= 86400 else 3)
@@ -237,9 +252,16 @@ async def market_analysis(symbol: str = Query(..., min_length=1, max_length=40),
 
 
 def _registry():
+    from skopaq.db.mirror import mirror_from_config
     from skopaq.learning.registry import ModelRegistry, model_dir
 
-    return ModelRegistry(model_dir(SkopaqConfig()))
+    config = SkopaqConfig()
+    reg = ModelRegistry(model_dir(config))
+    try:
+        reg.mirror = mirror_from_config(config)
+    except Exception:
+        reg.mirror = None
+    return reg
 
 
 @router.get("/learning/models")
@@ -291,3 +313,106 @@ async def learning_rollback(body: PromoteBody,
     await _notify_audit(user, f"↩️ Model rollback to {to or 'none (rules only)'}: "
                               f"{body.reason}")
     return {"ok": True, "champion": to}
+
+
+# ── Order lifecycle ──────────────────────────────────────────────────────────
+
+
+@router.get("/control/lifecycle")
+async def order_lifecycle() -> dict:
+    from skopaq.execution.order_lifecycle import lifecycles
+
+    journal = _journal()
+    rows = await asyncio.to_thread(lambda: [lc.as_dict() for lc in lifecycles(journal.entries())])
+    open_rows = [r for r in rows if not r["terminal"]]
+    return {"orders": list(reversed(rows)), "open": len(open_rows),
+            "anomalies": sum(len(r["anomalies"]) for r in rows)}
+
+
+# ── Charges reconciliation ───────────────────────────────────────────────────
+
+
+class ContractNoteBody(BaseModel):
+    csv: str = Field(..., min_length=10, max_length=2_000_000)
+    days: int = Field(7, ge=1, le=60)
+
+
+@router.post("/finance/contract-note")
+async def contract_note(body: ContractNoteBody,
+                        user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.finance.reconcile import (
+        estimates_from_signals,
+        parse_contract_note_csv,
+        reconcile,
+        save_report,
+    )
+    from skopaq.strategy.journal import SignalJournal
+
+    try:
+        notes = parse_contract_note_csv(body.csv)
+    except ValueError as exc:
+        raise HTTPException(422, f"Contract note not read: {exc}") from exc
+    journal = SignalJournal.from_config(SkopaqConfig())
+    today = datetime.now(_IST).date()
+    days = sorted(today - timedelta(days=i) for i in range(body.days))
+    signals = await asyncio.to_thread(journal.signals, days)
+    report = reconcile(notes, estimates_from_signals(signals))
+    path = await asyncio.to_thread(save_report, report, by=user.email)
+    await _notify_audit(user, f"🧾 Contract note reconciled: {len(notes)} row(s), "
+                              f"{len(report.discrepancies)} discrepancy(ies)")
+    return _finite({"rows": len(notes), "saved": path.name, **report.as_dict()})
+
+
+@router.get("/finance/reconciliation")
+async def reconciliation_reports() -> dict:
+    from skopaq.finance.reconcile import saved_reports
+
+    return _finite({"reports": await asyncio.to_thread(saved_reports)})
+
+
+# ── Drift and regime map ─────────────────────────────────────────────────────
+
+
+@router.get("/learning/drift")
+async def learning_drift(days: int = Query(5, ge=1, le=60)) -> dict:
+    """Champion's training features vs the last ``days`` of live/paper signals (PSI)."""
+    from skopaq.learning.monitor import drift_now
+
+    return _finite(await asyncio.to_thread(drift_now, SkopaqConfig(), days))
+
+
+@router.get("/learning/regimes")
+async def learning_regimes() -> dict:
+    from skopaq.learning.registry import model_dir
+    from skopaq.strategy.selector import RegimeMapStore
+
+    store = RegimeMapStore(model_dir(SkopaqConfig()))
+    return _finite({"approved": store.approved(), "candidate": store.candidate()})
+
+
+@router.post("/learning/regimes/approve")
+async def learning_regimes_approve(body: PromoteBody,
+                                   user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.learning.registry import model_dir
+    from skopaq.strategy.selector import RegimeMapStore
+
+    store = RegimeMapStore(model_dir(SkopaqConfig()))
+    try:
+        entry = await asyncio.to_thread(store.approve, by=user.email, reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await _notify_audit(user, f"🗺️ Regime map {entry['version']} approved: {body.reason}")
+    entry.pop("previous", None)
+    return _finite({"ok": True, "approved": entry})
+
+
+@router.post("/learning/regimes/rollback")
+async def learning_regimes_rollback(body: PromoteBody,
+                                    user: DashboardUser = Depends(require_admin)) -> dict:
+    from skopaq.learning.registry import model_dir
+    from skopaq.strategy.selector import RegimeMapStore
+
+    store = RegimeMapStore(model_dir(SkopaqConfig()))
+    previous = await asyncio.to_thread(store.rollback)
+    await _notify_audit(user, f"↩️ Regime map rolled back: {body.reason}")
+    return {"ok": True, "approved": (previous or {}).get("version")}

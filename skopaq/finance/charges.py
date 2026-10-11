@@ -66,23 +66,25 @@ class Charges:
     gst: float = 0.0
     schedule: str = ""
     estimated: bool = True
+    other: float = 0.0     # broker totals not split into components (contract notes)
 
     @property
     def total(self) -> float:
         return (self.brokerage + self.stt + self.exchange + self.sebi + self.stamp
-                + self.dp + self.gst)
+                + self.dp + self.gst + self.other)
 
     def __add__(self, other: "Charges") -> "Charges":
         return Charges(
             brokerage=self.brokerage + other.brokerage, stt=self.stt + other.stt,
             exchange=self.exchange + other.exchange, sebi=self.sebi + other.sebi,
             stamp=self.stamp + other.stamp, dp=self.dp + other.dp, gst=self.gst + other.gst,
+            other=self.other + other.other,
             schedule=self.schedule or other.schedule,
             estimated=self.estimated or other.estimated)
 
     def as_dict(self) -> dict:
         out = {k: round(getattr(self, k), 4) for k in
-               ("brokerage", "stt", "exchange", "sebi", "stamp", "dp", "gst")}
+               ("brokerage", "stt", "exchange", "sebi", "stamp", "dp", "gst", "other")}
         out.update(total=round(self.total, 2), schedule=self.schedule, estimated=self.estimated)
         return out
 

@@ -136,3 +136,41 @@ def test_model_registry_endpoints(client):
     r = client.post("/api/dashboard/learning/rollback", headers=AUTH,
                     json={"reason": "nothing to roll back"})
     assert r.status_code == 200 and r.json()["champion"] is None
+
+
+def test_lifecycle_contract_note_regimes_and_drift_endpoints(client, monkeypatch):
+    from skopaq.execution.order_journal import OrderJournal
+    from skopaq.strategy.selector import RegimeMapStore
+
+    monkeypatch.setenv("SKOPAQ_CHARGES_DIR", str(client.tmp / "charges"))
+    j = OrderJournal(client.tmp / "orders")
+    j.record("submitting", internal_id="abcdef123456", symbol="TCS", side="BUY",
+             qty=Decimal(1))
+    j.record("placed", order_id="EQ-1", internal_id="abcdef123456", symbol="TCS",
+             side="BUY", qty=Decimal(1), status="QUEUED")
+    body = client.get("/api/dashboard/control/lifecycle", headers=AUTH).json()
+    assert body["orders"][0]["state"] == "ACKNOWLEDGED" and body["open"] == 1
+
+    note = ("Trade Date,Order No,Scrip Name,Buy/Sell,Quantity,Rate,Brokerage,STT,Total\n"
+            "08-10-2026,EQ-1,TCS,Buy,1,4000,10,0,12\n")
+    _as_viewer()
+    assert client.post("/api/dashboard/finance/contract-note",
+                       json={"csv": note}).status_code == 403
+    from skopaq.api.server import app
+    app.dependency_overrides.clear()
+    r = client.post("/api/dashboard/finance/contract-note", headers=AUTH, json={"csv": note})
+    assert r.status_code == 200 and r.json()["rows"] == 1
+    assert client.get("/api/dashboard/finance/reconciliation",
+                      headers=AUTH).json()["reports"]
+    assert client.post("/api/dashboard/finance/contract-note", headers=AUTH,
+                       json={"csv": "a,b\n1,2\n"}).status_code == 422
+
+    assert client.post("/api/dashboard/learning/regimes/approve", headers=AUTH,
+                       json={"reason": "nothing yet"}).status_code == 409
+    RegimeMapStore(client.tmp / "models").save_candidate({"regimes": {}}, dataset={})
+    r = client.post("/api/dashboard/learning/regimes/approve", headers=AUTH,
+                    json={"reason": "validated map"})
+    assert r.status_code == 200
+    assert client.get("/api/dashboard/learning/regimes", headers=AUTH).json()["approved"]
+    assert client.get("/api/dashboard/learning/drift",
+                      headers=AUTH).json()["available"] is False

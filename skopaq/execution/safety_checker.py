@@ -174,6 +174,7 @@ class SafetyChecker:
         holdings: Optional[list[Holding]] = None,
         *,
         sell_context: Optional[SellContext] = None,
+        unrealized_pnl: float = 0.0,
     ) -> SafetyResult:
         """Run all safety checks on a proposed order.
 
@@ -219,7 +220,9 @@ class SafetyChecker:
         self._check_min_stop_loss_pct(order, rejections)
         self._check_sector_concentration(order, positions, portfolio_value, rejections)
         if adds_risk:
-            self._check_daily_loss(portfolio_value, rejections)
+            # Open losses count toward today's limit (open gains do not offset it)
+            self._check_daily_loss(portfolio_value, rejections,
+                                   min(0.0, float(unrealized_pnl or 0.0)))
             self._check_weekly_loss(portfolio_value, rejections)
             self._check_monthly_loss(portfolio_value, rejections)
         self._check_order_rate(rejections)
@@ -582,14 +585,19 @@ class SafetyChecker:
         if reason:
             rejections.append(reason)
 
-    def _check_daily_loss(self, portfolio_value: float, rejections: list[str]) -> None:
-        """Reject if daily loss exceeds circuit breaker threshold."""
+    def _check_daily_loss(self, portfolio_value: float, rejections: list[str],
+                          unrealized: float = 0.0) -> None:
+        """Reject if today's realized loss plus open (unrealized) losses exceed the
+        circuit breaker threshold."""
         if portfolio_value <= 0:
             return
-        loss_pct = abs(self._day_pnl) / portfolio_value if self._day_pnl < 0 else 0
+        day = self._day_pnl + unrealized
+        loss_pct = abs(day) / portfolio_value if day < 0 else 0
         if loss_pct >= self._rules.max_daily_loss_pct:
+            open_part = f" incl. ₹{-unrealized:,.0f} open" if unrealized < 0 else ""
             rejections.append(
-                f"Daily loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_daily_loss_pct:.0%})"
+                f"Daily loss {loss_pct:.1%}{open_part} hit circuit breaker "
+                f"({self._rules.max_daily_loss_pct:.0%})"
             )
 
     def _check_weekly_loss(self, portfolio_value: float, rejections: list[str]) -> None:

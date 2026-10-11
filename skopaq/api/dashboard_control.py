@@ -66,6 +66,14 @@ def _channel():
     return channel
 
 
+def _shared_keys():
+    """Cross-replica duplicate-submission keys (SKOPAQ_API_SHARED_STATE_ENABLED)."""
+    from skopaq.api.shared_state import SharedKeys, shared_client
+
+    client = shared_client(SkopaqConfig())
+    return SharedKeys(client) if client is not None else None
+
+
 def _symbol(value: str) -> str:
     symbol = (value or "").strip().upper()
     if not _SYMBOL.match(symbol):
@@ -306,7 +314,7 @@ class CloseBody(BaseModel):
 async def close(body: CloseBody, user: DashboardUser = Depends(require_admin),
                 idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")) -> dict:
     async with _IDEMPOTENCY.guard(user.email, "close", body.model_dump(),
-                                  idempotency_key) as slot:
+                                  idempotency_key, shared=_shared_keys()) as slot:
         if slot.replay is not None:
             return slot.replay
         slot.result = await _close(body, user)
@@ -389,7 +397,7 @@ async def place_order(body: OrderBody, user: DashboardUser = Depends(require_adm
     A repeated ``Idempotency-Key`` (or the same body within seconds) never places a
     second order (``skopaq/api/idempotency.py``)."""
     async with _IDEMPOTENCY.guard(user.email, "order", body.model_dump(),
-                                  idempotency_key) as slot:
+                                  idempotency_key, shared=_shared_keys()) as slot:
         if slot.replay is not None:
             return slot.replay
         slot.result = await _place_order(body, user)

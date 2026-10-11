@@ -63,6 +63,7 @@ class EvolutionReport:
 
     # Reflection
     lesson: str = ""
+    holdout: dict = field(default_factory=dict)
 
 
 async def run_evolution_cycle(
@@ -220,9 +221,16 @@ async def run_evolution_cycle(
         )
 
         if needs_adaptation:
-            # Try parameter variations
+            # Parameters are chosen on the first part of the history only and judged on a
+            # chronological holdout they never saw: the same bars are never used both to
+            # pick a variant and to prove it (skopaq/backtest/evolve.py, holdout_split).
+            select_df, holdout_df = holdout_split(df)
             best_sharpe = bt_result.sharpe_ratio
             best_params = params.copy()
+            best_select = -float("inf")
+            from skopaq.constants import SAFETY_RULES
+
+            max_change = SAFETY_RULES.max_parameter_change_per_evolution_pct / 100
 
             for rsi_buy in [25, 30, 35, 40]:
                 for rsi_sell in [60, 65, 70, 75]:
@@ -233,37 +241,40 @@ async def run_evolution_cycle(
                             "rsi_sell_threshold": rsi_sell,
                             "stop_loss_pct": sl,
                         }
-
-                        def gen_test(data, p=test_params):
-                            data = data.copy()
-                            delta = data["Close"].diff()
-                            gain = delta.where(delta > 0, 0).rolling(p["rsi_period"]).mean()
-                            loss = (-delta.where(delta < 0, 0)).rolling(p["rsi_period"]).mean()
-                            rs = gain / loss
-                            data["RSI"] = 100 - (100 / (1 + rs))
-                            sigs = pd.DataFrame({"date": data["Date"], "signal": 0, "confidence": 50})
-                            for i in range(p["rsi_period"] + 1, len(data)):
-                                rsi = data.iloc[i]["RSI"]
-                                if pd.isna(rsi): continue
-                                if rsi < p["rsi_buy_threshold"]: sigs.iloc[i, 1] = 1
-                                elif rsi > p["rsi_sell_threshold"]: sigs.iloc[i, 1] = -1
-                            return sigs
-
-                        test_cfg = BacktestConfig(stop_loss_pct=sl / 100, target_pct=params["target_pct"] / 100)
-                        test_sigs = gen_test(df)
-                        test_result = run_backtest(test_sigs, df, test_cfg, symbol)
-
-                        if test_result.sharpe_ratio > best_sharpe and test_result.total_trades >= 3:
-                            best_sharpe = test_result.sharpe_ratio
+                        if not within_change_limit(params, test_params, max_change):
+                            continue
+                        res = _rsi_backtest(df, select_df, test_params, params, symbol,
+                                            BacktestConfig, run_backtest)
+                        if res.total_trades >= 3 and res.sharpe_ratio > best_select:
+                            best_select = res.sharpe_ratio
                             best_params = test_params.copy()
 
-            if best_params != params:
-                report.params_changed = True
-                report.new_params = best_params
-                report.improvement = f"Sharpe: {bt_result.sharpe_ratio:.2f} → {best_sharpe:.2f}"
-                params = best_params
+            if best_params != params and len(holdout_df) >= 10:
+                current_ho = _rsi_backtest(df, holdout_df, params, params, symbol,
+                                           BacktestConfig, run_backtest)
+                cand_ho = _rsi_backtest(df, holdout_df, best_params, params, symbol,
+                                        BacktestConfig, run_backtest)
+                need = SAFETY_RULES.min_backtest_improvement_pct / 100
+                better = (cand_ho.total_trades >= 2
+                          and cand_ho.sharpe_ratio > current_ho.sharpe_ratio
+                          + max(abs(current_ho.sharpe_ratio) * need, 0.05))
+                report.holdout = {"current_sharpe": current_ho.sharpe_ratio,
+                                  "candidate_sharpe": cand_ho.sharpe_ratio,
+                                  "candidate_trades": cand_ho.total_trades,
+                                  "bars": len(holdout_df)}
+                if better:
+                    report.params_changed = True
+                    report.new_params = best_params
+                    report.improvement = (f"holdout Sharpe: {current_ho.sharpe_ratio:.2f} → "
+                                          f"{cand_ho.sharpe_ratio:.2f}")
+                    params = best_params
+                    best_sharpe = cand_ho.sharpe_ratio
+                else:
+                    report.improvement = (f"variant rejected on the holdout "
+                                          f"({cand_ho.sharpe_ratio:.2f} vs "
+                                          f"{current_ho.sharpe_ratio:.2f})")
 
-        # Step 5: Deploy decision
+        # Step 5: Deploy decision (an adapted variant only on its holdout result)
         if bt_result.sharpe_ratio >= 1.0 or (report.params_changed and best_sharpe >= 0.5):
             report.deploy = True
             report.reason = f"Sharpe {bt_result.sharpe_ratio:.2f}, WFE {report.wfe_pct:.0f}%"
@@ -339,3 +350,51 @@ def format_evolution_report(report: EvolutionReport) -> str:
     lines.append(f"Lesson: {report.lesson}")
 
     return "\n".join(lines)
+
+
+def holdout_split(df: "pd.DataFrame", select_frac: float = 0.7):
+    """(selection, holdout): the first ``select_frac`` of the bars and the rest, in time
+    order."""
+    n = int(len(df) * select_frac)
+    return df.iloc[:n].reset_index(drop=True), df.iloc[n:].reset_index(drop=True)
+
+
+def within_change_limit(current: dict, candidate: dict, max_change: float) -> bool:
+    """Every numeric parameter moves at most ``max_change`` (a fraction) from its current
+    value (SafetyRules.max_parameter_change_per_evolution_pct)."""
+    for k, v in candidate.items():
+        old = current.get(k)
+        if isinstance(v, (int, float)) and isinstance(old, (int, float)) and old:
+            if abs(v - old) / abs(old) > max_change + 1e-9:
+                return False
+    return True
+
+
+def rsi_signals(data: "pd.DataFrame", p: dict) -> "pd.DataFrame":
+    """RSI mean-reversion signals on the full history (rolling: causal), one per bar."""
+    data = data.copy()
+    delta = data["Close"].diff()
+    gain = delta.where(delta > 0, 0).rolling(p["rsi_period"]).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(p["rsi_period"]).mean()
+    rs = gain / loss
+    data["RSI"] = 100 - (100 / (1 + rs))
+    sigs = pd.DataFrame({"date": data["Date"], "signal": 0, "confidence": 50})
+    for i in range(p["rsi_period"] + 1, len(data)):
+        rsi = data.iloc[i]["RSI"]
+        if pd.isna(rsi):
+            continue
+        if rsi < p["rsi_buy_threshold"]:
+            sigs.iloc[i, 1] = 1
+        elif rsi > p["rsi_sell_threshold"]:
+            sigs.iloc[i, 1] = -1
+    return sigs
+
+
+def _rsi_backtest(full, part, test_params, base_params, symbol, BacktestConfig, run_backtest):
+    """Backtest ``test_params`` on the bars of ``part`` (signals from the full causal
+    history, so indicators are warmed up without seeing ``part``'s future)."""
+    sigs = rsi_signals(full, test_params)
+    sigs = sigs[sigs["date"].isin(set(part["Date"]))].reset_index(drop=True)
+    cfg = BacktestConfig(stop_loss_pct=test_params["stop_loss_pct"] / 100,
+                         target_pct=base_params["target_pct"] / 100)
+    return run_backtest(sigs, part, cfg, symbol)

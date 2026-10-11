@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 
 from skopaq.learning.dataset import Example, chronological_split, walk_forward_folds
 from skopaq.learning.evaluation import choose_threshold, drift_report, evaluate_gate
-from skopaq.learning.model import LogisticModel
+from skopaq.learning.model import MODEL_KINDS
 from skopaq.learning.registry import Gates, ModelRegistry
 
 
@@ -32,7 +32,7 @@ def _fingerprint(examples: Sequence[Example]) -> str:
 def train_candidate(examples: Sequence[Example], *, strategy_id: str,
                     registry: Optional[ModelRegistry] = None, gates: Gates = Gates(),
                     min_examples: int = 200, leakage: Sequence[str] = (),
-                    notes: str = "") -> dict:
+                    notes: str = "", model_kind: str = "logistic") -> dict:
     labelled = [e for e in examples if e.label is not None]
     if len(labelled) < min_examples:
         raise InsufficientData(f"{len(labelled)} labelled examples < {min_examples}: "
@@ -42,7 +42,10 @@ def train_candidate(examples: Sequence[Example], *, strategy_id: str,
     train, val, test = chronological_split(labelled)
     if len({e.label for e in train}) < 2 or not test:
         raise InsufficientData("the chronological split left a set without both outcomes")
-    model = LogisticModel().fit(train)
+    if model_kind not in MODEL_KINDS:
+        raise ValueError(f"model_kind must be one of {sorted(MODEL_KINDS)}")
+    make = MODEL_KINDS[model_kind]
+    model = make().fit(train)
     threshold = choose_threshold(model, val)
     report = evaluate_gate(model, test, threshold)
     report["leakage"] = list(leakage)
@@ -50,7 +53,7 @@ def train_candidate(examples: Sequence[Example], *, strategy_id: str,
     for tr, te in walk_forward_folds(labelled):
         if len({e.label for e in tr}) < 2:
             continue
-        m = LogisticModel().fit(tr)
+        m = make().fit(tr)
         r = evaluate_gate(m, te, threshold)
         folds.append({"train": len(tr), "test": len(te), "baseline_net": r["baseline"]["net"],
                       "model_net": (r.get("model") or {}).get("net")})
@@ -63,6 +66,13 @@ def train_candidate(examples: Sequence[Example], *, strategy_id: str,
         "last": labelled and max(e.decided_at for e in labelled).isoformat(),
         "symbols": sorted({e.symbol for e in labelled}),
     }
+    # A bounded sample of each training feature: the drift monitor compares live
+    # features against it (skopaq/learning/monitor.py)
+    step = max(1, len(train) // 300)
+    dataset["feature_sample"] = {
+        n: [round(e.features[n], 6) for e in train[::step]
+            if isinstance(e.features.get(n), float) and e.features[n] == e.features[n]]
+        for n in model.names}
     params = {"threshold": threshold}
     entry = {"model": model.to_dict(), "report": report, "params": params,
              "dataset": dataset, "strategy_id": strategy_id}

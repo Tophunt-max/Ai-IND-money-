@@ -336,6 +336,7 @@ class TradingDaemon:
         finally:
             armer.cancel()
             publisher.cancel()
+            await self._release_session_lease()
             # Phase 7: REPORTING — compile metrics
             self._phase = DaemonPhase.REPORTING
             report.phase_times = dict(self._phase_times)
@@ -344,6 +345,7 @@ class TradingDaemon:
             # A dry run is scan-only: no LLM reflection calls or Supabase writes.
             if not dry_run:
                 report.decisions_settled = await self._settle_due_decisions()
+                await self._check_model_drift()
 
             # Clean up client session
             if self._client is not None:
@@ -579,6 +581,10 @@ class TradingDaemon:
             raise RuntimeError(problem)
         logger.info("Token valid — expires in %s", health.remaining)
 
+        # 1a. Live: one trading session per account across hosts (Redis lease, when on)
+        if config.trading_mode == "live":
+            await self._take_session_lease(config)
+
         # 1b. Live: orders only go out from a whitelisted static IP (SEBI / NSE). With
         # SKOPAQ_INDSTOCKS_STATIC_IPS set, another egress IP stops the session here
         # instead of every BUY and every protective SELL being refused later
@@ -652,12 +658,106 @@ class TradingDaemon:
             memory_store=self._memory_store,
         )
 
+        # Every swing BUY is qualified on daily candles and journalled before the executor
+        self._wire_swing_gate(config, is_paper)
+
         logger.info(
             "PRE_OPEN complete — mode=%s, max_trades=%d, analysts=%s",
             config.trading_mode,
             self._max_trades,
             analysts,
         )
+
+    async def _check_model_drift(self) -> None:
+        """The champion model's feature drift over recent signals (alerts; never raises)."""
+        try:
+            from skopaq.learning.monitor import drift_now
+
+            res = await asyncio.to_thread(drift_now, self._config, 5, notify=True)
+            if res.get("alerts"):
+                logger.warning("Model drift: %s", ", ".join(res["alerts"]))
+        except Exception:
+            logger.debug("Drift check skipped", exc_info=True)
+
+    async def _take_session_lease(self, config: object) -> None:
+        """The account's session lease (``skopaq.execution.lease``): another host's live
+        session holding it stops this one before anything trades."""
+        from skopaq.execution.lease import (
+            LeaseUnavailable,
+            RedisLease,
+            account_key,
+            lease_client,
+        )
+        from skopaq.execution.order_alerts import get_alerter
+
+        try:
+            client = lease_client(config)
+        except LeaseUnavailable as exc:
+            raise RuntimeError(str(exc)) from exc
+        if client is None:
+            return
+        lease = RedisLease(client, account_key(config, "session"), ttl_s=180)
+        try:
+            got = await lease.acquire()
+        except LeaseUnavailable as exc:
+            raise RuntimeError(f"Session lease unavailable: {exc}") from exc
+        if not got:
+            holder = await lease.holder()
+            get_alerter().alert(
+                "CRITICAL", "competing-session",
+                f"Another live session holds this account ({holder}): this one did not "
+                "start. Action: stop one of them; only one host may trade an account.",
+                dedup_s=600)
+            raise RuntimeError(f"Another live session holds the account lease ({holder})")
+        self._session_lease = lease
+
+        async def renew() -> None:
+            while True:
+                await asyncio.sleep(60)
+                if not await lease.renew():
+                    get_alerter().alert(
+                        "CRITICAL", "session-lease-lost",
+                        "The session lease could not be renewed: new BUYs may compete "
+                        "with another host. Action: check Redis and other hosts.",
+                        dedup_s=600)
+
+        self._lease_renewer = asyncio.create_task(renew())
+
+    async def _release_session_lease(self) -> None:
+        renewer = getattr(self, "_lease_renewer", None)
+        if renewer is not None:
+            renewer.cancel()
+            self._lease_renewer = None
+        lease = getattr(self, "_session_lease", None)
+        if lease is not None:
+            await lease.release()
+            self._session_lease = None
+
+    def _wire_swing_gate(self, config: object, is_paper: bool) -> None:
+        if getattr(config, "swing_qualification_enabled", True) is False:
+            return
+        try:
+            from skopaq.strategy.gate import gate_from_config
+            from skopaq.strategy.signal import QualifyRules
+
+            def num(name: str, default: float) -> float:
+                v = getattr(config, name, default)
+                return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) \
+                    else default
+
+            rules = QualifyRules(require_reliable_regime=False,
+                                 min_net_rr=num("swing_min_net_rr", 1.0),
+                                 slippage_pct=num("swing_slippage_pct", 0.001),
+                                 min_stop_pct=0.005, max_stop_pct=0.15)
+            gate = gate_from_config(config, rules, paper=is_paper,
+                                    model_gate_attr="swing_model_gate_enabled")
+            self._graph.set_signal_gate(
+                gate, _daily_candles,
+                notional_inr=num("swing_notional_inr", 100_000.0),
+                hard_stop_pct=num("monitor_hard_stop_pct", 0.04),
+                target_rr=num("monitor_target_rr", 2.0))
+        except Exception:
+            logger.warning("Swing qualification not wired", exc_info=True)
 
     async def _phase_scan(self) -> list[ScannerCandidate]:
         """Wait for prices to settle, then run multi-model scanner."""
@@ -1416,3 +1516,18 @@ def _merged(first: MonitorResult, then: MonitorResult) -> MonitorResult:
 def _add_once(items: list[str], item: str) -> None:
     if item not in items:
         items.append(item)
+
+
+async def _daily_candles(symbol: str) -> list:
+    """Six months of daily candles (INDstocks, else Yahoo) as ``Candle`` objects."""
+    from skopaq.broker import live_quotes
+    from skopaq.market.candles import Candle
+
+    data = await live_quotes.get_history(symbol, "6mo")
+    out = []
+    for c in data.get("candles") or []:
+        if all(c.get(k) is not None for k in ("t", "o", "h", "l", "c")):
+            out.append(Candle(datetime.fromtimestamp(int(c["t"]), _IST), float(c["o"]),
+                              float(c["h"]), float(c["l"]), float(c["c"]),
+                              int(c["v"]) if c.get("v") is not None else None))
+    return out

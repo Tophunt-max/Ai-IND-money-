@@ -48,9 +48,8 @@ from skopaq.scalping.rules import ScalpPosition, exit_reason, update_trail
 from skopaq.scalping.settings import ScalpSettings
 from skopaq.scalping.strategies import Setup, atr_last, evaluate
 from skopaq.finance.charges import EQUITY_INTRADAY, leg_charges
-from skopaq.strategy.evidence import build_evidence
+from skopaq.strategy.gate import SignalGate, gate_from_config
 from skopaq.strategy.journal import SignalJournal
-from skopaq.strategy.signal import SignalCandidate, default_expiry, qualify
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +60,6 @@ OnTrade = Callable[[TradingSignal, Any], Awaitable[Any]]
 
 def _now_ist() -> datetime:
     return datetime.now(_IST)
-
-
-def _journal_or_none(config: Any) -> Optional[SignalJournal]:
-    """The signal journal from config; None for a config without a directory string
-    (test doubles), so nothing is written to a developer's home by accident."""
-    if not isinstance(getattr(config, "signal_journal_dir", None), str):
-        return None
-    try:
-        return SignalJournal.from_config(config)
-    except Exception:
-        logger.warning("Signal journal unavailable", exc_info=True)
-        return None
 
 
 @dataclass
@@ -168,7 +155,13 @@ class ScalpEngine:
         self._last_loss_at: Optional[datetime] = None
         self._rest_at = -math.inf
         self._max_qty = max_qty if isinstance(max_qty, int) and max_qty > 0 else None
-        self._signals = signals if signals is not None else _journal_or_none(config)
+        self._gate: SignalGate = gate_from_config(config, self.settings.qualify_rules,
+                                                  paper=self._paper,
+                                                  model_gate_attr="scalp_model_gate_enabled")
+        if signals is not None:
+            self._gate.journal = signals
+        self._signals = self._gate.journal
+        self.spreads: dict[str, float] = {}       # symbol -> last REST bid/ask spread
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -183,6 +176,7 @@ class ScalpEngine:
                 if now.time() >= s.flatten_at:
                     break
                 await self._refresh_prices()
+                self._flush_candles()
                 await self._service_control()
                 await self._manage_exits(now)
                 await self._entries(now)
@@ -286,6 +280,13 @@ class ScalpEngine:
         if closed is not None:
             self._pending.add(symbol)
 
+    def _flush_candles(self) -> None:
+        """Close candles whose interval ended without a later tick (a quiet symbol)."""
+        now = self._wall()
+        for symbol, series in self.series.items():
+            if series.flush(now) is not None:
+                self._pending.add(symbol)
+
     async def _refresh_prices(self) -> None:
         """Fresh feed ticks are used as they come; otherwise one batched REST quote call
         every ``scalp_rest_poll_seconds``."""
@@ -306,6 +307,9 @@ class ScalpEngine:
         now = self._wall()
         for q in quotes:
             if q.symbol in self.series and q.ltp > 0:
+                bid, ask = getattr(q, "bid", 0) or 0, getattr(q, "ask", 0) or 0
+                if bid > 0 and ask >= bid:
+                    self.spreads[q.symbol] = (ask - bid) / ((ask + bid) / 2)
                 self._price(q.symbol, float(q.ltp), now,
                             int(q.volume) if getattr(q, "volume", None) else None)
 
@@ -361,12 +365,8 @@ class ScalpEngine:
         pos.qty -= sold
         if pos.qty <= 0:
             self.positions.pop(pos.symbol, None)
-            if self._signals is not None and pos.signal_id:
-                self._signals.record_outcome(
-                    pos.signal_id, exit_price=fill,
-                    net_pnl=round(pos.gross_booked - pos.charges_booked, 2),
-                    gross_pnl=round(pos.gross_booked, 2), charges=round(pos.charges_booked, 2),
-                    exit_reason=reason, closed_at=now)
+            self._gate.closed(pos.signal_id, exit_price=fill, gross=pos.gross_booked,
+                              charges=pos.charges_booked, reason=reason, closed_at=now)
         logger.info("Scalper: SOLD %d %s @ %.2f — %s (net ₹%.2f)", sold, pos.symbol, fill,
                     reason, pnl)
 
@@ -403,6 +403,11 @@ class ScalpEngine:
                 continue
             names = [n for n in self.settings.strategies
                      if not (n == "orb" and symbol in self._orb_done)]
+            # An approved regime map narrows the strategies to those validated out of
+            # sample for this regime; none validated: no trade (no map: all run)
+            names, _regime = self._gate.strategies(names, self.series[symbol].candles)
+            if not names:
+                continue
             setup = evaluate(self.series[symbol].candles, names, self.settings.params)
             if setup is not None:
                 await self._enter(symbol, setup, now)
@@ -486,27 +491,16 @@ class ScalpEngine:
         s = self.settings
         if not s.qualify:
             return None
-        candles = list(self.series[symbol].candles)
-        decided = now.astimezone(_IST)
-        try:
-            evidence = build_evidence(
-                candles, s.candle_seconds, decided, direction=1,
-                htf_s=s.htf_seconds, source="simulated" if self._paper else "live")
-        except Exception as exc:                 # evidence must never crash the loop
-            logger.warning("Scalper: evidence of %s failed: %s", symbol, exc)
-            evidence = {"error": str(exc), "data_quality": {"ok": False,
-                                                            "blocking": ["evidence failed"]}}
-        candidate = SignalCandidate(
-            strategy_id=f"scalp.{setup.strategy}", strategy_version="1",
-            symbol=symbol, product=EQUITY_INTRADAY, direction=1, decided_at=decided,
-            timeframe_s=s.candle_seconds, entry=setup.entry, stop=setup.stop,
-            target=setup.target, qty=qty, reason=setup.reason,
-            invalidation=f"close below {setup.stop:.2f}",
-            holding_minutes=s.max_hold.total_seconds() / 60,
-            expires_at=default_expiry(decided, s.candle_seconds), evidence=evidence)
-        decision = qualify(candidate, s.qualify_rules, now=decided)
-        if self._signals is not None:
-            self._signals.record_decision(candidate, decision)
+        extra = {}
+        if symbol in self.spreads:
+            extra["spread_pct"] = self.spreads[symbol]
+        candidate, decision = self._gate.decide(
+            strategy_id=f"scalp.{setup.strategy}", symbol=symbol, product=EQUITY_INTRADAY,
+            direction=1, decided_at=now.astimezone(_IST), timeframe_s=s.candle_seconds,
+            entry=setup.entry, stop=setup.stop, target=setup.target, qty=qty,
+            reason=setup.reason, candles=list(self.series[symbol].candles),
+            holding_minutes=s.max_hold.total_seconds() / 60, htf_s=s.htf_seconds,
+            extra=extra)
         if not decision.qualified:
             self.report.skipped_quality += 1
             logger.info("Scalper: %s %s %s — %s", setup.strategy, symbol, decision.status,
@@ -515,15 +509,7 @@ class ScalpEngine:
         return candidate
 
     def _journal_execution(self, signal_id: str, result: Any, qty: int) -> None:
-        if self._signals is None or not signal_id:
-            return
-        status = ("FILLED" if result.success else
-                  "UNCONFIRMED" if is_unconfirmed(result) else "REFUSED")
-        self._signals.record_execution(
-            signal_id, status=status,
-            filled=float(filled_quantity_of(result, qty)) if result.success else 0,
-            fill_price=float(result.fill_price) if result.fill_price else None,
-            reason=result.rejection_reason or "")
+        self._gate.executed(signal_id, result, qty)
 
     # ── Orders ───────────────────────────────────────────────────────────
 

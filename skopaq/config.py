@@ -57,6 +57,13 @@ _LENIENT_FIELDS = (
     "scalp_require_htf",
     "scalp_require_regime",
     "scalp_qualification_enabled",
+    "scalp_max_spread_pct",
+    "scalp_max_participation",
+    "scalp_model_gate_enabled",
+    "fno_model_gate_enabled",
+    "fno_min_net_rr",
+    "fno_slippage_pct",
+    "fno_qualification_enabled",
     "entry_lock_wait_seconds",
     "max_consecutive_losses",
     "max_shares_per_order",
@@ -164,6 +171,9 @@ class SkopaqConfig(BaseSettings):
     # processes on this host, and a lock inside each process), held from the safety check
     # until the broker's answer is final. A second entry waits this long, then is refused
     entry_lock_wait_seconds: float = 20.0
+    # Cross-host account leases in Upstash Redis (entries and daemon sessions); enabled
+    # without a reachable Redis, entries are refused
+    account_lease_enabled: bool = False
     # Consecutive losing closed trades after which new BUYs stop for the day; it can
     # only lower the immutable ceiling SafetyRules.max_consecutive_losses (4)
     max_consecutive_losses: int = 4
@@ -214,6 +224,8 @@ class SkopaqConfig(BaseSettings):
     cors_origins: str = "*"  # comma-separated browser origins; "" = none (live: no "*")
     # Proxies in front of the API whose X-Forwarded-For entry is trusted (0 = none)
     trusted_proxy_hops: int = 1
+    # Login lockout and duplicate-order keys shared by every API replica (Upstash Redis)
+    api_shared_state_enabled: bool = False
     # /docs, /redoc, /openapi.json: unset = on in paper mode, off in live
     api_docs_enabled: Optional[bool] = None
     # Web dashboard logins (Supabase Auth): "me@x.com:admin,friend@y.com:viewer"
@@ -296,8 +308,24 @@ class SkopaqConfig(BaseSettings):
     scalp_htf_seconds: int = 300               # higher timeframe recorded as evidence (5 min)
     scalp_require_htf: bool = False            # require the higher timeframe to agree
     scalp_require_regime: bool = False         # reject when the candle regime is unreliable
+    scalp_max_spread_pct: float = 0.003        # bid/ask spread over mid (REST quotes)
+    scalp_max_participation: float = 0.10      # order qty / average 1-min bar volume
+    # The champion model decides entries (P(net win) ≥ its threshold); off: recorded only
+    scalp_model_gate_enabled: bool = False
+    fno_model_gate_enabled: bool = False
+    fno_min_net_rr: float = 1.0                # F&O qualification, on the premium
+    fno_slippage_pct: float = 0.001            # assumed adverse premium slippage per side
+    fno_qualification_enabled: bool = True
+    # Swing (AI) BUYs: qualified on daily candles before the executor
+    swing_qualification_enabled: bool = True
+    swing_min_net_rr: float = 1.0
+    swing_slippage_pct: float = 0.001
+    swing_notional_inr: float = 100_000.0       # sizes the charge estimate only
+    swing_model_gate_enabled: bool = False
     signal_journal_dir: str = "~/.skopaq/signals"  # every candidate + decision (learning data)
     model_dir: str = "~/.skopaq/models"        # candidate / shadow / champion models
+    # Mirror signal / order / model journals to Supabase (migration 005), best effort
+    audit_mirror_enabled: bool = True
 
     # ── Order size limits (dashboard: Control → Exits & risk) ──────────────
     # Per order, every strategy (swing, scalper, F&O engine, manual). Clamped to the

@@ -150,7 +150,8 @@ def from_journal(signals: Iterable[dict]) -> DatasetReport:
             decided_at=decided, features=feats, label=label, net_pnl=net,
             strategy_id=str(row.get("strategy_id") or ""), symbol=str(row.get("symbol") or ""),
             signal_id=str(row.get("signal_id") or ""), closed_at=closed,
-            evidence_last_bar=_dt(ev.get("last_bar"))))
+            evidence_last_bar=_dt(ev.get("last_bar")),
+            meta={"regime": (ev.get("regime") or {}).get("trend") or "unknown"}))
     rep.leakage = check_point_in_time(rep.examples)
     return rep
 
@@ -183,6 +184,7 @@ def from_backtest(symbol: str, days: Sequence[Sequence[Any]], settings: Any, *,
                                             target=setup.target, decided_at=decided),
             label=1 if t.pnl > 0 else 0, net_pnl=t.pnl, strategy_id=f"scalp.{t.strategy}",
             symbol=symbol, evidence_last_bar=_dt(ev.get("last_bar")),
+            meta={"regime": (ev.get("regime") or {}).get("trend") or "unknown"},
             closed_at=decided.replace(hour=int(t.closed[:2]), minute=int(t.closed[3:5]))))
     rep.leakage = check_point_in_time(rep.examples)
     return rep

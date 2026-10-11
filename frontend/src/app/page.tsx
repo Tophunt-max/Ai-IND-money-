@@ -8,6 +8,7 @@ import Link from "next/link";
 
 import Chart from "@/components/Chart";
 import ModeSwitch, { useModeChanged } from "@/components/ModeSwitch";
+import RiskCapacity from "@/components/RiskCapacity";
 import {
   Badge, Button, Card, Empty, ErrorBox, Notice, PageTitle, pnlClass, Skeleton, StatCard,
 } from "@/components/ui";
@@ -121,6 +122,10 @@ export default function Home() {
       )}
       <ErrorBox error={ov.error} />
       {o && o.database !== "ok" && <ErrorBox error={`Database: ${o.database}`} />}
+
+      {/* Paper: the paper capital; live: the broker's equity is not in the overview, so the
+          card shows the loss without its rupee limit (the % stop still applies) */}
+      <RiskCapacity portfolioValue={o?.mode === "paper" ? o.initial_paper_capital + (o.realized_pnl || 0) : null} />
 
       {/* Hero P&L */}
       <div className="grid gap-4 lg:grid-cols-3">

@@ -70,6 +70,8 @@ from skopaq.scalping.fno_rules import (
     update_trail,
 )
 from skopaq.scalping.strategies import evaluate
+from skopaq.finance.charges import leg_charges
+from skopaq.strategy.gate import gate_from_config
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +178,9 @@ class FnoEngine:
         self._orb_done: set[tuple[str, int]] = set()
         self._last_loss_at: Optional[datetime] = None
         self._rest_at = -math.inf
+        self._gate = gate_from_config(config, self.settings.qualify_rules,
+                                      paper=self._paper,
+                                      model_gate_attr="fno_model_gate_enabled")
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -195,6 +200,7 @@ class FnoEngine:
                 if now.time() >= s.flatten_at:
                     break
                 await self._refresh_prices()
+                self._flush_candles()
                 await self._service_control()
                 await self._manage_exits(now)
                 await self._entries(now)
@@ -319,6 +325,13 @@ class FnoEngine:
         if closed is not None:
             self._pending.add(und.name)
 
+    def _flush_candles(self) -> None:
+        """Close underlying candles whose interval ended without a later tick."""
+        now = self._wall()
+        for name, und in self.unders.items():
+            if und.series.flush(now) is not None:
+                self._pending.add(name)
+
     async def _refresh_prices(self) -> None:
         """Fresh feed ticks are used as they come; otherwise one batched REST quote call
         every ``fno_rest_poll_seconds`` for the underlyings and the open contracts."""
@@ -390,8 +403,16 @@ class FnoEngine:
             return
         sold = int(filled_quantity_of(result, pos.qty))
         fill = float(result.fill_price or price)
-        cost = fno_round_trip_cost(pos.entry, fill, sold, future=pos.kind == "FUT")
-        pnl = round((fill - pos.entry) * sold - cost, 2)
+        # Per order: this exit's charges and the entry's share (its brokerage once)
+        product = "futures" if pos.kind == "FUT" else "options"
+        cost = round(leg_charges(product, "SELL", fill * sold).total
+                     + leg_charges(product, "BUY", pos.entry * sold,
+                                   orders=0 if pos.entry_charged else 1).total, 2)
+        pos.entry_charged = True
+        gross = (fill - pos.entry) * sold
+        pnl = round(gross - cost, 2)
+        pos.gross_booked += gross
+        pos.charges_booked += cost
         now = self._wall().astimezone(_IST)
         self.report.trades.append(ScalpTrade(
             pos.symbol, pos.strategy, sold, pos.entry, fill, pnl, reason,
@@ -401,6 +422,8 @@ class FnoEngine:
         pos.qty -= sold
         if pos.qty <= 0:
             self.positions.pop(pos.symbol, None)
+            self._gate.closed(pos.signal_id, exit_price=fill, gross=pos.gross_booked,
+                              charges=pos.charges_booked, reason=reason, closed_at=now)
         logger.info("F&O: SOLD %d %s @ %.2f — %s (net ₹%.2f)", sold, pos.symbol, fill,
                     reason, pnl)
 
@@ -492,11 +515,13 @@ class FnoEngine:
             return None
         price = option_entry_price(leg)
         risk = price * s.premium_stop_pct
+        bid, ask = float(getattr(leg, "bid", 0) or 0), float(getattr(leg, "ask", 0) or 0)
+        spread = (ask - bid) / ((ask + bid) / 2) if bid > 0 and ask >= bid else None
         return dict(symbol=leg.tradingsymbol.upper(), security_id=leg.security_id,
                     lot=max(1, int(leg.lot_size or 1)), price=price, kind=leg.option_type,
                     unit_risk=risk, unit_cost=price, stop=_tick_down(price - risk),
                     delta=leg.delta, code=derivative_scrip_code(und.exchange, leg.security_id),
-                    expiry=chain.expiry)
+                    expiry=chain.expiry, spread=spread)
 
     async def _enter(self, und: _Underlying, sig: Signal, now: datetime) -> None:
         s = self.settings
@@ -533,12 +558,35 @@ class FnoEngine:
             return
         side = "CE" if sig.direction > 0 else "PE"
         what = "future" if s.futures else side
+        signal_id = ""
+        if s.qualify:
+            extra = {"underlying": und.name, "contract": c["symbol"], "delta": c["delta"],
+                     "underlying_entry": sig.entry, "underlying_stop": sig.stop,
+                     "underlying_target": sig.target}
+            if c.get("spread") is not None:
+                extra["spread_pct"] = c["spread"]
+            candidate, decision = self._gate.decide(
+                strategy_id=f"fno.{sig.strategy}", symbol=c["symbol"],
+                product="futures" if s.futures else "options", direction=1,
+                decided_at=now.astimezone(_IST), timeframe_s=s.candle_seconds,
+                entry=c["price"], stop=c["stop"], target=c["price"] + reward, qty=qty,
+                reason=f"{what} on {und.name}: {sig.reason}",
+                candles=list(und.series.candles), htf_s=s.htf_seconds,
+                evidence_direction=sig.direction,
+                holding_minutes=s.max_hold.total_seconds() / 60, extra=extra)
+            if not decision.qualified:
+                self.report.skipped_quality += 1
+                logger.info("F&O: %s %s %s — %s", sig.strategy, c["symbol"],
+                            decision.status, "; ".join(decision.reasons))
+                return
+            signal_id = candidate.signal_id
         signal = self._signal(
             c["symbol"], "BUY", c["price"], qty,
             f"FNO {sig.strategy} {what} on {und.name}: {sig.reason}", stop=c["stop"],
             security_id=c["security_id"], lot=c["lot"], exchange=und.exchange)
         self.prices[c["code"]] = c["price"]
         result = await self._execute(signal, c["price"])
+        self._gate.executed(signal_id, result, qty)
         if not result.success:
             self.report.rejected += 1
             if is_unconfirmed(result):
@@ -562,7 +610,7 @@ class FnoEngine:
             und_target=round(sig.target, 2), und_entry=round(sig.entry, 2),
             cost_per_unit=round(fno_round_trip_cost(fill, fill + reward, filled,
                                                     future=s.futures) / filled, 2),
-            expiry=c.get("expiry"))
+            expiry=c.get("expiry"), signal_id=signal_id)
         self.report.entries += 1
         await self._subscribe([c["code"]])
         logger.info("F&O: BOUGHT %d %s @ %.2f (%s, %s) premium stop %.2f; %s stop %.2f "

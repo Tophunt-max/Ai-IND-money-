@@ -95,6 +95,8 @@ class ScalpSettings:
                 slippage_pct=_num(g("scalp_slippage_pct"), 0.0002, 0.0, 0.01),
                 require_reliable_regime=g("scalp_require_regime", False) is True,
                 require_htf_confirmation=g("scalp_require_htf", False) is True,
+                max_spread_pct=_num(g("scalp_max_spread_pct"), 0.003, 0.0001, 0.05),
+                max_participation=_num(g("scalp_max_participation"), 0.10, 0.001, 1.0),
             ),
             htf_seconds=int(_num(g("scalp_htf_seconds"), 300, 60, 3600)),
         )

@@ -75,9 +75,11 @@ LOCKED: dict[str, str] = {
     "trading_halted": "use the kill switch instead",
     "trusted_proxy_hops": "API access (login lockout)",
     "api_docs_enabled": "API access",
+    "api_shared_state_enabled": "API access (replicas)",
     "signal_journal_dir": "shared state directory",
     "model_dir": "shared state directory",
     "entry_lock_wait_seconds": "sequential-entry safety",
+    "account_lease_enabled": "sequential-entry safety (cross-host)",
 }
 
 # Read straight from os.environ by the code, not SkopaqConfig fields.

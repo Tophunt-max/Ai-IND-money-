@@ -4,6 +4,8 @@ import { AlertTriangle, CheckCircle2, Filter, ShieldCheck, Signal } from "lucide
 import { useState } from "react";
 
 import { useAuth } from "@/components/AuthGate";
+import ChargesReconcile from "@/components/ChargesReconcile";
+import OrderLifecycle from "@/components/OrderLifecycle";
 import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Segmented, Skeleton, StatCard, Table } from "@/components/ui";
 import { api, ApiError, inr, pct, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -126,8 +128,8 @@ function RiskCard() {
             ["Weekly / monthly", `${pct(r.ceilings.max_weekly_loss_pct as number, 0)} / ${pct(r.ceilings.max_monthly_loss_pct as number, 0)}`],
             ["Max position", pct(r.ceilings.max_position_pct as number, 0)],
             ["Max open positions", String(r.ceilings.max_open_positions)],
-            ["Shares / order (working ≤ ceiling)", `${r.working.max_shares_per_order} ≤ ${r.ceilings.max_shares_per_position}`],
-            ["Lots / order (working ≤ ceiling)", `${r.working.max_lots_per_order} ≤ ${r.ceilings.max_lots_per_position}`],
+            ["Shares / order", `${r.working.max_shares_per_order} (ceiling ${r.ceilings.max_shares_per_position})`],
+            ["Lots / order", `${r.working.max_lots_per_order} (ceiling ${r.ceilings.max_lots_per_position})`],
             ["Cool-down after a loss", `${r.ceilings.cool_down_after_loss_minutes} min`],
             ["One entry at a time", `waits ${r.working.entry_lock_wait_seconds}s, then refused`],
           ]} />
@@ -159,16 +161,20 @@ export default function SignalsPage() {
         <StatCard title="Updated" value={<span className="text-sm">{ago}</span>} detail="every 15 s" />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Reconcile />
-        <RiskCard />
+      {/* min-w-0: a wide table scrolls inside its card instead of widening the page */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="min-w-0"><Reconcile /></div>
+        <div className="min-w-0"><RiskCard /></div>
       </div>
 
-      <Card title="Signal log" icon={Filter} subtitle="A QUALIFIED signal still passes the risk gateway (limits, funds, kill switch) before any order"
-        right={<div className="flex flex-wrap gap-2">
-          <Segmented value={days} onChange={setDays} options={[{ value: 1, label: "Today" }, { value: 5, label: "5 days" }, { value: 30, label: "30 days" }]} />
-          <Segmented value={status} onChange={setStatus} options={[{ value: "", label: "All" }, { value: "QUALIFIED", label: "Qualified" }, { value: "REJECTED", label: "Rejected" }]} />
-        </div>}>
+      <OrderLifecycle />
+      <ChargesReconcile />
+
+      <Card title="Signal log" icon={Filter} subtitle="A QUALIFIED signal still passes the risk gateway (limits, funds, kill switch) before any order">
+        <div className="mb-4 flex flex-wrap gap-2">
+          <Segmented size="sm" value={days} onChange={setDays} options={[{ value: 1, label: "Today" }, { value: 5, label: "5 days" }, { value: 30, label: "30 days" }]} />
+          <Segmented size="sm" value={status} onChange={setStatus} options={[{ value: "", label: "All" }, { value: "QUALIFIED", label: "Qualified" }, { value: "REJECTED", label: "Rejected" }]} />
+        </div>
         <ErrorBox error={s.error} />
         {s.loading && !s.data ? <Skeleton className="h-40" /> : !s.data?.signals.length ? (
           <Empty title="No signals">The scalper writes every candidate here while a session runs.</Empty>

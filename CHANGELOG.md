@@ -44,6 +44,24 @@ All notable changes to SkopaqTrader. The format follows
   analysis panel on **Market**, model registry on **AI learning**.
 - `scripts/paper_session_sim.py`: simulated paper sessions through the real pipeline.
 - Docs: `docs/architecture/execution-safety.md`.
+- 13-state order lifecycle replayed from the journal; startup reconciliation before a
+  process's first BUY (adopts / clears journalled placements, reports external orders);
+  cross-host entry and session leases (Upstash Redis, `SKOPAQ_ACCOUNT_LEASE_ENABLED`).
+- F&O and swing (AI) BUYs qualified and journalled like scalps; spread / liquidity limits;
+  champion / shadow model probabilities on every signal (gate opt-in); approved
+  regime → strategy map with idle-when-uncovered; LightGBM candidates; drift monitor.
+- Contract-note CSV charge reconciliation (dashboard / `skopaq charges-reconcile`);
+  broker-quoted charges from `GET /margin`; F&O partial-exit charge double count fixed.
+- Open losses count toward the daily loss stop; entry-block, stale-data, competing-session,
+  external-order and drift alerts with an incident id and the action to take.
+- Candle builder closes quiet candles by timer and drops duplicate / late ticks.
+- `evolve.py`: parameters chosen on 70 % of the history, adopted only if they beat the
+  current ones on the held-out 30 %, within the per-evolution change limit.
+- Supabase migration `005_trading_audit.sql` and a best-effort journal mirror; shared API
+  state across replicas (`SKOPAQ_API_SHARED_STATE_ENABLED`).
+- Dashboard: order lifecycle, charges reconciliation, risk capacity on the home page,
+  regime map and drift on AI learning, chart studies (EMA, patterns, signal levels), an
+  offline banner; Vitest + Testing Library tests and a CI job for the dashboard.
 
 ### Removed
 

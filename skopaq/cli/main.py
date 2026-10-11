@@ -489,6 +489,11 @@ def learn_train(
                                              "outcomes."),
     slippage_pct: float = typer.Option(0.0002, help="Adverse slippage per side assumed."),
     min_examples: int = typer.Option(200, help="Refuse to train on fewer labelled rows."),
+    model: str = typer.Option("logistic", help="logistic (NumPy) or lightgbm (pip install "
+                                               "skopaqtrader[ml])."),
+    regimes: bool = typer.Option(False, help="Also build a candidate regime → strategy map "
+                                             "from the held-out trades (approve it on the "
+                                             "dashboard)."),
 ) -> None:
     """Train a candidate model on point-in-time features (no orders).
 
@@ -533,9 +538,12 @@ def learn_train(
         console.print("No data: pass --symbols and/or --journal")
         raise typer.Exit(1)
     registry = ModelRegistry(model_dir(config))
+    from skopaq.db.mirror import mirror_from_config
+
+    registry.mirror = mirror_from_config(config)
     try:
         entry = train_candidate(examples, strategy_id="scalp.gate", registry=registry,
-                                min_examples=min_examples, leakage=leakage)
+                                min_examples=min_examples, leakage=leakage, model_kind=model)
     except InsufficientData as exc:
         console.print(f"Not trained: {exc}")
         raise typer.Exit(2)
@@ -547,6 +555,61 @@ def learn_train(
     console.print(f"  Brier {rep.get('brier')} vs base rate {rep.get('brier_base_rate')}")
     for fail in entry.get("gate_failures") or []:
         console.print(f"  [yellow]gate:[/yellow] {fail}")
+    if regimes:
+        from skopaq.learning.dataset import chronological_split
+        from skopaq.strategy.selector import RegimeMapStore, build_regime_map
+
+        _, _, test = chronological_split(examples)       # held-out trades only
+        regime_map = build_regime_map(test)
+        RegimeMapStore(model_dir(config)).save_candidate(
+            regime_map, dataset={"test_trades": len(test)})
+        for regime, rows in regime_map["regimes"].items():
+            ok = [s for s, r in rows.items() if r["allowed"]]
+            console.print(f"  regime {regime:<14} validated: {', '.join(ok) or 'none (idle)'}")
+        console.print("  Candidate regime map saved: approve it on the dashboard to use it")
+
+
+@app.command("charges-reconcile")
+def charges_reconcile(
+    file: str = typer.Argument(..., help="The broker's contract-note CSV export."),
+    days: int = typer.Option(7, help="Days of the signal journal to compare against."),
+    tolerance: float = typer.Option(1.0, help="₹ difference that counts as a discrepancy."),
+) -> None:
+    """Compare the broker's contract-note charges with Skopaq's estimates (no orders)."""
+    from datetime import date, timedelta
+    from pathlib import Path
+
+    from skopaq.config import SkopaqConfig
+    from skopaq.finance.reconcile import (
+        estimates_from_signals,
+        parse_contract_note_csv,
+        reconcile,
+        save_report,
+    )
+    from skopaq.strategy.journal import SignalJournal
+
+    config = SkopaqConfig()
+    try:
+        notes = parse_contract_note_csv(Path(file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        console.print(f"Contract note not read: {exc}")
+        raise typer.Exit(1)
+    today = date.today()
+    signals = SignalJournal.from_config(config).signals(
+        sorted(today - timedelta(days=i) for i in range(days)))
+    rep = reconcile(notes, estimates_from_signals(signals), tolerance=tolerance)
+    d = rep.as_dict()
+    console.print(f"{len(notes)} contract-note row(s): broker ₹{d['broker_total']:,.2f}, "
+                  f"estimated ₹{d['estimated_total']:,.2f}, difference ₹{d['difference']:+,.2f}")
+    for line in d["discrepancies"]:
+        console.print(f"  [yellow]{line}[/yellow]")
+    for key in d["unmatched_broker"]:
+        console.print(f"  broker only: {key}")
+    for key in d["unmatched_estimates"]:
+        console.print(f"  estimate only: {key}")
+    console.print(f"Saved {save_report(rep, by='cli')}")
+    if d["discrepancies"]:
+        raise typer.Exit(3)
 
 
 @app.command("report")

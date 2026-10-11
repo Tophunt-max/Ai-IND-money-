@@ -10,8 +10,8 @@ unconfirmed. So:
   scalper and F&O engine run as tasks beside the swing session and share one checker:
   without it both could pass ``max_open_positions`` or the funds check together);
 * across processes on this host (live), an ``flock`` on
-  ``<SKOPAQ_ORDER_LOCK_DIR>/entry-account.lock`` does the same. It is per host: two
-  machines trading one account are not coordinated (see docs/architecture/execution-safety.md);
+  ``<SKOPAQ_ORDER_LOCK_DIR>/entry-account.lock`` does the same; across hosts, the Redis
+  entry lease (``skopaq.execution.lease``, ``SKOPAQ_ACCOUNT_LEASE_ENABLED``);
 * a BUY is refused while an earlier placement's outcome is unknown: an uncertain BUY,
   an own BUY order still working, or a journalled ``submitting`` line with no recorded
   answer (a process died mid-placement). An admin resolves those after checking the
@@ -71,8 +71,12 @@ class EntryGate:
 
     def __init__(self, *, wait_s: float, lock_dir: Optional[Path], live: bool,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-                 clock: Callable[[], float] = time.monotonic, key: str = "account") -> None:
+                 clock: Callable[[], float] = time.monotonic, key: str = "account",
+                 lease: Any = None) -> None:
+        """``lease``: a ``skopaq.execution.lease.RedisLease`` (cross-host), taken inside
+        the host flock; None without account leases."""
         self.wait_s = max(0.0, float(wait_s))
+        self._lease = lease
         self._lock_dir = lock_dir
         self._live = live
         self._sleep = sleep
@@ -104,10 +108,28 @@ class EntryGate:
                 self._plock = None
                 raise
             self._flock = flock
+        if self._lease is not None:
+            from skopaq.execution.lease import LeaseUnavailable
+
+            try:
+                got = await self._lease.acquire(self.wait_s)
+            except LeaseUnavailable as exc:
+                await self.__aexit__(None, None, None)
+                raise EntryBusy(f"the account entry lease cannot be checked ({exc}): new "
+                                "entries are refused") from None
+            except BaseException:
+                await self.__aexit__(None, None, None)
+                raise
+            if not got:
+                holder = await self._lease.holder()
+                await self.__aexit__(None, None, None)
+                raise EntryBusy(f"another host holds the account's entry lease ({holder})")
         return self
 
     async def __aexit__(self, *exc: object) -> None:
         try:
+            if self._lease is not None and getattr(self._lease, "held", False):
+                await self._lease.release()
             if self._flock is not None:
                 await self._flock.__aexit__(*exc)
         finally:

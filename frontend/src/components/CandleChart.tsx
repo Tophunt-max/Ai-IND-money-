@@ -14,6 +14,12 @@ export interface Candle {
 const UP = "#34d399";
 const DOWN = "#fb7185";
 
+export interface Overlay { t: number; ema9?: number | null; ema21?: number | null }
+export interface Marker { t: number; bias: string; names: string[] }
+export interface Level { label: string; price: number; tone: "entry" | "stop" | "target" }
+
+const LEVEL_COLOR: Record<Level["tone"], string> = { entry: "#93c5fd", stop: "#fb7185", target: "#34d399" };
+
 /** Dependency-free candlestick chart with volume, a last-price line and an OHLC crosshair. */
 export default function CandleChart({
   candles,
@@ -21,12 +27,21 @@ export default function CandleChart({
   format = (v: number) => v.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
   timeLabel = (t: number) => new Date(t * 1000).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
   live = false,
+  overlays,
+  markers,
+  levels,
 }: {
   candles: Candle[];
   height?: number;
   format?: (v: number) => string;
   timeLabel?: (t: number) => string;
   live?: boolean;
+  /** EMA lines by candle time (from /market/analysis). */
+  overlays?: Overlay[];
+  /** Candle-pattern markers by candle time. */
+  markers?: Marker[];
+  /** Horizontal entry / stop / target lines of a signal. */
+  levels?: Level[];
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -57,6 +72,13 @@ export default function CandleChart({
     if (data.length < 2) return null;
     let min = Math.min(...data.map((k) => k.l));
     let max = Math.max(...data.map((k) => k.h));
+    for (const lv of levels || []) {
+      // Keep a signal's levels on the chart when they sit near the visible range
+      if (lv.price > 0 && lv.price > min * 0.9 && lv.price < max * 1.1) {
+        min = Math.min(min, lv.price);
+        max = Math.max(max, lv.price);
+      }
+    }
     if (min === max) {
       min -= 1;
       max += 1;
@@ -73,9 +95,14 @@ export default function CandleChart({
     const vy = (v: number) => height - (v / vmax) * volH;
     const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => min + (max - min) * (1 - f));
     return { x, y, vy, body, step, ticks, plotW };
-  }, [data, width, height, priceH, volH, pad.l, pad.r, pad.t]);
+  }, [data, width, height, priceH, volH, pad.l, pad.r, pad.t, levels]);
 
   if (!geo) return <div className="py-8 text-center text-sm text-gray-500">Not enough data for a chart.</div>;
+
+  const index = new Map(data.map((k, i) => [k.t, i]));
+  const line = (key: "ema9" | "ema21") => (overlays || [])
+    .filter((o) => o[key] != null && index.has(o.t))
+    .map((o) => `${geo.x(index.get(o.t)!)},${geo.y(o[key] as number)}`).join(" ");
 
   const last = data[data.length - 1];
   const prev = data.length > 1 ? data[data.length - 2].c : last.o;
@@ -130,6 +157,31 @@ export default function CandleChart({
               </g>
             );
           })}
+
+          {/* Indicator overlays, pattern markers and signal levels */}
+          {overlays && overlays.length > 0 && (
+            <>
+              <polyline points={line("ema9")} fill="none" stroke="#fbbf24" strokeWidth={1.2} strokeOpacity={0.85} />
+              <polyline points={line("ema21")} fill="none" stroke="#a78bfa" strokeWidth={1.2} strokeOpacity={0.85} />
+            </>
+          )}
+          {(markers || []).filter((m) => index.has(m.t)).map((m) => {
+            const i = index.get(m.t)!;
+            const k = data[i];
+            const bull = m.bias === "bullish";
+            const yy = bull ? geo.y(k.l) + 9 : geo.y(k.h) - 9;
+            const col = bull ? UP : m.bias === "bearish" ? DOWN : "#fbbf24";
+            const pts = bull ? `${geo.x(i)},${yy - 5} ${geo.x(i) - 4},${yy + 2} ${geo.x(i) + 4},${yy + 2}`
+              : `${geo.x(i)},${yy + 5} ${geo.x(i) - 4},${yy - 2} ${geo.x(i) + 4},${yy - 2}`;
+            return <polygon key={`m${m.t}`} points={pts} fill={col}><title>{m.names.join(", ")}</title></polygon>;
+          })}
+          {(levels || []).filter((lv) => lv.price > 0).map((lv) => (
+            <g key={lv.label}>
+              <line x1={pad.l} x2={width - pad.r} y1={geo.y(lv.price)} y2={geo.y(lv.price)}
+                stroke={LEVEL_COLOR[lv.tone]} strokeDasharray="6 4" strokeOpacity={0.8} />
+              <text x={pad.l + 4} y={geo.y(lv.price) - 3} fontSize={10} fill={LEVEL_COLOR[lv.tone]}>{lv.label} {format(lv.price)}</text>
+            </g>
+          ))}
 
           {/* Last price line */}
           <line x1={pad.l} x2={width - pad.r} y1={geo.y(last.c)} y2={geo.y(last.c)}

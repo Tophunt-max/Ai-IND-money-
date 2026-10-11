@@ -118,6 +118,82 @@ class LogisticModel:
                               ).hexdigest()[:12]
 
 
+@dataclass
+class GBMModel:
+    """Optional LightGBM candidate (``pip install skopaqtrader[ml]``), deterministic
+    (fixed seed, one thread). Missing features stay NaN (LightGBM routes them). Saved as
+    LightGBM's text model: no pickle is ever loaded."""
+
+    names: tuple[str, ...] = FEATURE_NAMES
+    params: dict = field(default_factory=lambda: {
+        "objective": "binary", "learning_rate": 0.05, "num_leaves": 8,
+        "min_data_in_leaf": 20, "feature_fraction": 0.8, "bagging_fraction": 0.8,
+        "bagging_freq": 1, "lambda_l2": 1.0, "seed": 7, "deterministic": True,
+        "num_threads": 1, "verbose": -1})
+    rounds: int = 150
+    text: str = ""
+    trained_on: int = 0
+    kind: str = "lightgbm-v1"
+    _booster: object = None
+
+    def fit(self, examples: Sequence[Example]) -> "GBMModel":
+        import lightgbm as lgb
+
+        rows = [e for e in examples if e.label is not None]
+        if len(rows) < 2 or len({e.label for e in rows}) < 2:
+            raise ValueError("need labelled examples of both classes to train")
+        X = _matrix(rows, self.names)
+        y = np.array([e.label for e in rows], dtype=float)
+        self._booster = lgb.train(self.params, lgb.Dataset(X, y, feature_name=list(
+            self.names)), num_boost_round=self.rounds)
+        self.text = self._booster.model_to_string()
+        self.trained_on = len(rows)
+        return self
+
+    def _model(self):
+        if self._booster is None:
+            if not self.text:
+                raise ValueError("model is not trained")
+            import lightgbm as lgb
+
+            self._booster = lgb.Booster(model_str=self.text)
+        return self._booster
+
+    def predict_proba(self, examples: Sequence[Example]) -> np.ndarray:
+        if not examples:
+            return np.zeros(0)
+        return np.asarray(self._model().predict(_matrix(examples, self.names)), float)
+
+    def predict_one(self, features: dict[str, float]) -> float:
+        return float(self.predict_proba([Example(decided_at=None, features=features,  # type: ignore[arg-type]
+                                                 label=None, net_pnl=None)])[0])
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "names": list(self.names), "params": self.params,
+                "rounds": self.rounds, "text": self.text, "trained_on": self.trained_on}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "GBMModel":
+        return cls(names=tuple(d["names"]), params=dict(d["params"]), rounds=int(d["rounds"]),
+                   text=d["text"], trained_on=int(d["trained_on"]))
+
+    def fingerprint(self) -> str:
+        return hashlib.sha256(self.text.encode()).hexdigest()[:12]
+
+
+MODEL_KINDS = {"logistic": LogisticModel, "lightgbm": GBMModel}
+
+
+def load_model(d: dict):
+    """A stored model of any kind (``to_dict`` output)."""
+    kind = d.get("kind")
+    if kind == "logistic-numpy-v1":
+        return LogisticModel.from_dict(d)
+    if kind == "lightgbm-v1":
+        return GBMModel.from_dict(d)
+    raise ValueError(f"unknown model kind {kind!r}")
+
+
 def brier(probs: Sequence[float], labels: Sequence[int]) -> Optional[float]:
     if not len(labels):
         return None

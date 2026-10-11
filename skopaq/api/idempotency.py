@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Optional
 
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 _TTL_S = 600.0
 _WINDOW_S = 5.0
@@ -44,8 +47,14 @@ class IdempotencyStore:
 
     @asynccontextmanager
     async def guard(self, user: str, action: str, body: Any,
-                    key: Optional[str]) -> AsyncIterator["_Slot"]:
-        """Run the block once per key (or per identical body in the window)."""
+                    key: Optional[str], shared: Any = None) -> AsyncIterator["_Slot"]:
+        """Run the block once per key (or per identical body in the window). ``shared``:
+        a ``skopaq.api.shared_state.SharedKeys`` — then the claim holds across API
+        replicas (and a Redis error refuses the request rather than risk a duplicate)."""
+        if shared is not None:
+            async with self._shared_guard(shared, user, action, body, key) as slot:
+                yield slot
+            return
         now = self._clock()
         digest = hashlib.sha256(json.dumps(body, sort_keys=True, default=str)
                                 .encode()).hexdigest()[:32]
@@ -85,6 +94,39 @@ class IdempotencyStore:
             with self._lock:
                 self._keys[k] = (self._clock(), slot.result)
 
+
+    @asynccontextmanager
+    async def _shared_guard(self, shared: Any, user: str, action: str, body: Any,
+                            key: Optional[str]) -> AsyncIterator["_Slot"]:
+        digest = hashlib.sha256(json.dumps(body, sort_keys=True, default=str)
+                                .encode()).hexdigest()[:32]
+        k = f"{user}|{action}|{key[:100]}" if key else f"{user}|{action}|body:{digest}"
+        slot = _Slot()
+        try:
+            claimed, answer = await shared.claim(k)
+        except Exception as exc:
+            raise HTTPException(409, f"Duplicate check unavailable ({exc}): not sent") from exc
+        if not claimed:
+            if answer is None:
+                raise HTTPException(409, "This request is already being processed")
+            if not key:
+                raise HTTPException(409, "The same request was just sent")
+            slot.replay = answer
+            yield slot
+            return
+        try:
+            yield slot
+        except BaseException:
+            try:
+                await shared.forget(k)
+            except Exception:
+                pass
+            raise
+        try:
+            if key:
+                await shared.store(k, slot.result)
+        except Exception:
+            logger.warning("Idempotency answer not stored", exc_info=True)
 
     def reset(self) -> None:
         with self._lock:

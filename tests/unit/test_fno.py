@@ -477,7 +477,10 @@ async def test_an_unconfirmed_option_buy_blocks_the_underlying_and_limits_apply(
     async def chain_loader(*_a):
         return _chain()
 
-    engine = FnoEngine(SimpleNamespace(fno_risk_per_trade_inr=10_000, fno_max_lots=2),
+    # Order handling under test: _enter is called without candles, which qualification
+    # (data quality) would refuse
+    engine = FnoEngine(SimpleNamespace(fno_risk_per_trade_inr=10_000, fno_max_lots=2,
+                                       fno_qualification_enabled=False),
                        executor, AsyncMock(), router, halted=lambda: False,
                        chain_loader=chain_loader, max_lots=5)
     from skopaq.market.candles import LiveSeries

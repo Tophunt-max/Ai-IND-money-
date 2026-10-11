@@ -111,6 +111,7 @@ class ModelRegistry:
                  clock=lambda: datetime.now(timezone.utc)) -> None:
         self.dir = Path(directory).expanduser()
         self._clock = clock
+        self.mirror: Any = None          # skopaq.db.mirror.Mirror (optional)
 
     # ── storage ─────────────────────────────────────────────────────────
 
@@ -128,6 +129,14 @@ class ModelRegistry:
         line["ts"] = self._clock().isoformat()
         with open(self.dir / "history.jsonl", "a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, default=str) + "\n")
+        if self.mirror is not None:
+            try:
+                self.mirror.put("model_events", {
+                    "version": line.get("version"), "event": line.get("event"),
+                    "by_user": line.get("approved_by") or line.get("by"),
+                    "payload": json.loads(json.dumps(line, default=str))})
+            except Exception:
+                pass
 
     def get(self, version: str) -> Optional[dict]:
         try:
@@ -143,6 +152,7 @@ class ModelRegistry:
             except (OSError, ValueError):
                 continue
             d.pop("model", None)
+            (d.get("dataset") or {}).pop("feature_sample", None)
             out.append(d)
         return sorted(out, key=lambda d: d.get("created_at", ""))
 

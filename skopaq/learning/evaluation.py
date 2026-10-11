@@ -19,7 +19,7 @@ from typing import Optional, Sequence
 import numpy as np
 
 from skopaq.learning.dataset import Example
-from skopaq.learning.model import LogisticModel, brier, calibration_bins
+from skopaq.learning.model import brier, calibration_bins
 
 
 @dataclass
@@ -66,7 +66,7 @@ def trade_stats(pnls: Sequence[float], *, boot: int = 1000, seed: int = 7) -> Tr
                       sum(p > 0 for p in pnls) / n)
 
 
-def choose_threshold(model: LogisticModel, val: Sequence[Example],
+def choose_threshold(model, val: Sequence[Example],
                      grid: Sequence[float] = (0.4, 0.45, 0.5, 0.55, 0.6, 0.65),
                      min_trades: int = 20) -> float:
     """The validation threshold with the best net P&L that keeps ≥ ``min_trades``."""
@@ -81,7 +81,7 @@ def choose_threshold(model: LogisticModel, val: Sequence[Example],
     return best
 
 
-def evaluate_gate(model: Optional[LogisticModel], test: Sequence[Example],
+def evaluate_gate(model, test: Sequence[Example],
                   threshold: float) -> dict:
     labels = [int(e.label) for e in test if e.label is not None]
     base = trade_stats([e.net_pnl for e in test if e.net_pnl is not None])

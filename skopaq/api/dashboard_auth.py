@@ -222,6 +222,10 @@ async def current_user(request: Request, authorization: str = Header(default="")
                  "URL and anon key) on the server")
     ip = client_ip(request, getattr(config, "trusted_proxy_hops", 1))
     _check_locked(ip)
+    shared = await _shared_lockout(config)
+    if shared is not None and await _safe(shared.locked(ip), False):
+        raise HTTPException(
+            429, "Too many failed logins from this network: try again in 10 minutes")
     scheme, _, token = authorization.partition(" ")
     token = token.strip()
     if scheme.lower() != "bearer" or not token:
@@ -234,11 +238,15 @@ async def current_user(request: Request, authorization: str = Header(default="")
 
     if not _supabase_auth_ready(config):
         _note_failure(ip)
+        if shared is not None:
+            await _safe(shared.failure(ip), None)
         raise HTTPException(401, "Invalid token", headers={"WWW-Authenticate": "Bearer"})
 
     info = await _supabase_user(token, config)
     if info is None:
         _note_failure(ip)
+        if shared is not None:
+            await _safe(shared.failure(ip), None)
         raise HTTPException(401, "Session expired or invalid: log in again",
                             headers={"WWW-Authenticate": "Bearer"})
     _note_success(ip)
@@ -259,6 +267,26 @@ async def current_user(request: Request, authorization: str = Header(default="")
     user.role = role
     _record_login(config, user, "ok", request)
     return user
+
+
+async def _shared_lockout(config):
+    """The cross-replica lockout (SKOPAQ_API_SHARED_STATE_ENABLED), else None."""
+    try:
+        from skopaq.api.shared_state import SharedLockout, shared_client
+
+        client = shared_client(config)
+    except Exception:
+        return None
+    return SharedLockout(client) if client is not None else None
+
+
+async def _safe(coro, default):
+    """A shared-state call that falls back to the in-memory lockout on a Redis error."""
+    try:
+        return await coro
+    except Exception:
+        logger.warning("Shared login lockout unavailable: in-memory only", exc_info=True)
+        return default
 
 
 async def require_admin(user: DashboardUser = Depends(current_user)) -> DashboardUser:

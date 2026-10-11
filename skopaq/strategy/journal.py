@@ -53,13 +53,23 @@ def _json(value: Any) -> Any:
 
 
 class SignalJournal:
-    def __init__(self, directory: Path | str, *, mode: str = "paper") -> None:
+    def __init__(self, directory: Path | str, *, mode: str = "paper",
+                 mirror: Any = None) -> None:
         self.directory = Path(directory).expanduser()
         self.mode = mode
+        self._mirror = mirror
 
     @classmethod
     def from_config(cls, config: object) -> "SignalJournal":
-        return cls(journal_dir(config), mode=str(getattr(config, "trading_mode", "paper")))
+        mirror = None
+        try:
+            from skopaq.db.mirror import mirror_from_config
+
+            mirror = mirror_from_config(config)
+        except Exception:
+            logger.debug("Audit mirror unavailable", exc_info=True)
+        return cls(journal_dir(config), mode=str(getattr(config, "trading_mode", "paper")),
+                   mirror=mirror)
 
     def path_for(self, day: date) -> Path:
         return self.directory / f"{day.isoformat()}.jsonl"
@@ -71,6 +81,11 @@ class SignalJournal:
             text = json.dumps(_json(line), separators=(",", ":"))
             with _lock, open(self.path_for(day), "a", encoding="utf-8") as fh:
                 fh.write(text + "\n")
+            if self._mirror is not None:
+                from skopaq.db.mirror import signal_row
+
+                self._mirror.put("signal_events", signal_row(_json(line)),
+                                 on_conflict="signal_id,event")
             return True
         except Exception as exc:
             if not _warned:

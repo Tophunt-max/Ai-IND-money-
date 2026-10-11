@@ -32,6 +32,7 @@ from skopaq.constants import GST_RATE, INDSTOCKS_BROKERAGE_PER_ORDER_INR
 from skopaq.market.candles import Candle
 from skopaq.scalping.settings import _hhmm, _list, _num
 from skopaq.scalping.strategies import STRATEGY_NAMES, Setup, StrategyParams
+from skopaq.strategy.signal import QualifyRules
 
 INSTRUMENTS = ("options", "futures")
 
@@ -95,6 +96,14 @@ class FnoSettings:
     tick_max_age_s: float
     rest_poll_s: float
     params: StrategyParams
+    # Qualification on the premium (skopaq/strategy/signal.py): data quality of the
+    # underlying's candles, spread, net reward/risk after charges and slippage
+    qualify: bool = True
+    qualify_rules: QualifyRules = QualifyRules(require_reliable_regime=False,
+                                               slippage_pct=0.001, max_spread_pct=0.03,
+                                               max_participation=None, min_stop_pct=0.005,
+                                               max_stop_pct=0.6)
+    htf_seconds: int = 300
 
     @property
     def futures(self) -> bool:
@@ -141,6 +150,15 @@ class FnoSettings:
             params=StrategyParams(
                 rr=_num(g("fno_rr"), 2.0, 0.5, 10),
                 orb_minutes=int(_num(g("fno_orb_minutes"), 15, 5, 120)),
+            ),
+            qualify=g("fno_qualification_enabled", True) is not False,
+            qualify_rules=QualifyRules(
+                # Premium stops are wide by design (fno_premium_stop_pct, 25 %)
+                require_reliable_regime=False, max_participation=None,
+                min_stop_pct=0.005, max_stop_pct=0.6,
+                min_net_rr=_num(g("fno_min_net_rr"), 1.0, 0.1, 10),
+                slippage_pct=_num(g("fno_slippage_pct"), 0.001, 0.0, 0.05),
+                max_spread_pct=_num(g("fno_max_spread_pct"), 0.03, 0.001, 0.5),
             ),
         )
 
@@ -286,6 +304,10 @@ class FnoPosition:
     initial_stop: float = field(default=0.0)
     exiting: bool = False
     expiry: Optional[date] = None
+    signal_id: str = ""
+    entry_charged: bool = False
+    gross_booked: float = 0.0
+    charges_booked: float = 0.0
 
     def __post_init__(self) -> None:
         if self.high <= 0:

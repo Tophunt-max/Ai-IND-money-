@@ -79,6 +79,9 @@ class QualifyRules:
     require_htf_confirmation: bool = False
     require_pattern_agreement: bool = False
     block_on_data_problems: bool = True
+    max_spread_pct: Optional[float] = 0.005     # bid/ask spread over mid (when known)
+    max_participation: Optional[float] = 0.10   # qty / average bar volume (when known)
+    min_model_prob: Optional[float] = None      # champion model gate (None = off)
 
 
 @dataclass
@@ -183,6 +186,34 @@ def qualify(c: SignalCandidate, rules: QualifyRules = QualifyRules(), *,
             reasons.append(f"candle evidence {bias} against a {want} entry")
         else:
             passed.append(f"candle evidence {bias}")
+
+    spread = ev.get("spread_pct")
+    if rules.max_spread_pct is not None and isinstance(spread, (int, float)):
+        if spread > rules.max_spread_pct:
+            reasons.append(f"spread {spread:.3%} wider than {rules.max_spread_pct:.3%}")
+        else:
+            passed.append(f"spread {spread:.3%}")
+    avg_vol = ev.get("avg_bar_volume")
+    if rules.max_participation is not None and isinstance(avg_vol, (int, float)) and c.qty:
+        if avg_vol <= 0:
+            reasons.append("no traded volume: illiquid")
+        elif c.qty / avg_vol > rules.max_participation:
+            reasons.append(f"size {c.qty} is {c.qty / avg_vol:.0%} of an average bar's "
+                           f"volume (max {rules.max_participation:.0%})")
+        else:
+            passed.append(f"size {c.qty / avg_vol:.1%} of bar volume")
+
+    if rules.min_model_prob is not None and c.model_prob is not None:
+        if c.model_prob < rules.min_model_prob:
+            reasons.append(f"model {c.model_version}: P(net win) {c.model_prob:.2f} < "
+                           f"{rules.min_model_prob:.2f}")
+        else:
+            passed.append(f"model P(net win) {c.model_prob:.2f}")
+
+    allowed = ev.get("regime_allowed")
+    if allowed is False:
+        reasons.append(f"{c.strategy_id} is not validated for regime "
+                       f"{regime.get('trend', '?')} (approved regime map)")
 
     d = Decision(REJECTED if reasons else QUALIFIED, reasons, passed)
     if c.entry > 0 and c.risk_per_unit > 0:
