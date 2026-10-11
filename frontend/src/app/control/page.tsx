@@ -450,7 +450,7 @@ function OrderCard({ live, active, busy, act }: {
       <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-ink-850 p-1">
         {(["BUY", "SELL"] as const).map((s) => (
           <button key={s} type="button" onClick={() => setSide(s)}
-            className={`rounded-md py-2 text-sm font-bold transition ${side === s ? (s === "BUY" ? "bg-emerald-500 text-ink-950" : "bg-rose-500 text-white") : "text-gray-400 hover:text-gray-200"}`}>
+            className={`rounded-md py-2 text-sm font-bold transition ${side === s ? (s === "BUY" ? "bg-emerald-500 text-onaccent" : "bg-rose-500 text-onaccent") : "text-gray-400 hover:text-gray-200"}`}>
             {s}
           </button>
         ))}

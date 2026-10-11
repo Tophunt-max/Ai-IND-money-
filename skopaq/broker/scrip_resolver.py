@@ -142,3 +142,10 @@ async def resolve_tick_size(
         logger.warning("Tick size for %s unavailable (%s)", key, exc)
         return None
     return _tick_cache.get(key)
+
+
+def known_symbols(exchange: str = "NSE") -> list[str]:
+    """Trading symbols of *exchange* in the last instruments CSV loaded (empty until one
+    was). Never downloads: used by the dashboard's symbol search."""
+    prefix = f"{exchange}:"
+    return [k[len(prefix):] for k in _cache if k.startswith(prefix)]

@@ -167,6 +167,30 @@ def fit(train: list[dict], val: list[dict], cfg: SwingTrainConfig) -> SwingModel
     return model
 
 
+def importance(model: SwingModel, X: np.ndarray, y: np.ndarray, *, seed: int = 7,
+               top: int = 12) -> list[dict]:
+    """Permutation importance on the test rows: how much the Brier score worsens when one
+    feature (the setup one-hots together) is shuffled. Model-agnostic; ``share`` sums to 1
+    over the features that matter (≥ 0)."""
+    if len(X) < 10:
+        return []
+    rng = np.random.default_rng(seed)
+    base = float(np.mean((model.probs(X) - y) ** 2))
+    groups: dict[str, list[int]] = {}
+    for j, name in enumerate(FEATURES):
+        groups.setdefault("setup" if name.startswith("setup_") else name, []).append(j)
+    out = []
+    for name, cols in groups.items():
+        Xp = X.copy()
+        perm = rng.permutation(len(X))
+        Xp[:, cols] = X[perm][:, cols]
+        out.append((name, float(np.mean((model.probs(Xp) - y) ** 2)) - base))
+    total = sum(max(0.0, v) for _, v in out) or 1.0
+    out.sort(key=lambda kv: -kv[1])
+    return [{"feature": n, "brier_increase": round(v, 6), "share": round(max(0.0, v) / total, 4)}
+            for n, v in out[:top]]
+
+
 def evaluate(model: SwingModel, test: list[dict]) -> dict:
     if not test:
         return {"samples": 0}
@@ -187,6 +211,7 @@ def evaluate(model: SwingModel, test: list[dict]) -> dict:
                 "net_taken": round(float(net[sel & take].sum()), 2),
             }
     return {
+        "importance": importance(model, X, y),
         "samples": len(test),
         "baseline": trade_stats(list(net)).as_dict(),
         "model": trade_stats(list(net[take])).as_dict(),

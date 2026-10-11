@@ -6,6 +6,28 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Added — the dashboard redesign (modern app, light + dark)
+
+- New design: light, dark or system theme (no flash on load), Inter, rounded cards, a top bar
+  with page tabs and a More menu, phone bottom tabs with a centre Trade button, bottom sheets.
+- Live prices over one stream (`GET /api/dashboard/market/stream`, SSE, ≤ 50 symbols) with
+  price flashes; polling fallback.
+- Charts: EMA 9/21, SMA 50/200, Bollinger, VWAP, RSI and MACD panes, volume, patterns,
+  signal / position / alert levels, horizontal and trend-line drawings, full screen.
+- Order ticket (buy / sell sheet with stop-loss, target, risk and reward : risk) through the
+  existing safety-checked order route.
+- NIFTY 50 heatmap and top movers (`GET /market/heatmap`), symbol search
+  (`GET /market/search`), AI insights page (ideas, P(win) gauge, versions vs baseline,
+  permutation feature importance now in every swing model report, by-setup results),
+  `GET /swing/idea` for one stock.
+- Price alerts (`skopaq/alerts.py`, `/alerts`, `/notifications`, `SKOPAQ_ALERTS_FILE`): fire
+  once on the live stream or the Telegram bot's minute job, go to the bell, a toast and
+  Telegram. They never place orders.
+- Portfolio analytics (equity and drawdown, daily P&L calendar, allocation by stock / sector),
+  options OI / OI change, IV smile and a payoff calculator, a command palette (`Ctrl K`) and
+  keyboard shortcuts, Settings for appearance, layout, charts and multiple watchlists, and a
+  PWA install button, offline page and update banner.
+
 ### Removed — one AI: the Adaptive AI
 
 - **The LLM / API AI is gone.** The LangGraph multi-agent pipeline (`skopaq/graph`,

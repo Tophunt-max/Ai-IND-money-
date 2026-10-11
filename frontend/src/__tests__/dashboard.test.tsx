@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase", () => ({ accessToken: async () => "tok" }));
@@ -55,17 +55,31 @@ describe("api()", () => {
 describe("CandleChart", () => {
   const candles = Array.from({ length: 30 }, (_, i) => ({ t: 1000 + i * 60, o: 100 + i, h: 102 + i, l: 99 + i, c: 101 + i, v: 10 }));
 
-  it("draws EMA overlays, pattern markers and signal levels", () => {
+  it("draws the chosen studies, pattern markers and levels", () => {
     const { container } = render(
-      <CandleChart candles={candles}
-        overlays={candles.map((c, i) => ({ t: c.t, ema9: i > 8 ? c.c : null, ema21: i > 20 ? c.c - 1 : null }))}
+      <CandleChart candles={candles} studies={["ema", "bb", "rsi", "macd", "patterns", "levels"]}
         markers={[{ t: candles[10].t, bias: "bullish", names: ["hammer"] }, { t: 1, bias: "bearish", names: ["x"] }]}
         levels={[{ label: "Entry", price: 120, tone: "entry" }, { label: "Stop", price: 118, tone: "stop" }]} />,
     );
-    expect(container.querySelectorAll("polyline")).toHaveLength(2);
-    expect(container.querySelectorAll("polygon")).toHaveLength(1);   // the unknown time is skipped
+    for (const k of ["ema9", "ema21", "bb", "rsi", "macd"]) expect(container.querySelector(`path[data-study="${k}"]`), k).toBeTruthy();
+    expect(container.querySelector('path[data-study="sma50"]')).toBeNull();          // not chosen
+    expect(container.querySelectorAll("polygon[data-marker]")).toHaveLength(1);       // the unknown time is skipped
     expect(screen.getByText(/^Entry/)).toBeTruthy();
     expect(screen.getByText(/^Stop/)).toBeTruthy();
+  });
+
+  it("places a horizontal line with the drawing tool and keeps it per symbol", () => {
+    localStorage.clear();
+    const { container } = render(<CandleChart candles={candles} drawKey="TCS" />);
+    fireEvent.click(screen.getByLabelText("Horizontal line"));
+    expect(screen.getByText(/Tap the chart/)).toBeTruthy();
+    const box = container.querySelector('svg[aria-label="candlestick chart"]')!.parentElement as HTMLElement;
+    box.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 360, right: 320, bottom: 360, x: 0, y: 0, toJSON() {} });
+    fireEvent.click(box, { clientX: 120, clientY: 100 });
+    const saved = JSON.parse(localStorage.getItem("aiind:draw:TCS") || "[]");
+    expect(saved).toHaveLength(1);
+    expect(saved[0].kind).toBe("hline");
+    expect(screen.getByLabelText("Clear drawings")).toBeTruthy();
   });
 
   it("says when there is not enough data", () => {

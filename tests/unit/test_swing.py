@@ -194,6 +194,16 @@ def test_the_real_gates_keep_a_weak_model_a_candidate(tmp_path):
         assert out["state"] == "shadow" and reg.champion() is None
 
 
+def test_the_report_ranks_features_by_permutation_importance(trained):
+    _config, reg, out = trained
+    imp = reg.get(out["version"])["report"]["importance"]
+    names = [x["feature"] for x in imp]
+    assert imp and len(set(names)) == len(names)
+    assert set(names) <= {f for f in swing_model.FEATURES if not f.startswith("setup_")} | {"setup"}
+    assert [x["brier_increase"] for x in imp] == sorted((x["brier_increase"] for x in imp), reverse=True)
+    assert 0 <= sum(x["share"] for x in imp) <= 1.0001 and all(x["share"] >= 0 for x in imp)
+
+
 def test_load_active_paper_uses_the_shadow_live_only_a_champion(trained):
     config, reg, out = trained
     model, state = swing_model.load_active(config, paper=True)

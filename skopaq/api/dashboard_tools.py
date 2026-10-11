@@ -257,6 +257,8 @@ async def swing_status() -> dict:
                                "baseline": rep.get("baseline"), "threshold": rep.get("threshold"),
                                "brier": rep.get("brier"), "brier_base_rate": rep.get("brier_base_rate"),
                                "by_setup": rep.get("by_setup"), "setups": rep.get("setups"),
+                               "importance": rep.get("importance") or [],
+                               "base_rate": rep.get("base_rate"),
                                "test_from": rep.get("first_test_date"),
                                "test_to": rep.get("last_test_date")})
         paper = config.trading_mode != "live"
@@ -279,6 +281,34 @@ async def swing_status() -> dict:
 
 class SwingReason(BaseModel):
     reason: str = Field(..., min_length=5, max_length=300)
+
+
+@router.get("/swing/idea")
+async def swing_idea(symbol: str = Query(..., max_length=24)) -> dict:
+    """One symbol's swing setup on its last closed daily bar and the swing model's P(win)
+    (``idea`` null: no setup fired). No orders."""
+    import re
+
+    from skopaq.swing.engine import SwingEngine
+
+    sym = symbol.strip().upper()
+    if not re.match(r"^[A-Z0-9&\-]{1,24}$", sym):
+        raise HTTPException(422, "Give an NSE symbol, e.g. RELIANCE")
+    config = SkopaqConfig()
+    try:
+        engine = await asyncio.to_thread(SwingEngine.from_config, config,
+                                         paper=config.trading_mode != "live")
+        idea = await engine.idea(sym)
+    except Exception as exc:
+        raise HTTPException(502, f"Swing idea unavailable: {exc}") from exc
+    model = engine.model
+    return _jsonable({
+        "symbol": sym, "model": getattr(model, "version", None), "model_state": engine.model_state,
+        "threshold": getattr(model, "threshold", None), "rules_only": engine.rules_only,
+        "idea": idea.as_dict() if idea else None,
+        "qualifies": bool(idea and (idea.prob is not None and model is not None
+                                    and idea.prob >= model.threshold)),
+    })
 
 
 @router.post("/swing/{version}/promote")

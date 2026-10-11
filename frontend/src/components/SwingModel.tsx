@@ -8,13 +8,15 @@ import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, pnlClass, Table } fro
 import { api, ApiError, inr, when } from "@/lib/api";
 import { useApi, useJob } from "@/lib/hooks";
 
-type Stats = { trades: number; net: number; profit_factor: number | null; win_rate?: number | null; max_drawdown?: number } | null | undefined;
-interface SwingVersion {
+export type Stats = { trades: number; net: number; profit_factor: number | null; win_rate?: number | null; max_drawdown?: number } | null | undefined;
+export interface SwingVersion {
   version: string; state: string; created_at?: string; gate_failures?: string[] | null;
   shadow_since?: string | null; approved_by?: string | null; model_kind?: string | null;
   model?: Stats; baseline?: Stats; threshold?: number | null; brier?: number | null; brier_base_rate?: number | null;
   setups?: number | null; test_from?: string | null; test_to?: string | null;
   by_setup?: Record<string, { setups: number; taken: number; net_all: number; net_taken: number }> | null;
+  importance?: { feature: string; brier_increase: number; share: number }[];
+  base_rate?: number | null;
 }
 export interface SwingStatus {
   mode: string; champion: string | null; shadow: string | null; active: string | null; rules_only: boolean;

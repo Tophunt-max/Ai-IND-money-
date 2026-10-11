@@ -2,16 +2,36 @@
 
 `frontend/` is a Next.js dashboard that talks to the API on the EC2 host:
 
-A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
+A modern app design in **light and dark** (Settings → Appearance, or `d`): a top bar with
+Home · Market · Portfolio · AI insights · Options · Trade desk and a **More** menu (desktop),
+bottom tabs with a centre **Trade** button that opens the order ticket (phone). Everywhere:
+
+- **Live prices** — one Server-Sent Events stream (`/market/stream`) carries every symbol on
+  screen (≤ 50; 2 s while NSE is open, 15 s otherwise); prices flash on change. When the
+  stream is down the app polls `/market/quotes`.
+- **Search / command palette** — `Ctrl K` or `/`: stocks, pages and actions. Shortcuts:
+  `g h/m/p/a/o/t/l/s` go to a page, `b` new order, `n` notifications, `d` theme, `?` help.
+- **Order ticket** — buy / sell sheet from a chart, a watchlist row (B / S), an AI idea or the
+  Trade button: quantity, market / limit, stop-loss, target (set on the position's exit plan),
+  value, risk and reward : risk. It calls `POST /control/orders` (safety checker; live: type
+  LIVE).
+- **Notifications** — the bell: the server's feed (`/notifications`), fired price alerts as
+  toasts.
+- **Installable app** — install button (Settings), offline page, "new version" banner.
+
+The pages:
 
 | Page | What it does | API |
 |---|---|---|
-| Dashboard | Total P&L with the 90-day chart, kill-switch and token banners, today's auto-trading session, open positions, system health | `/api/dashboard/overview`, `/pnl-history`, `/scheduler`, `/api/status` |
-| Portfolio | INDstocks equity positions, F&O positions, holdings, funds (incl. option-buy and futures balances) and today's order book. Read only | `/api/dashboard/portfolio` |
+| Home | Account value and P&L curve, quick actions, indices, AI swing ideas (the latest scan), watchlist, top movers, open positions, risk capacity, auto-trading session, system health. Sections can be hidden (Settings → Layout) | `/api/dashboard/overview`, `/pnl-history`, `/jobs`, `/market/heatmap`, `/scheduler`, `/api/status` |
+| Portfolio | Holdings value, returns and today's change at live prices; holdings, positions, F&O and today's orders; **Analytics**: equity curve with drawdown, daily P&L calendar, best / worst day, winning days, allocation by stock or sector. Read only | `/api/dashboard/portfolio`, `/pnl-history`, `/overview` |
 | **Trade desk** (`/control`) | Run the engine: pause/resume new BUYs, auto sessions on/off, **start a session now** (or, live, a monitor), **stop** the running session, live positions (LTP, P&L, stop, target, high) with **Close** / **Close all** and stop/target edits, **manual orders** (live: type LIVE), today's order book with **Cancel**, exit & risk settings. Streams every 2 s (admin actions only; each is logged and sent to Telegram) | `/api/dashboard/control*` |
-| Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y), live from INDstocks (Yahoo only as a fallback) | `/api/dashboard/market/*` |
+| Market | Indices, watchlists (up to 10, kept on the device; NIFTY 50 built in), top gainers / losers / most traded, a heatmap preview. A stock: live price and day range, chart (1D–5Y; candles or line; EMA, SMA, Bollinger, VWAP, RSI, MACD, volume, candle patterns; signal, position and alert levels; horizontal and trend-line drawings kept per symbol; full screen), your position, Overview / Technicals / **AI view** (the swing setup and P(win)), Buy / Sell, price alert | `/api/dashboard/market/*`, `/swing/idea`, `/alerts` |
+| Heatmap (`/market/heatmap`) | NIFTY 50 by sector coloured by the day's change (tile size: traded value), breadth, best / worst, sector averages | `/api/dashboard/market/heatmap` |
+| AI insights (`/ai`) | Today's swing ideas (cards or list, buy with the setup's levels), the active model and P(win) gauge, model versions on unseen dates vs taking every setup, permutation feature importance, results by setup, the 30-day live record of swing signals | `/api/dashboard/swing`, `/jobs`, `/report` |
+| Price alerts (`/alerts`) | Alerts above / below a price or a day change; active, fired (re-arm), notifications. They fire once, on the live stream or the Telegram bot's minute check, and go to Telegram | `/api/dashboard/alerts*`, `/notifications*` |
 | Swing scanner | One swing scan (`skopaq scan`, a `scan` job): today's setups scored by the swing model, with entry / stop / target and P(win), and the swing model's state. Places nothing | `/api/dashboard/jobs`, `/swing` |
-| Options | INDstocks expiries, option chain (with Delta) and a rule-based option-selling idea (short put / call / strangle). Needs the INDstocks token; places nothing | `/api/dashboard/options/expiries`, `/options/chain`, `/options/suggest` |
+| Options | INDstocks expiries; chain (IV, Delta, OI) with B / S to build legs; open interest and OI change by strike with max pain; IV smile; **payoff calculator** (max profit / loss, break-evens, net premium); a rule-based option-selling idea. Needs the INDstocks token; places nothing | `/api/dashboard/options/expiries`, `/options/chain`, `/options/suggest` |
 | Signals & risk | Every journalled signal (QUALIFIED / REJECTED / EXPIRED) with its evidence and rejection reason, risk limits, and reconciliation blockers to resolve | `/api/dashboard/signals`, `/risk`, `/control/reconcile` |
 | Trades | Trades from Supabase (current mode, paper, live, all), with totals and a symbol filter | `/api/dashboard/trades` |
 | Track record | Journalled signals by strategy, top rejection reasons, closed trades, calibration (`skopaq report`) | `/api/dashboard/report` |
@@ -20,7 +40,7 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 | Scheduler | `skopaq schedule --check` plan, the last 10 days' sessions, logs | `/api/dashboard/scheduler[/log]` |
 | Jobs | Every swing scan, swing training, backtest and Monte Carlo started from the dashboard (kinds `scan`, `swing_train`, `backtest`, `montecarlo`; kept in memory) | `/api/dashboard/jobs` |
 | Broker | INDstocks token: health, expiry, **set today's token** or delete it (admin; like `skopaq token set`), and an info card on equity and F&O at INDstocks | `/api/dashboard/broker[/indstocks-token]` |
-| Settings | Kill switch, account, login history, links | `/api/dashboard/kill-switch*` |
+| Settings | Appearance (light / dark / system, density, price flashes, reduce motion), layout (landing page, home sections), chart defaults (type, range, indicators), watchlists, install the app; kill switch, account, login history, links | `/api/dashboard/kill-switch*` |
 | Environment (admin) | View and change `SKOPAQ_*` settings: trading mode, live switch, scheduler, keys (see below) | `/api/dashboard/settings/env` |
 
 ## Trade desk (admin)

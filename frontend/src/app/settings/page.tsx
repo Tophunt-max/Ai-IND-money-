@@ -2,13 +2,14 @@
 
 import {
   ChevronRight, History, LogOut, OctagonX, Play, PlugZap, Server, Settings, ShieldCheck,
-  SlidersHorizontal, Smartphone, User,
+  SlidersHorizontal, User,
 } from "lucide-react";
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 
 import { useAuth } from "@/components/AuthGate";
 import ModeSwitch, { useModeChanged } from "@/components/ModeSwitch";
+import { Appearance, ChartPrefs, InstallApp, LayoutPrefs, WatchlistPrefs } from "@/components/Preferences";
 import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, Segmented, Skeleton } from "@/components/ui";
 import { api, BACKEND_URL, when } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -59,7 +60,7 @@ function Account() {
   return (
     <Card title="Account" icon={User} right={<Badge tone={isAdmin ? "ok" : "neutral"}>{user.role.toUpperCase()}</Badge>}>
       <div className="mb-5 flex items-center gap-4">
-        <div className="grid h-12 w-12 place-items-center rounded-full bg-brand-500 text-lg font-semibold uppercase text-white">
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-brand-500 text-lg font-semibold uppercase text-onaccent">
           {(user.name || user.email).slice(0, 1)}
         </div>
         <div className="min-w-0">
@@ -162,7 +163,14 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <PageTitle title="Settings" icon={Settings} subtitle="Account, safety and connections" />
+      <PageTitle title="Settings" icon={Settings} subtitle="Appearance, layout, watchlists, account, safety and connections" />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Appearance />
+        <LayoutPrefs />
+        <ChartPrefs />
+        <WatchlistPrefs />
+      </div>
 
       <ModeSwitch />
 
@@ -214,13 +222,7 @@ export default function SettingsPage() {
               ))}
             </div>
           </Card>
-          <Card title="Install as an app" icon={Smartphone}>
-            <ul className="space-y-1.5 text-sm text-gray-400">
-              <li><b className="text-gray-200">Android</b> (Chrome): ⋮ menu → Install app</li>
-              <li><b className="text-gray-200">iPhone</b> (Safari): Share → Add to Home Screen</li>
-              <li><b className="text-gray-200">Computer</b> (Chrome/Edge): install icon in the address bar</li>
-            </ul>
-          </Card>
+          <InstallApp />
         </div>
       </div>
 
