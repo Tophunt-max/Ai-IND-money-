@@ -367,7 +367,8 @@ async def test_cancel_never_confirmed_leaves_the_exit_stuck(tmp_path):   # T13
     assert stuck and stuck[0][0] == "CRITICAL" and stuck[0][3] == ("EQ-1",)
     assert "exit-not-filled:TCS" in rig.alerts.keys("CRITICAL")
     assert rig.registry.get("EQ-1").state == "stuck"
-    assert [e["event"] for e in rig.journal.entries()] == ["placed", "stuck"]
+    # "submitting" is the write-ahead line before the order was sent
+    assert [e["event"] for e in rig.journal.entries()] == ["submitting", "placed", "stuck"]
     assert rig.clock.t == pytest.approx(20)                    # attempt 10 s + cancel window 10 s
 
 

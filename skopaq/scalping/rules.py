@@ -28,6 +28,10 @@ class ScalpPosition:
     scrip_code: str = ""
     initial_stop: float = field(default=0.0)
     exiting: bool = False
+    signal_id: str = ""            # the signal journal's id of the entry decision
+    entry_charged: bool = False    # the entry order's brokerage is in a booked exit
+    gross_booked: float = 0.0      # gross P&L of the exits booked so far
+    charges_booked: float = 0.0
 
     def __post_init__(self) -> None:
         if self.high <= 0:

@@ -4,7 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3, Brain, CalendarClock, FlaskConical, Gauge, Grid2x2, Layers, LayoutDashboard,
   LineChart, ListChecks, LogOut, MessagesSquare, PlugZap, Radar, ScrollText, Settings,
-  SlidersHorizontal, Sparkles, Wallet, X,
+  Signal, SlidersHorizontal, Sparkles, Wallet, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -38,6 +38,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
       { href: "/control", label: "Control", icon: Gauge },
       { href: "/analyze", label: "Analyze", icon: Brain },
       { href: "/scanner", label: "Scanner", icon: Radar },
+      { href: "/signals", label: "Signals & risk", icon: Signal },
       { href: "/options", label: "Options", icon: Layers },
       { href: "/trades", label: "Trades", icon: ScrollText },
     ],

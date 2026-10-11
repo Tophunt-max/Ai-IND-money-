@@ -95,11 +95,21 @@ def auth_configured(config) -> bool:
     return bool((token and token.get_secret_value()) or _supabase_auth_ready(config))
 
 
-def client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "?"
+def client_ip(request: Request, hops: object = 1) -> str:
+    """The client's address for the failed-login lockout and the login log.
+
+    ``X-Forwarded-For`` is only trusted for the ``hops`` proxies in front of the API
+    (``SKOPAQ_TRUSTED_PROXY_HOPS``, default 1: Fly/Railway/Vercel append the address they
+    saw): the entry that many from the right. The left-most entry is whatever the client
+    sent, so trusting it let anyone dodge the lockout or lock someone else out. 0 ignores
+    the header (the API is reached directly)."""
+    n = hops if isinstance(hops, int) and not isinstance(hops, bool) and hops >= 0 else 1
+    direct = request.client.host if request.client else "?"
+    fwd = [x.strip() for x in request.headers.get("x-forwarded-for", "").split(",")
+           if x.strip()]
+    if n == 0 or not fwd:
+        return direct
+    return fwd[-n] if len(fwd) >= n else fwd[0]
 
 
 # ── Rate limit on failed tokens ───────────────────────────────────────────────
@@ -181,7 +191,8 @@ def _record_login(config, user: DashboardUser, status: str, request: Request) ->
     row = {
         "session_id": user.session_id, "user_id": user.user_id, "email": user.email,
         "role": user.role if status == "ok" else None, "status": status,
-        "provider": user.provider, "ip": client_ip(request),
+        "provider": user.provider,
+        "ip": client_ip(request, getattr(config, "trusted_proxy_hops", 1)),
         "user_agent": (request.headers.get("user-agent") or "")[:300],
     }
 
@@ -209,7 +220,7 @@ async def current_user(request: Request, authorization: str = Header(default="")
         raise HTTPException(
             503, "Dashboard login is not set up: set SKOPAQ_DASHBOARD_USERS (and the Supabase "
                  "URL and anon key) on the server")
-    ip = client_ip(request)
+    ip = client_ip(request, getattr(config, "trusted_proxy_hops", 1))
     _check_locked(ip)
     scheme, _, token = authorization.partition(" ")
     token = token.strip()

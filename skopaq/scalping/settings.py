@@ -9,6 +9,7 @@ from datetime import time, timedelta
 from typing import Any
 
 from skopaq.scalping.strategies import STRATEGY_NAMES, StrategyParams
+from skopaq.strategy.signal import QualifyRules
 
 DEFAULT_SYMBOLS = ("RELIANCE,HDFCBANK,ICICIBANK,INFY,TCS,SBIN,AXISBANK,KOTAKBANK,LT,"
                    "BHARTIARTL")
@@ -53,6 +54,10 @@ class ScalpSettings:
     tick_max_age_s: float
     rest_poll_s: float
     params: StrategyParams
+    # Qualification before the risk gateway (skopaq/strategy/signal.py)
+    qualify: bool = True
+    qualify_rules: QualifyRules = QualifyRules(require_reliable_regime=False)
+    htf_seconds: int = 300
 
     @classmethod
     def from_config(cls, config: Any) -> "ScalpSettings":
@@ -84,4 +89,12 @@ class ScalpSettings:
                 rr=_num(g("scalp_rr"), 1.5, 0.5, 10),
                 orb_minutes=int(_num(g("scalp_orb_minutes"), 15, 5, 120)),
             ),
+            qualify=g("scalp_qualification_enabled", True) is not False,
+            qualify_rules=QualifyRules(
+                min_net_rr=_num(g("scalp_min_net_rr"), 1.0, 0.1, 10),
+                slippage_pct=_num(g("scalp_slippage_pct"), 0.0002, 0.0, 0.01),
+                require_reliable_regime=g("scalp_require_regime", False) is True,
+                require_htf_confirmation=g("scalp_require_htf", False) is True,
+            ),
+            htf_seconds=int(_num(g("scalp_htf_seconds"), 300, 60, 3600)),
         )

@@ -233,7 +233,10 @@ async def test_engine_takes_an_orb_scalp_to_its_target_on_paper(monkeypatch):
     config = SimpleNamespace(
         trading_mode="paper", scalp_symbols="TCS", scalp_strategies="orb",
         scalp_flatten_at="09:45", scalp_entry_start="09:30", scalp_entry_end="09:44",
-        scalp_rest_poll_seconds=1, max_sector_concentration_pct=1.0)
+        scalp_rest_poll_seconds=1, max_sector_concentration_pct=1.0,
+        # Fill mechanics under test: this ORB setup nets 0.92 R after charges and
+        # slippage, which qualification refuses (tests/unit/strategy/test_signal.py)
+        scalp_qualification_enabled=False)
     paper = PaperEngine(initial_capital=1_000_000)
     router = OrderRouter(config, paper)
     executor = Executor(router, SafetyChecker(rules=RULES))
@@ -276,8 +279,8 @@ async def test_a_refused_unconfirmed_buy_blocks_the_symbol(monkeypatch):
         success=False, mode="live", remaining_open=True, rejection_reason="may be working"))
     router = SimpleNamespace(mode="live", get_funds=AsyncMock(return_value=SimpleNamespace(
         total_collateral=1_000_000, available_cash=1_000_000)))
-    engine = ScalpEngine(SimpleNamespace(), executor, AsyncMock(), router,
-                         halted=lambda: False)
+    engine = ScalpEngine(SimpleNamespace(scalp_qualification_enabled=False), executor,
+                         AsyncMock(), router, halted=lambda: False)
     engine.codes["TCS"] = "NSE_11536"
     from skopaq.market.candles import LiveSeries
     engine.series["TCS"] = LiveSeries()
@@ -311,3 +314,63 @@ async def test_dashboard_scalp_closes_and_status(tmp_path):
     signal = executor.execute_signal.await_args.args[0]
     assert signal.action == "SELL" and "MANUAL CLOSE ALL" in signal.reasoning
     assert engine.report.trades[0].pnl < 10.0                              # after charges
+
+
+# ── Qualification and charges (skopaq/strategy/signal.py) ────────────────────
+
+
+async def test_qualification_journals_the_refused_setup_with_its_reasons(monkeypatch,
+                                                                         tmp_path):
+    """The same ORB setup as above nets < 1 R after charges and slippage: with
+    qualification on (the default) it is not traded, and the journal says why."""
+    async def scrip(client, symbol, exchange="NSE"):
+        return "NSE_11536"
+
+    monkeypatch.setattr("skopaq.broker.scrip_resolver.resolve_scrip_code", scrip)
+    monkeypatch.setattr("skopaq.notifications.notify", AsyncMock())
+    history = mk(ORB_FIRST + [100.5, 100.6, 100.7], spread=0.2)
+    wall = Wall(T0 + timedelta(minutes=18, seconds=5))
+    config = SimpleNamespace(
+        trading_mode="paper", scalp_symbols="TCS", scalp_strategies="orb",
+        scalp_flatten_at="09:45", scalp_entry_start="09:30", scalp_entry_end="09:44",
+        scalp_rest_poll_seconds=1, max_sector_concentration_pct=1.0,
+        signal_journal_dir=str(tmp_path))
+    paper = PaperEngine(initial_capital=1_000_000)
+    router = OrderRouter(config, paper)
+    engine = ScalpEngine(config, Executor(router, SafetyChecker(rules=RULES)),
+                         Client(wall, history, lambda now: 101.5), router, wall=wall,
+                         sleep=wall.sleep, halted=lambda: False)
+    report = await asyncio.wait_for(engine.run(asyncio.Event()), 10)
+    assert report.trades == [] and report.skipped_quality >= 1
+    from skopaq.strategy.journal import SignalJournal
+
+    [row, *_] = SignalJournal(tmp_path).signals()
+    assert row["status"] == "REJECTED" and row["strategy_id"] == "scalp.orb"
+    assert any("net reward/risk" in r for r in row["reasons"])
+    assert row["evidence"]["data_quality"]["ok"] and row["evidence"]["indicators"]
+
+
+async def test_partial_exits_charge_the_entry_brokerage_once():
+    from skopaq.finance.charges import EQUITY_INTRADAY, leg_charges
+
+    sells = iter([(4, 101.0), (6, 102.0)])
+
+    async def execute(signal):
+        qty, price = next(sells)
+        return ExecutionResult(success=True, mode="paper", fill_price=price,
+                               filled_quantity=Decimal(qty))
+
+    executor = SimpleNamespace(execute_signal=execute)
+    engine = ScalpEngine(SimpleNamespace(), executor, AsyncMock(),
+                         SimpleNamespace(mode="paper"), halted=lambda: False)
+    pos = ScalpPosition(symbol="TCS", strategy="orb", qty=10, entry=100.0, stop=99.0,
+                        target=103.0, opened_at=T0)
+    engine.positions["TCS"] = pos
+    await engine._exit(pos, 101.0, "SCALP TARGET")
+    await engine._exit(pos, 102.0, "SCALP TARGET")
+    total = sum(t.pnl for t in engine.report.trades)
+    expected_cost = (leg_charges(EQUITY_INTRADAY, "BUY", 1000.0).total
+                     + leg_charges(EQUITY_INTRADAY, "SELL", 404.0).total
+                     + leg_charges(EQUITY_INTRADAY, "SELL", 612.0).total)
+    assert total == pytest.approx(4 * 1 + 6 * 2 - expected_cost, abs=0.02)
+    assert "TCS" not in engine.positions

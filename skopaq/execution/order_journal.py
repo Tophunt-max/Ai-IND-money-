@@ -315,6 +315,47 @@ class OrderJournal:
         return [e for e in entries if e.get("event") == "uncertain"
                 and e.get("internal_id") and e.get("internal_id") not in found]
 
+    def entry_blockers(self, *, own_pid: Optional[int] = None) -> list[dict]:
+        """Today's placements whose outcome nobody established, which must stop new
+        entries until reconciled (``skopaq.execution.entry_gate``):
+
+        * an ``uncertain`` BUY no later line names an order for;
+        * a ``submitting`` line (written before the order was sent) with no later line
+          for its ``internal_id`` at all: the process died between sending the order and
+          learning the answer, so the order may exist. ``own_pid``'s lines are skipped
+          (that process knows its in-flight orders itself).
+
+        An ``operator_resolved`` line (``resolve``) clears one after a person checked the
+        broker's order book."""
+        entries = self.entries()
+        resolved: set[str] = set()
+        answered: set[str] = set()
+        for e in entries:
+            iid = e.get("internal_id")
+            if not iid:
+                continue
+            if e.get("event") != "submitting":
+                answered.add(iid)
+            if e.get("event") in ("operator_resolved", "not_placed") or (
+                    e.get("order_id") and not e.get("guessed")):
+                resolved.add(iid)
+        found: dict[str, dict] = {}
+        for e in entries:
+            iid = e.get("internal_id")
+            if not iid or iid in resolved or iid in found:
+                continue
+            if e.get("event") == "uncertain" and e.get("side") == "BUY":
+                found[iid] = {**e, "blocker": "uncertain BUY placement"}
+            elif (e.get("event") == "submitting" and iid not in answered
+                  and (own_pid is None or e.get("pid") != own_pid)):
+                found[iid] = {**e, "blocker": "sent without a recorded answer"}
+        return list(found.values())
+
+    def resolve(self, internal_id: str, *, by: str, note: str = "") -> bool:
+        """An operator checked the broker for ``internal_id`` and resolved it."""
+        return self.record("operator_resolved", internal_id=internal_id,
+                           note=f"{by}: {note}".strip(": "))
+
     def claim(self, key: str) -> Optional[bool]:
         """Claim ``key`` for today across the processes sharing the journal (a marker
         file): True if this call claimed it, False if it was claimed already, None when

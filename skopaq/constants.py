@@ -51,6 +51,9 @@ class SafetyRules:
     # Timing
     market_hours_only: bool = True
     cool_down_after_loss_minutes: int = 15
+    # Losing closed trades in a row (today) after which new BUYs stop for the day. The
+    # dashboard setting SKOPAQ_MAX_CONSECUTIVE_LOSSES can only lower it
+    max_consecutive_losses: int = 4
 
     # Infrastructure
     auto_shutdown_on_api_failure_minutes: int = 5

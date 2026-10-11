@@ -10,10 +10,14 @@ from __future__ import annotations
 
 from skopaq.constants import GST_RATE, INDSTOCKS_BROKERAGE_PER_ORDER_INR
 
-STT_INTRADAY_SELL = 0.00025       # 0.025 % on the sell side
-EXCHANGE_TXN = 0.0000297          # NSE transaction charge, each side
-SEBI_FEE = 0.000001               # ₹10 per crore, each side
-STAMP_DUTY_BUY = 0.00003          # 0.003 % on the buy side
+from skopaq.finance.charges import CURRENT, EQUITY_INTRADAY
+
+# Rates from the versioned schedule (skopaq/finance/charges.py)
+_R = CURRENT.rates(EQUITY_INTRADAY)
+STT_INTRADAY_SELL = _R.stt_sell   # 0.025 % on the sell side
+EXCHANGE_TXN = _R.exchange_txn    # NSE transaction charge, each side
+SEBI_FEE = _R.sebi                # ₹10 per crore, each side
+STAMP_DUTY_BUY = _R.stamp_buy     # 0.003 % on the buy side
 
 
 def round_trip_cost(entry: float, exit_price: float, qty: int) -> float:

@@ -6,6 +6,45 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- `/api/chat/*` is disabled (503) without `SKOPAQ_API_TOKEN` (it was open), and never
+  auto-approves `trade_stock` in live mode; error responses no longer echo exceptions.
+- `/api/status`, `/api/portfolio`, `/api/scanner/*` need a dashboard login (the scanner's
+  queue-draining route an admin). Live mode: `/docs` off by default, and the API refuses to
+  start without dashboard auth or with `SKOPAQ_CORS_ORIGINS=*`.
+- The failed-login lockout trusts only `SKOPAQ_TRUSTED_PROXY_HOPS` entries of
+  `X-Forwarded-For` (the left-most entry was client-controlled).
+- Manual orders and closes take an `Idempotency-Key`; a duplicate body within 5 s is refused.
+
+### Changed
+
+- **Live mode never fills on paper:** an order without a live broker client is refused
+  (the MCP server's `place_order` used to report a paper fill in live mode).
+- **One entry at a time** (`skopaq/execution/entry_gate.py`) across engines and processes on
+  the host; BUYs wait for unreconciled placements. A write-ahead `submitting` journal line
+  precedes every placement. Exits are unaffected.
+- Loss limits record P&L **net** of estimated charges; a losing streak
+  (`SKOPAQ_MAX_CONSECUTIVE_LOSSES`, ceiling 4) stops BUYs; the streak and cool-down survive
+  restarts; live mode fails closed when stored P&L cannot be read.
+- The scalper qualifies each setup (data quality, net reward/risk after charges and
+  slippage) and journals every candidate with its evidence and reasons; the partial-exit
+  charge double-count is fixed. Setups whose net R:R is below 1.0 are no longer traded.
+
+### Added
+
+- `skopaq/market/`: indicators, candlestick patterns, data quality, multi-timeframe
+  resampling without look-ahead, candle regime. `skopaq/finance/`: versioned charge
+  schedule (intraday, delivery, options, futures) and an execution ledger.
+- `skopaq/strategy/`: signal contract, qualification, evidence, signal journal.
+- Learning lifecycle: point-in-time dataset, NumPy logistic baseline, out-of-sample gates,
+  champion/challenger registry with shadow period, human approval and rollback;
+  `skopaq learn-train`.
+- Dashboard: **Signals & risk** page (signal log, reconciliation, risk limits), technical
+  analysis panel on **Market**, model registry on **AI learning**.
+- `scripts/paper_session_sim.py`: simulated paper sessions through the real pipeline.
+- Docs: `docs/architecture/execution-safety.md`.
+
 ### Removed
 
 - **Kite Connect (Zerodha).** INDstocks is now the only broker. Gone:

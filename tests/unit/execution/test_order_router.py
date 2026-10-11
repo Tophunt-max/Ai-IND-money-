@@ -69,19 +69,20 @@ class TestLiveRouting:
     """Live mode routes to INDstocks client."""
 
     @pytest.mark.asyncio
-    async def test_live_fallback_when_no_client(self):
-        """If live_client is None, falls back to paper."""
+    async def test_live_without_a_client_fails_closed(self):
+        """Live mode without a live client: refused, never filled on paper and reported
+        as traded (it used to fall back to paper)."""
         config = _make_config("live")
         paper = PaperEngine(initial_capital=1_000_000)
-        # Inject a quote so paper fill works
         from skopaq.broker.models import Quote
         paper.update_quote(Quote(symbol="RELIANCE", ltp=1800.0))
 
         router = OrderRouter(config, paper, live_client=None)
         result = await router.execute(_buy_order(), _signal())
-        # Should succeed via paper fallback
-        assert result.success
-        assert result.mode == "paper"
+        assert not result.success
+        assert result.mode == "live"
+        assert "not placed" in result.rejection_reason
+        assert paper.get_positions() == []
 
     @pytest.mark.asyncio
     async def test_live_resolves_security_id(self):

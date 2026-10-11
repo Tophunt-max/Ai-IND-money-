@@ -156,7 +156,7 @@ async def test_stop_loss_below_entry_fills_and_records_the_loss():
     assert sold.success, sold.rejection_reason
     assert sold.fill_price < 95
     assert paper.get_positions() == []
-    assert safety._day_pnl == pytest.approx((sold.fill_price - bought.fill_price) * 5)
+    assert safety._day_pnl == pytest.approx(_net(bought.fill_price, sold.fill_price, 5))
     assert safety._last_loss_time is not None  # the cool-down now blocks BUYs
 
 
@@ -232,7 +232,7 @@ async def test_exit_pnl_uses_the_holding_cost_when_there_is_no_position():
     result = await Executor(router, safety).execute_signal(_exit("TCS", 94, 5))
 
     assert result.success
-    assert safety._day_pnl == pytest.approx(-30.0)
+    assert safety._day_pnl == pytest.approx(_net(100, 94, 5))
 
 
 @pytest.mark.parametrize("today", [Decimal(-5), Decimal(0)])
@@ -251,7 +251,7 @@ async def test_exit_pnl_skips_a_position_row_with_no_long_quantity(today):
     result = await Executor(router, safety).execute_signal(_exit("TCS", 94, held_after_today))
 
     assert result.success, result.rejection_reason
-    assert safety._day_pnl == pytest.approx((94 - 100) * held_after_today)
+    assert safety._day_pnl == pytest.approx(_net(100, 94, held_after_today))
 
 
 # ── Live router: the fill price of a MARKET order ────────────────────────────
@@ -372,4 +372,11 @@ async def test_live_close_records_the_loss_at_the_broker_fill():
     signal, execution = record.await_args.args
     assert live.place_order.await_args.args[0].order_type == OrderType.MARKET
     assert execution.fill_price == 3790.0      # the broker's fill, not the LTP
-    assert safety._day_pnl == pytest.approx(-630.0)
+    assert safety._day_pnl == pytest.approx(_net(4000, 3790, 3))
+
+
+def _net(entry: float, exit_price: float, qty: float, product: str = "equity_delivery") -> float:
+    """The P&L the loss limits record: gross minus the round trip's estimated charges."""
+    from skopaq.finance.charges import round_trip
+
+    return (exit_price - entry) * qty - round_trip(product, entry, exit_price, qty).total

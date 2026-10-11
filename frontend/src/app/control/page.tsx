@@ -147,6 +147,11 @@ const FNO_KEYS = [
 
 const n2 = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
 
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function confirmLive(what: string): boolean {
   const typed = prompt(`⚠️ REAL MONEY\n\n${what}\n\nType LIVE to confirm:`);
   return (typed || "").trim() === "LIVE";
@@ -165,7 +170,11 @@ export default function ControlPage() {
     setBusy(key);
     setMsg(null);
     try {
-      const res: any = await api(path, { method: "POST", json: body });
+      // Orders and closes carry a fresh Idempotency-Key: a retried or doubled request
+      // is answered once by the backend, never placed twice
+      const headers = /\/control\/(orders|close)$/.test(path)
+        ? { "Idempotency-Key": newIdempotencyKey() } : undefined;
+      const res: any = await api(path, { method: "POST", json: body, headers });
       const text = res?.message ?? done ?? "Done";
       const tone = res?.ok === false ? "error" : res?.warning ? "warning" : "ok";
       setMsg({ tone, text: res?.warning ? `${text} — ${res.warning}` : text });

@@ -36,11 +36,12 @@ import re
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from skopaq.api.dashboard_auth import DashboardUser, current_user, require_admin
+from skopaq.api.idempotency import STORE as _IDEMPOTENCY
 from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
@@ -302,7 +303,17 @@ class CloseBody(BaseModel):
 
 
 @router.post("/control/close")
-async def close(body: CloseBody, user: DashboardUser = Depends(require_admin)) -> dict:
+async def close(body: CloseBody, user: DashboardUser = Depends(require_admin),
+                idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")) -> dict:
+    async with _IDEMPOTENCY.guard(user.email, "close", body.model_dump(),
+                                  idempotency_key) as slot:
+        if slot.replay is not None:
+            return slot.replay
+        slot.result = await _close(body, user)
+        return slot.result
+
+
+async def _close(body: CloseBody, user: DashboardUser) -> dict:
     symbol = _symbol(body.symbol) if body.symbol else None
     scope = body.scope
     label = {"scalp": " (scalps)", "fno": " (F&O)"}.get(scope, "")
@@ -371,8 +382,21 @@ class OrderBody(BaseModel):
 
 
 @router.post("/control/orders")
-async def place_order(body: OrderBody, user: DashboardUser = Depends(require_admin)) -> dict:
-    """A manual order through the safety checks (live: real money, ``confirm_live``)."""
+async def place_order(body: OrderBody, user: DashboardUser = Depends(require_admin),
+                      idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+                      ) -> dict:
+    """A manual order through the safety checks (live: real money, ``confirm_live``).
+    A repeated ``Idempotency-Key`` (or the same body within seconds) never places a
+    second order (``skopaq/api/idempotency.py``)."""
+    async with _IDEMPOTENCY.guard(user.email, "order", body.model_dump(),
+                                  idempotency_key) as slot:
+        if slot.replay is not None:
+            return slot.replay
+        slot.result = await _place_order(body, user)
+        return slot.result
+
+
+async def _place_order(body: OrderBody, user: DashboardUser) -> dict:
     symbol = _symbol(body.symbol)
     if body.order_type == "LIMIT" and body.price is None:
         raise HTTPException(422, "A LIMIT order needs a price")

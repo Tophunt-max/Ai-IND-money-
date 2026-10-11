@@ -206,8 +206,9 @@ def test_record_login_writes_one_row_per_session(monkeypatch):
                           client=None)
     user = DashboardUser(email="boss@example.com", role="admin", via="supabase", user_id="u",
                          provider="google", session_id="s-9")
-    _record_login(_config(), user, "ok", req)
-    _record_login(_config(), user, "ok", req)          # same session: not written again
+    # Two proxies in front: the client's address is the second entry from the right
+    _record_login(_config(trusted_proxy_hops=2), user, "ok", req)
+    _record_login(_config(trusted_proxy_hops=2), user, "ok", req)   # same session: once
     assert done.wait(5)
     assert len(rows) == 1
     row, kw = rows[0]

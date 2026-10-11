@@ -47,6 +47,10 @@ from skopaq.scalping.costs import round_trip_cost
 from skopaq.scalping.rules import ScalpPosition, exit_reason, update_trail
 from skopaq.scalping.settings import ScalpSettings
 from skopaq.scalping.strategies import Setup, atr_last, evaluate
+from skopaq.finance.charges import EQUITY_INTRADAY, leg_charges
+from skopaq.strategy.evidence import build_evidence
+from skopaq.strategy.journal import SignalJournal
+from skopaq.strategy.signal import SignalCandidate, default_expiry, qualify
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,18 @@ OnTrade = Callable[[TradingSignal, Any], Awaitable[Any]]
 
 def _now_ist() -> datetime:
     return datetime.now(_IST)
+
+
+def _journal_or_none(config: Any) -> Optional[SignalJournal]:
+    """The signal journal from config; None for a config without a directory string
+    (test doubles), so nothing is written to a developer's home by accident."""
+    if not isinstance(getattr(config, "signal_journal_dir", None), str):
+        return None
+    try:
+        return SignalJournal.from_config(config)
+    except Exception:
+        logger.warning("Signal journal unavailable", exc_info=True)
+        return None
 
 
 @dataclass
@@ -78,6 +94,7 @@ class ScalpReport:
     entries: int = 0
     rejected: int = 0
     skipped_cost: int = 0
+    skipped_quality: int = 0     # setups refused by qualification (signal journal: why)
     left_open: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -122,9 +139,12 @@ class ScalpEngine:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         halted: Optional[Callable[[], bool]] = None,
         max_qty: Optional[int] = None,
+        signals: Optional[SignalJournal] = None,
     ) -> None:
         """``max_qty``: the safety checker's share limit (``max_shares``) — a bigger
-        order would only be refused, so scalps are sized within it."""
+        order would only be refused, so scalps are sized within it. ``signals``: the
+        signal journal every candidate and decision is written to (default: from
+        config)."""
         self.config = config
         self.settings = settings or ScalpSettings.from_config(config)
         self._executor = executor
@@ -148,6 +168,7 @@ class ScalpEngine:
         self._last_loss_at: Optional[datetime] = None
         self._rest_at = -math.inf
         self._max_qty = max_qty if isinstance(max_qty, int) and max_qty > 0 else None
+        self._signals = signals if signals is not None else _journal_or_none(config)
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -320,8 +341,17 @@ class ScalpEngine:
             return
         sold = int(filled_quantity_of(result, pos.qty))
         fill = float(result.fill_price or price)
-        cost = round_trip_cost(pos.entry, fill, sold)
-        pnl = round((fill - pos.entry) * sold - cost, 2)
+        # Charges per order: this exit order's, and the entry's share of what was sold
+        # (its brokerage only once: a partial exit's later part does not pay it again)
+        cost = round(
+            leg_charges(EQUITY_INTRADAY, "SELL", fill * sold).total
+            + leg_charges(EQUITY_INTRADAY, "BUY", pos.entry * sold,
+                          orders=0 if pos.entry_charged else 1).total, 2)
+        pos.entry_charged = True
+        gross = (fill - pos.entry) * sold
+        pnl = round(gross - cost, 2)
+        pos.gross_booked += gross
+        pos.charges_booked += cost
         now = self._wall().astimezone(_IST)
         self.report.trades.append(ScalpTrade(
             pos.symbol, pos.strategy, sold, pos.entry, fill, pnl, reason,
@@ -331,6 +361,12 @@ class ScalpEngine:
         pos.qty -= sold
         if pos.qty <= 0:
             self.positions.pop(pos.symbol, None)
+            if self._signals is not None and pos.signal_id:
+                self._signals.record_outcome(
+                    pos.signal_id, exit_price=fill,
+                    net_pnl=round(pos.gross_booked - pos.charges_booked, 2),
+                    gross_pnl=round(pos.gross_booked, 2), charges=round(pos.charges_booked, 2),
+                    exit_reason=reason, closed_at=now)
         logger.info("Scalper: SOLD %d %s @ %.2f — %s (net ₹%.2f)", sold, pos.symbol, fill,
                     reason, pnl)
 
@@ -406,12 +442,17 @@ class ScalpEngine:
                         setup.strategy, symbol, reward, self.settings.min_reward_to_cost,
                         cost)
             return
+        candidate = self._qualify(symbol, setup, qty, now)
+        if candidate is False:
+            return
         price = self.prices.get(symbol) or setup.entry
         signal = self._signal(symbol, "BUY", price, qty,
                               f"SCALP {setup.strategy}: {setup.reason}", stop=setup.stop)
         result = await self._execute(signal, price)
         if setup.strategy == "orb":
             self._orb_done.add(symbol)
+        signal_id = candidate.signal_id if candidate else ""
+        self._journal_execution(signal_id, result, qty)
         if not result.success:
             self.report.rejected += 1
             if is_unconfirmed(result):
@@ -431,10 +472,58 @@ class ScalpEngine:
             symbol=symbol, strategy=setup.strategy, qty=filled, entry=fill,
             stop=round(setup.stop + shift, 2), target=round(setup.target + shift, 2),
             opened_at=now, atr=atr, scrip_code=self.codes[symbol],
-            cost_per_share=round(round_trip_cost(fill, setup.target, filled) / filled, 2))
+            cost_per_share=round(round_trip_cost(fill, setup.target, filled) / filled, 2),
+            signal_id=signal_id)
         self.report.entries += 1
         logger.info("Scalper: BOUGHT %d %s @ %.2f (%s) stop %.2f target %.2f", filled, symbol,
                     fill, setup.strategy, setup.stop + shift, setup.target + shift)
+
+    # ── Qualification (skopaq/strategy/signal.py) ────────────────────────
+
+    def _qualify(self, symbol: str, setup: Setup, qty: int, now: datetime):
+        """The setup as a journalled SignalCandidate: False when qualification refused
+        it, the candidate when it qualified, None when qualification is off."""
+        s = self.settings
+        if not s.qualify:
+            return None
+        candles = list(self.series[symbol].candles)
+        decided = now.astimezone(_IST)
+        try:
+            evidence = build_evidence(
+                candles, s.candle_seconds, decided, direction=1,
+                htf_s=s.htf_seconds, source="simulated" if self._paper else "live")
+        except Exception as exc:                 # evidence must never crash the loop
+            logger.warning("Scalper: evidence of %s failed: %s", symbol, exc)
+            evidence = {"error": str(exc), "data_quality": {"ok": False,
+                                                            "blocking": ["evidence failed"]}}
+        candidate = SignalCandidate(
+            strategy_id=f"scalp.{setup.strategy}", strategy_version="1",
+            symbol=symbol, product=EQUITY_INTRADAY, direction=1, decided_at=decided,
+            timeframe_s=s.candle_seconds, entry=setup.entry, stop=setup.stop,
+            target=setup.target, qty=qty, reason=setup.reason,
+            invalidation=f"close below {setup.stop:.2f}",
+            holding_minutes=s.max_hold.total_seconds() / 60,
+            expires_at=default_expiry(decided, s.candle_seconds), evidence=evidence)
+        decision = qualify(candidate, s.qualify_rules, now=decided)
+        if self._signals is not None:
+            self._signals.record_decision(candidate, decision)
+        if not decision.qualified:
+            self.report.skipped_quality += 1
+            logger.info("Scalper: %s %s %s — %s", setup.strategy, symbol, decision.status,
+                        "; ".join(decision.reasons))
+            return False
+        return candidate
+
+    def _journal_execution(self, signal_id: str, result: Any, qty: int) -> None:
+        if self._signals is None or not signal_id:
+            return
+        status = ("FILLED" if result.success else
+                  "UNCONFIRMED" if is_unconfirmed(result) else "REFUSED")
+        self._signals.record_execution(
+            signal_id, status=status,
+            filled=float(filled_quantity_of(result, qty)) if result.success else 0,
+            fill_price=float(result.fill_price) if result.fill_price else None,
+            reason=result.rejection_reason or "")
 
     # ── Orders ───────────────────────────────────────────────────────────
 

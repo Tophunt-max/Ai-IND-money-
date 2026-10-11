@@ -25,6 +25,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("SKOPAQ_SCHEDULER_ENABLED", "true")
     monkeypatch.delenv("SKOPAQ_TRADING_HALTED", raising=False)
     monkeypatch.setattr("skopaq.notifications.notify", _no_notify)
+    from skopaq.api.idempotency import STORE
+
+    STORE.reset()                 # duplicate-submission marks of earlier tests
     from skopaq.api import dashboard_auth
     from skopaq.execution import kill_switch
 

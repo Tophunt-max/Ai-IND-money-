@@ -51,6 +51,7 @@ from skopaq.execution.live_orders import (
     recent_exit_qty,
     uncertain_sells,
 )
+from skopaq.execution.entry_gate import EntryGate, entry_blockers
 from skopaq.execution.order_alerts import get_alerter
 from skopaq.execution.order_journal import OrderJournal
 from skopaq.execution.sell_lock import OrderLock, SellLock, lock_dir_or_none
@@ -103,6 +104,9 @@ class OrderRouter:
         wall: Callable[[], datetime] = now_ist,
     ) -> None:
         self._mode = config.trading_mode
+        wait = getattr(config, "entry_lock_wait_seconds", 20.0)
+        self._entry_wait_s = (float(wait) if isinstance(wait, (int, float))
+                              and not isinstance(wait, bool) and 0 <= wait <= 600 else 20.0)
         self._paper = paper_engine
         self._live = live_client
         self._sleep = sleep
@@ -213,8 +217,14 @@ class OrderRouter:
         price, order ids) and never raises.
         """
         if self._live is None or self._worker is None:
-            logger.error("Live client not configured — falling back to paper")
-            return self._execute_paper(order, signal)
+            # Fail closed: a live-mode order is never filled on paper and reported as if
+            # it had traded (the MCP server and any caller without a broker client)
+            logger.error("Live mode without a live broker client: %s %s %s NOT placed",
+                         order.side.value, order.quantity, order.symbol)
+            return ExecutionResult(
+                success=False, signal=signal, mode="live", safety_passed=True,
+                rejection_reason="Live mode, but this process has no live broker client: "
+                                 "not placed (and not filled on paper)")
 
         try:
             await self._ensure_security_id(order)
@@ -303,6 +313,23 @@ class OrderRouter:
         )
         return SellInputs(positions=list(snap.positions), holdings=list(snap.holdings),
                           context=context)
+
+    def entry_gate(self) -> EntryGate:
+        """The account's entry gate (``skopaq.execution.entry_gate``): in-process always,
+        plus the cross-process flock when this router places live orders."""
+        live = self._worker is not None
+        lock_dir = self._lock_dir if live and self._locks_usable() else None
+        wait = self._entry_wait_s
+        if live:
+            wait = min(wait, max(0.0, self._deadlines.settle_by() - self._clock()))
+        return EntryGate(wait_s=wait, lock_dir=lock_dir, live=live, sleep=self._sleep,
+                         clock=self._clock)
+
+    def entry_blockers(self) -> list[str]:
+        """Why a new BUY must wait for reconciliation (paper: never)."""
+        if self._worker is None:
+            return []
+        return entry_blockers(self._registry, self._journal)
 
     def sell_lock(self, order: OrderRequest) -> Optional[SellLock]:
         """The symbol's SELL lock, to hold from ``sell_inputs`` until ``execute`` returns.

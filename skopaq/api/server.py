@@ -9,11 +9,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from skopaq import __version__
-from skopaq.api.auth import cors_origins
+from skopaq.api.auth import cors_origins, docs_enabled, startup_problems
+from skopaq.api.dashboard_auth import current_user, require_admin
 from skopaq.broker.token_manager import TokenManager
 from skopaq.config import SkopaqConfig
 
@@ -24,11 +25,25 @@ from skopaq import env_overrides  # noqa: E402
 
 env_overrides.apply()
 
+_docs = docs_enabled(SkopaqConfig())
 app = FastAPI(
     title="SkopaqTrader API",
     version=__version__,
-    docs_url="/docs",
+    # Off in live mode unless SKOPAQ_API_DOCS_ENABLED=true: the schema maps every route
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
 )
+
+
+@app.on_event("startup")
+async def _validate_startup() -> None:
+    """Fail closed: refuse to serve a live configuration without auth or with "*" CORS."""
+    problems = startup_problems(SkopaqConfig())
+    if problems:
+        for problem in problems:
+            logger.critical("API not started: %s", problem)
+        raise RuntimeError("Unsafe live API configuration: " + "; ".join(problems))
 
 # CORS — browser origins allowed to call the API (SKOPAQ_CORS_ORIGINS; default "*"
 # keeps the Vercel frontend working). The API uses no cookies, so credentials are
@@ -60,10 +75,14 @@ from skopaq.api.dashboard_control import router as dashboard_control_router  # n
 
 app.include_router(dashboard_control_router)
 
+from skopaq.api.dashboard_trading import router as dashboard_trading_router  # noqa: E402
+
+app.include_router(dashboard_trading_router)
+
 
 @app.get("/health")
 async def health() -> dict:
-    """Health check endpoint (used by Railway)."""
+    """Health check endpoint (used by Railway). Unauthenticated: no account data."""
     config = SkopaqConfig()
     # notify=False: the compose health check polls this every 30 s; a probe sends no Telegram.
     health = TokenManager().get_health(notify=False)
@@ -77,7 +96,7 @@ async def health() -> dict:
     }
 
 
-@app.get("/api/status")
+@app.get("/api/status", dependencies=[Depends(current_user)])
 async def system_status() -> dict:
     """Detailed system status for the dashboard."""
     config = SkopaqConfig()
@@ -146,14 +165,15 @@ async def _stop_scanner():
         await _scanner_engine.stop()
 
 
-@app.get("/api/scanner/status")
+@app.get("/api/scanner/status", dependencies=[Depends(current_user)])
 async def scanner_status() -> dict:
     """Scanner engine status."""
     scanner = _get_scanner()
     return scanner.status
 
 
-@app.get("/api/scanner/candidates")
+# Admin: reading drains the candidate queue other consumers wait on
+@app.get("/api/scanner/candidates", dependencies=[Depends(require_admin)])
 async def scanner_candidates() -> dict:
     """Recent scanner candidates."""
     scanner = _get_scanner()
@@ -171,7 +191,7 @@ async def scanner_candidates() -> dict:
     }
 
 
-@app.get("/api/portfolio")
+@app.get("/api/portfolio", dependencies=[Depends(current_user)])
 async def portfolio() -> dict:
     """Current portfolio snapshot (paper mode)."""
     from skopaq.broker.paper_engine import PaperEngine

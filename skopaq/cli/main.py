@@ -480,6 +480,75 @@ def scalp_backtest(
                       f"{t.entry:>9.2f} → {t.exit:>9.2f}  ₹{t.pnl:>9.2f}  {t.reason}")
 
 
+@app.command("learn-train")
+def learn_train(
+    symbols: str = typer.Option("", help="Comma-separated NSE symbols to backtest for "
+                                         "training data (INDstocks 1-minute candles)."),
+    days: int = typer.Option(20, help="Trading days of candles per symbol."),
+    journal: bool = typer.Option(False, help="Also use the paper/live signal journal's "
+                                             "outcomes."),
+    slippage_pct: float = typer.Option(0.0002, help="Adverse slippage per side assumed."),
+    min_examples: int = typer.Option(200, help="Refuse to train on fewer labelled rows."),
+) -> None:
+    """Train a candidate model on point-in-time features (no orders).
+
+    Chronological train/validation/test split, the threshold chosen on validation, the
+    report on the unseen test period; the candidate is registered and gated. Passing the
+    gates only makes it a *shadow* model: promotion needs the shadow period and an admin
+    (dashboard → Learning)."""
+    from skopaq.config import SkopaqConfig
+    from skopaq.learning.dataset import from_backtest, from_journal
+    from skopaq.learning.pipeline import InsufficientData, train_candidate
+    from skopaq.learning.registry import ModelRegistry, model_dir
+    from skopaq.scalping.settings import ScalpSettings
+    from skopaq.strategy.journal import SignalJournal
+
+    _setup_logging("WARNING")
+    config = SkopaqConfig()
+    settings = ScalpSettings.from_config(config)
+    examples, leakage = [], []
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if names:
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.token_manager import TokenManager
+        from skopaq.scalping.backtest import fetch_days
+
+        async def load(sym):
+            async with INDstocksClient(config, TokenManager()) as client:
+                return await fetch_days(client, sym, days)
+
+        for sym in names:
+            candles = asyncio.run(load(sym))
+            rep = from_backtest(sym, candles, settings, slippage_pct=slippage_pct)
+            examples += rep.examples
+            leakage += rep.leakage
+            console.print(f"  {sym}: {len(candles)} day(s), {len(rep.examples)} trade rows")
+    if journal:
+        rep = from_journal(SignalJournal.from_config(config).signals())
+        examples += rep.examples
+        leakage += rep.leakage
+        console.print(f"  journal: {len(rep.labelled)} labelled, {rep.unlabelled} without an "
+                      f"outcome, {rep.rejected_signals} rejected signals")
+    if not examples:
+        console.print("No data: pass --symbols and/or --journal")
+        raise typer.Exit(1)
+    registry = ModelRegistry(model_dir(config))
+    try:
+        entry = train_candidate(examples, strategy_id="scalp.gate", registry=registry,
+                                min_examples=min_examples, leakage=leakage)
+    except InsufficientData as exc:
+        console.print(f"Not trained: {exc}")
+        raise typer.Exit(2)
+    rep = entry["report"]
+    console.print(f"Candidate {entry['version']} — state {entry['state']}")
+    console.print(f"  test samples {rep['samples']}, threshold {rep['threshold']}")
+    console.print(f"  baseline (every setup): {rep['baseline']}")
+    console.print(f"  model gate:             {rep.get('model')}")
+    console.print(f"  Brier {rep.get('brier')} vs base rate {rep.get('brier_base_rate')}")
+    for fail in entry.get("gate_failures") or []:
+        console.print(f"  [yellow]gate:[/yellow] {fail}")
+
+
 @app.command("report")
 def report(
     days: int = typer.Option(90, help="How many days back to include."),

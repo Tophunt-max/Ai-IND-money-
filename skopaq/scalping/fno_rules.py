@@ -35,14 +35,18 @@ from skopaq.scalping.strategies import STRATEGY_NAMES, Setup, StrategyParams
 
 INSTRUMENTS = ("options", "futures")
 
-# NSE F&O charges (statutory rates; the broker's contract note is exact)
-OPT_STT_SELL = 0.001             # 0.1 % of the premium, sell side
-OPT_EXCHANGE_TXN = 0.0003503     # NSE options transaction charge, each side
-FUT_STT_SELL = 0.0002            # 0.02 % of the notional, sell side
-FUT_EXCHANGE_TXN = 0.0000173     # NSE futures transaction charge, each side
-SEBI_FEE = 0.000001              # ₹10 per crore, each side
-OPT_STAMP_BUY = 0.00003          # 0.003 % buy side
-FUT_STAMP_BUY = 0.00002          # 0.002 % buy side
+# NSE F&O charges from the versioned schedule (skopaq/finance/charges.py; the broker's
+# contract note is exact)
+from skopaq.finance.charges import CURRENT as _SCHEDULE  # noqa: E402
+
+_OPT, _FUT = _SCHEDULE.rates("options"), _SCHEDULE.rates("futures")
+OPT_STT_SELL = _OPT.stt_sell             # 0.1 % of the premium, sell side
+OPT_EXCHANGE_TXN = _OPT.exchange_txn     # NSE options transaction charge, each side
+FUT_STT_SELL = _FUT.stt_sell             # 0.02 % of the notional, sell side
+FUT_EXCHANGE_TXN = _FUT.exchange_txn     # NSE futures transaction charge, each side
+SEBI_FEE = _OPT.sebi                     # ₹10 per crore, each side
+OPT_STAMP_BUY = _OPT.stamp_buy           # 0.003 % buy side
+FUT_STAMP_BUY = _FUT.stamp_buy           # 0.002 % buy side
 
 
 def fno_round_trip_cost(entry: float, exit_price: float, qty: int, *,

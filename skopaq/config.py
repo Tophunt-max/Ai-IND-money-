@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import SecretStr, ValidationError, ValidatorFunctionWrapHandler, field_validator
 from pydantic_core.core_schema import ValidationInfo
@@ -51,6 +51,14 @@ _LENIENT_FIELDS = (
     "scalp_rest_poll_seconds",
     "scalp_rr",
     "scalp_orb_minutes",
+    "scalp_min_net_rr",
+    "scalp_slippage_pct",
+    "scalp_htf_seconds",
+    "scalp_require_htf",
+    "scalp_require_regime",
+    "scalp_qualification_enabled",
+    "entry_lock_wait_seconds",
+    "max_consecutive_losses",
     "max_shares_per_order",
     "max_lots_per_order",
     "fno_enabled",
@@ -152,6 +160,13 @@ class SkopaqConfig(BaseSettings):
     indstocks_order_remarks_enabled: bool = False  # tag orders with `remarks` (docs: unreleased)
     order_lock_dir: str = "~/.skopaq/locks"  # per-symbol SELL locks (shared home volume)
     order_journal_dir: str = "~/.skopaq/orders"  # per-day order journal (shared home volume)
+    # Sequential entries: one BUY at a time per account (an flock in order_lock_dir across
+    # processes on this host, and a lock inside each process), held from the safety check
+    # until the broker's answer is final. A second entry waits this long, then is refused
+    entry_lock_wait_seconds: float = 20.0
+    # Consecutive losing closed trades after which new BUYs stop for the day; it can
+    # only lower the immutable ceiling SafetyRules.max_consecutive_losses (4)
+    max_consecutive_losses: int = 4
 
     # ── LLM API Keys ───────────────────────────────────────────────────
     google_api_key: SecretStr = SecretStr("")  # Gemini Flash (scanner)
@@ -196,7 +211,11 @@ class SkopaqConfig(BaseSettings):
     # ── API access ───────────────────────────────────────────────────────
     # When set, /api/chat/* require Bearer auth (and it works as an admin dashboard login)
     api_token: SecretStr = SecretStr("")
-    cors_origins: str = "*"  # comma-separated browser origins; "" = none
+    cors_origins: str = "*"  # comma-separated browser origins; "" = none (live: no "*")
+    # Proxies in front of the API whose X-Forwarded-For entry is trusted (0 = none)
+    trusted_proxy_hops: int = 1
+    # /docs, /redoc, /openapi.json: unset = on in paper mode, off in live
+    api_docs_enabled: Optional[bool] = None
     # Web dashboard logins (Supabase Auth): "me@x.com:admin,friend@y.com:viewer"
     dashboard_users: str = ""
 
@@ -268,6 +287,17 @@ class SkopaqConfig(BaseSettings):
     scalp_min_reward_to_cost: float = 2.0      # target profit ≥ this × round-trip charges
     scalp_orb_minutes: int = 15
     scalp_rest_poll_seconds: float = 3.0       # batched REST quotes when the feed is down
+    # Signal qualification (skopaq/strategy/signal.py) before the risk gateway: data
+    # quality always; net reward/risk after charges and assumed slippage; the regime and
+    # higher-timeframe filters are off until a walk-forward backtest supports them
+    scalp_qualification_enabled: bool = True
+    scalp_min_net_rr: float = 1.0              # net reward / net risk, after costs + slippage
+    scalp_slippage_pct: float = 0.0002         # assumed adverse slippage per side (0.02 %)
+    scalp_htf_seconds: int = 300               # higher timeframe recorded as evidence (5 min)
+    scalp_require_htf: bool = False            # require the higher timeframe to agree
+    scalp_require_regime: bool = False         # reject when the candle regime is unreliable
+    signal_journal_dir: str = "~/.skopaq/signals"  # every candidate + decision (learning data)
+    model_dir: str = "~/.skopaq/models"        # candidate / shadow / champion models
 
     # ── Order size limits (dashboard: Control → Exits & risk) ──────────────
     # Per order, every strategy (swing, scalper, F&O engine, manual). Clamped to the
