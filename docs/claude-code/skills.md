@@ -2,16 +2,18 @@
 
 SkopaqTrader ships 6 custom skills for Claude Code, defined in `.claude/skills/`. These are slash commands you type directly in the Claude Code prompt.
 
+The Adaptive AI is the only decision-maker: `/analyze`, `/scan` and `/trade` report its setups and probabilities and never invent a verdict, confidence or price levels.
+
 ## Available Commands
 
 | Command | Description | Skill File |
 |---------|-------------|------------|
 | `/quote SYMBOL` | Real-time stock quote | `.claude/skills/quote/SKILL.md` |
-| `/analyze SYMBOL` | Full 15-agent analysis pipeline | `.claude/skills/analyze/SKILL.md` |
-| `/scan [N]` | Market scan for top candidates | `.claude/skills/scan/SKILL.md` |
+| `/analyze SYMBOL` | The Adaptive AI's swing setup, model probability and indicators | `.claude/skills/analyze/SKILL.md` |
+| `/scan [N]` | Today's swing ideas | `.claude/skills/scan/SKILL.md` |
 | `/portfolio` | Positions, holdings, funds, P&L | `.claude/skills/portfolio/SKILL.md` |
-| `/trade SYMBOL` | Analysis + execution with confirmation | `.claude/skills/trade/SKILL.md` |
-| `/options [SYMBOL] [STRATEGY]` | AI options selling recommendation | `.claude/skills/options/SKILL.md` |
+| `/trade SYMBOL` | Paper-trade the Adaptive AI's setup after confirmation | `.claude/skills/trade/SKILL.md` |
+| `/options [SYMBOL] [STRATEGY]` | Options selling recommendation | `.claude/skills/options/SKILL.md` |
 
 ## /quote SYMBOL
 
@@ -21,7 +23,7 @@ Get a live market quote with LTP, day range, bid/ask, and volume.
 /quote RELIANCE
 ```
 
-Claude fetches the quote via `mcp__skopaq__get_quote` and presents:
+Claude fetches the quote via `get_quote` and presents:
 
 ```
 RELIANCE (NSE)
@@ -34,34 +36,28 @@ RELIANCE (NSE)
 
 ## /analyze SYMBOL
 
-Runs the complete 15-agent analysis using Claude's own reasoning. This is the **Claude-native** pipeline -- Claude plays all 15 roles (4 analysts, bull/bear researchers, research manager, trader, 3 risk debaters, risk manager) using live data from MCP tools.
+Shows what the Adaptive AI sees in a stock. This skill only reports.
 
 ```
 /analyze TCS
 ```
 
-The output includes:
+1. `swing_idea` — the setup (`trend_pullback` / `breakout` / `oversold_bounce`) on the last closed daily bar, its entry, ATR stop and R-multiple target, and the swing model's P(win) against its threshold
+2. `get_quote` — the live price and its distance from the entry
+3. `gather_market_data` — indicators for context (RSI, moving averages, ATR)
 
-1. Four analyst reports (market, social, news, fundamentals)
-2. Bull vs bear investment debate
-3. Research manager verdict
-4. Trader recommendation
-5. Three-way risk debate (aggressive, conservative, neutral)
-6. Final signal with confidence score
-
-!!! note "Duration"
-    Takes 1-3 minutes. Uses `gather_all_analysis_data` for data, then Claude reasons through each phase.
+The report is a table (setup, model and whether it qualifies, entry / stop / target, live price) plus 3–5 factual bullet points. No setup today, or no trained swing model (it suggests `skopaq swing-train`), is said plainly. If you ask whether it is safe to trade, it calls `check_safety` with the setup's levels.
 
 ## /scan
 
-Scan the market for trading opportunities. Claude searches for top movers, fetches live quotes, and ranks them by technical setup.
+Today's swing ideas from `swing_ideas`: daily setups across the configured universe (NIFTY 50 by default) kept when the swing model's probability clears its threshold.
 
 ```
-/scan        # Default: top 5 candidates
-/scan 10     # Top 10 candidates
+/scan        # Default: 10 ideas
+/scan 5      # Top 5
 ```
 
-Output is a ranked table with symbol, LTP, change%, volume, signal, and score (0-100).
+Output is a table of symbol, setup, P(win), entry, stop and target, optionally with live quotes for the top 3. Nothing is bought; an empty list is a valid answer.
 
 ## /portfolio
 
@@ -86,7 +82,7 @@ Positions (2):
 
 ## /trade SYMBOL
 
-End-to-end trade workflow: Claude analyzes the stock, calculates position size, validates safety, and executes after you confirm.
+Paper-trades the Adaptive AI's setup for one stock.
 
 ```
 /trade INFY
@@ -94,20 +90,18 @@ End-to-end trade workflow: Claude analyzes the stock, calculates position size, 
 
 **Workflow:**
 
-1. Fetches live quote + historical data
-2. Runs technical + news analysis
-3. Generates BUY/SELL/HOLD signal
-4. Calculates quantity (1% capital risk per trade)
-5. Calls `check_safety` to validate
-6. Presents the trade plan and asks for confirmation
-7. Executes via `place_order` only after you say yes
+1. `swing_idea` — stops if no setup fired or the model's P(win) is below its threshold; with no trained model it continues only if you explicitly ask for a paper test
+2. `get_funds`, then quantity = floor(1% of capital / (entry − stop)), at least 1
+3. `check_safety` at the setup's entry (BUY); stops if it fails
+4. Presents the trade plan (setup, P(win), entry / stop / target, quantity, risk) and asks for confirmation
+5. Executes via `place_order` only after you say yes
 
-!!! warning "Paper mode is default"
-    All trades execute in paper mode unless you have explicitly configured live trading. Claude will never auto-execute without your confirmation.
+!!! warning "Paper only"
+    The MCP server's orders always go to the paper engine. Claude never executes without your confirmation.
 
 ## /options
 
-AI-powered options selling analysis. Fetches the option chain, selects the optimal OTM strike, and presents a recommendation with full risk metrics.
+Options selling analysis. Fetches the option chain, gets the rule-based strike suggestion (`suggest_option_trade`), and presents it with risk metrics.
 
 ```
 /options                         # Default: NIFTY SHORT_PUT
@@ -123,7 +117,7 @@ AI-powered options selling analysis. Fetches the option chain, selects the optim
 | `SHORT_CALL` | Bearish | Sell OTM call above resistance |
 | `SHORT_STRANGLE` | Neutral | Sell both OTM put + call |
 
-The output includes strike selection, premium, max profit/loss, margin, stop-loss, and win probability estimate.
+The output includes strike selection, premium, max profit/loss, margin, stop-loss, and win probability estimate. It asks for confirmation before any execution.
 
 !!! tip "Requires the INDstocks token"
     Options data comes from the INDstocks option chain API (with IV and Greeks). Check the token with `/token` in Telegram or `skopaq token status`; the account needs F&O activated at INDstocks.
@@ -135,4 +129,4 @@ Each skill is a `SKILL.md` file in `.claude/skills/<name>/`. It contains:
 - **YAML frontmatter**: name, description, allowed MCP tools
 - **Markdown body**: Detailed instructions for Claude on how to execute the skill
 
-Claude Code reads the skill file and follows its instructions, calling the listed MCP tools as needed. See [Adding Skills](../contributing/skills.md) for how to create new ones.
+Claude Code reads the skill file and follows its instructions, calling the listed MCP tools as needed. `/quote` and `/portfolio` call the MCP server's Python functions through Bash instead. See [Adding Skills](../contributing/skills.md) for how to create new ones.

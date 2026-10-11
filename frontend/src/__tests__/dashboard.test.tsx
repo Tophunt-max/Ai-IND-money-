@@ -11,6 +11,7 @@ import OfflineBanner from "@/components/OfflineBanner";
 import RiskCapacity from "@/components/RiskCapacity";
 import RLAgents, { rlTradingMode, type RLStatus } from "@/components/RLAgents";
 import StrategyBuilder, { EMPTY, specProblems } from "@/components/StrategyBuilder";
+import SwingModel, { swingTradingMode, type SwingStatus } from "@/components/SwingModel";
 import { api, ApiError } from "@/lib/api";
 
 class RO { observe() {} disconnect() {} }
@@ -138,6 +139,32 @@ describe("RLAgents", () => {
     await waitFor(() => expect(screen.getAllByText("rl-ppo-1").length).toBeGreaterThan(0));
     expect(screen.getByText("Promote")).toBeTruthy();
     expect(screen.getByText(/target 20, stop 25, agent 7/)).toBeTruthy();
+  });
+});
+
+describe("SwingModel", () => {
+  const base: SwingStatus = {
+    mode: "paper", champion: null, shadow: "swing-lightgbm-1", active: "swing-lightgbm-1", rules_only: false, shadow_days: 7,
+    config: { symbols: "NIFTY 50", model_kind: "lightgbm", target_rr: 2, train_days: 1825, max_trades: 3, min_net_rr: 1 },
+    versions: [{ version: "swing-lightgbm-1", state: "shadow", model_kind: "lightgbm", setups: 900, threshold: 0.55,
+      model: { trades: 60, net: 21500, profit_factor: 1.4, win_rate: 0.52 }, baseline: { trades: 180, net: 4200, profit_factor: 1.05 },
+      by_setup: { breakout: { setups: 80, taken: 30, net_all: 900, net_taken: 9000 } }, gate_failures: [] }],
+  };
+
+  it("trades a shadow on paper only; live needs an approved champion", () => {
+    expect(swingTradingMode(base)).toEqual({ paper: "shadow", live: "off — needs an approved champion" });
+    expect(swingTradingMode({ ...base, champion: "swing-lightgbm-1" })).toEqual({ paper: "champion", live: "champion" });
+    expect(swingTradingMode({ ...base, shadow: null, active: null }).paper).toBe("off — no model");
+    expect(swingTradingMode({ ...base, shadow: null, active: null, rules_only: true }).paper).toBe("rules only (no model)");
+  });
+
+  it("lists the models with their unseen-date results and a promote button for a shadow", async () => {
+    respond({ "/dashboard/swing": base });
+    render(<SwingModel />);
+    await waitFor(() => expect(screen.getAllByText("swing-lightgbm-1").length).toBeGreaterThan(0));
+    expect(screen.getByText("Promote")).toBeTruthy();
+    expect(screen.getByText("Train swing model")).toBeTruthy();
+    expect(screen.getByText(/breakout 30\/80/)).toBeTruthy();
   });
 });
 

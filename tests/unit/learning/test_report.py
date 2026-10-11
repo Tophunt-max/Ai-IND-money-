@@ -1,4 +1,4 @@
-"""Track record (skopaq/learning/report.py) from stored calls and trades."""
+"""Track record (skopaq/learning/report.py) from the signal journal and the trades."""
 
 from __future__ import annotations
 
@@ -7,20 +7,17 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
+import pytest  # noqa: F401
 
 from skopaq.db.models import TradeRecord
 from skopaq.learning import report as report_mod
-from skopaq.learning.report import calibration, parse_tag, summarize_calls, summarize_trades
+from skopaq.learning.report import calibration, summarize_signals, summarize_trades
 
 
-def _settled(date, rating, raw, alpha, ticker="TCS.NS"):
-    tag = f"[{date} | {ticker} | {rating} | {raw} | {alpha} | 5d | resolved:{date}]"
-    return tag + "\n\nDECISION:\nx"
-
-
-def _pending(date, rating, ticker="TCS.NS"):
-    return f"[{date} | {ticker} | {rating} | pending]\n\nDECISION:\nx"
+def _row(sid, status, *, filled=0, net=None, reasons=()):
+    return {"strategy_id": sid, "status": status, "reasons": list(reasons),
+            "execution": {"status": "FILLED", "filled": filled} if filled else None,
+            "outcome": {"net_pnl": net} if net is not None else None}
 
 
 def _trade(pnl, closed, confidence=None, price="100", qty="10"):
@@ -32,30 +29,21 @@ def _trade(pnl, closed, confidence=None, price="100", qty="10"):
     )
 
 
-def test_parse_tag_reads_upstream_entries():
-    assert parse_tag(_settled("2026-09-01", "Buy", "+2.0%", "-0.5%")) == {
-        "date": "2026-09-01", "ticker": "TCS.NS", "rating": "Buy", "pending": False,
-        "raw": pytest.approx(0.02), "alpha": pytest.approx(-0.005)}
-    assert parse_tag(_pending("2026-09-02", "Hold"))["pending"] is True
-    assert parse_tag("no tag here") is None
-
-
-def test_summarize_calls_scores_direction_and_alpha():
-    stats = summarize_calls([
-        _settled("2026-09-01", "Buy", "+3.0%", "+1.0%"),        # hit
-        _settled("2026-09-02", "Overweight", "-1.0%", "-2.0%"),  # miss
-        _settled("2026-09-03", "Sell", "-4.0%", "-3.0%"),        # hit (fell)
-        _settled("2026-09-04", "Hold", "+1.0%", "+0.5%"),        # not directional
-        _pending("2026-09-05", "Buy"),
-        "garbage",
+def test_summarize_signals_by_strategy():
+    stats = summarize_signals([
+        _row("swing.breakout", "QUALIFIED", filled=10, net=500.0),
+        _row("swing.breakout", "QUALIFIED", filled=5, net=-200.0),
+        _row("swing.trend_pullback", "REJECTED", reasons=["net reward/risk 0.8 < 1.0"]),
+        _row("scalp.orb", "REJECTED", reasons=["net reward/risk 0.5 < 1.0", "spread 0.4%"]),
+        _row("scalp.orb", "EXPIRED"),
+        _row("scalp.orb", "QUALIFIED"),                       # not filled
     ])
-
-    assert (stats.total, stats.settled, stats.pending, stats.directional) == (5, 4, 1, 3)
-    assert stats.hit_rate == pytest.approx(2 / 3)
-    assert stats.long_alpha == pytest.approx(-0.005)  # mean of +1% and -2%
-    assert stats.by_rating["Buy"].calls == 2 and stats.by_rating["Buy"].settled == 1
-    assert stats.by_rating["Sell"].avg_return == pytest.approx(-0.04)
-    assert not stats.enough_data  # 3 < 30
+    assert (stats.total, stats.qualified, stats.rejected, stats.expired) == (6, 3, 2, 1)
+    assert (stats.executed, stats.closed, stats.wins, stats.net) == (2, 2, 1, 300.0)
+    assert stats.win_rate == 0.5 and not stats.enough_data
+    b = stats.by_strategy["swing.breakout"]
+    assert (b.decisions, b.qualified, b.executed, b.closed, b.net) == (2, 2, 2, 2, 300.0)
+    assert stats.top_rejections == [("net reward/risk # < #", 2), ("spread #", 1)]
 
 
 def test_summarize_trades():
@@ -89,30 +77,26 @@ def test_calibration_buckets_by_entry_confidence():
     assert by_label["0–50"].win_rate is None
 
 
-def test_build_report_reads_supabase_and_the_local_log(tmp_path):
-    log = tmp_path / "trading_memory.md"
-    log.write_text(_settled("2026-09-10", "Buy", "+1.0%", "+0.2%") + "\n\n<!-- ENTRY_END -->\n\n")
+def test_build_report_reads_the_journal_and_supabase(tmp_path):
     config = MagicMock(supabase_url="https://x", trading_mode="paper")
     config.supabase_service_key.get_secret_value.return_value = "key"
-    memory = MagicMock()
-    memory.get_by_role.return_value = MagicMock(documents=[
-        _settled("2026-09-11", "Sell", "-2.0%", "-1.0%"),
-        _settled("2025-01-01", "Buy", "+9.0%", "+9.0%"),  # outside the window
-    ])
     trades = MagicMock()
     trades.get_closed_since.return_value = [_trade(250, "2026-09-12T10:00:00+00:00", 70)]
+    journal = MagicMock()
+    journal.signals.return_value = [_row("swing.breakout", "QUALIFIED", filled=3, net=250.0)]
 
     with patch("supabase.create_client"), \
-         patch("skopaq.db.repositories.MemoryRepository", return_value=memory), \
-         patch("skopaq.db.repositories.TradeRepository", return_value=trades), \
-         patch.dict("tradingagents.default_config.DEFAULT_CONFIG", {"memory_log_path": str(log)}):
+         patch("skopaq.strategy.journal.SignalJournal.from_config", return_value=journal), \
+         patch("skopaq.db.repositories.TradeRepository", return_value=trades):
         result = report_mod.build_report(
             config, days=30, now=datetime(2026, 9, 24, tzinfo=timezone.utc))
 
-    assert result.calls.total == 2 and result.calls.hit_rate == 1.0
+    assert result.signals.total == 1 and result.signals.net == 250.0
+    days = journal.signals.call_args.args[0]
+    assert len(days) == 31 and days[-1].isoformat() == "2026-09-24"
     assert result.trades.closed == 1 and result.trades.total_pnl == 250.0
     assert trades.get_closed_since.call_args.kwargs == {"is_paper": True}
-    assert result.sources == ["supabase:decision_log", str(log), "supabase:trades"]
+    assert result.sources == ["signal journal", "supabase:trades"]
 
 
 def test_cli_and_mcp_render_the_report(monkeypatch):
@@ -120,10 +104,11 @@ def test_cli_and_mcp_render_the_report(monkeypatch):
 
     from skopaq import mcp_server
     from skopaq.cli.main import app
-    from skopaq.learning.report import CallStats, Report, TradeStats
+    from skopaq.learning.report import Report, SignalStats, TradeStats
 
-    fake = Report(days=90, mode="paper", calls=CallStats(total=3, settled=2, directional=2,
-                                                         hit_rate=0.5),
+    fake = Report(days=90, mode="paper", signals=summarize_signals([
+                      _row("swing.breakout", "QUALIFIED", filled=1, net=1200.0),
+                      _row("scalp.orb", "REJECTED")]),
                   trades=TradeStats(closed=1, wins=1, total_pnl=1200.0),
                   calibration=calibration([]), sources=["supabase:trades"])
     monkeypatch.setattr(report_mod, "build_report", lambda config, days=90: fake)
@@ -131,11 +116,13 @@ def test_cli_and_mcp_render_the_report(monkeypatch):
     result = CliRunner().invoke(app, ["report"])
     assert result.exit_code == 0, result.output
     assert "Track record" in result.output and "₹1,200" in result.output
-    assert "mostly noise" in result.output  # 2 settled calls is not a sample
+    assert "mostly noise" in result.output  # 1 closed signal is not a sample
+    assert "swing." in result.output
 
     import asyncio
 
     monkeypatch.setattr(mcp_server, "_get_config", lambda: MagicMock())
     data = json.loads(asyncio.run(mcp_server.performance_report()))
-    assert data["calls"]["hit_rate"] == 0.5 and data["calls"]["enough_data"] is False
+    assert data["signals"]["win_rate"] == 1.0 and data["signals"]["enough_data"] is False
+    assert data["signals"]["by_strategy"]["swing.breakout"]["net"] == 1200.0
     assert data["trades"]["win_rate"] == 1.0

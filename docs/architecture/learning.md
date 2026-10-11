@@ -1,6 +1,6 @@
 # Quantitative Learning Engine
 
-The learning engine tracks every AI prediction and its outcome, building a data-driven understanding of what works and what doesn't.
+The signal tracker (`skopaq/learning/tracker.py`) records every closed trade and its outcome, so you can see what works and what doesn't. It stores to `DATABASE_URL` (Postgres) and does nothing without it.
 
 ## What It Tracks
 
@@ -17,16 +17,15 @@ The learning engine tracks every AI prediction and its outcome, building a data-
 ## How It Works
 
 ```
-Trade Executed → Record: symbol, confidence, entry, sector, regime, hour
+Position closed (trade booking) → record: symbol, confidence, entry/exit, P&L, won/lost,
+                                   sector, IST entry hour, holding days, exit reason
         ↓
-Trade Closed → Update: exit price, P&L, won/lost, holding days
+Tracker queries → per-symbol, calibration, sector, regime, timing, stop-loss stats
         ↓
-Learning Engine → Analyze patterns across all trades
-        ↓
-Generate Insights → "OVERCONFIDENT on IT stocks", "Stops too tight on RELIANCE"
-        ↓
-Inject into Agent → Next analysis uses these insights
+Insights report → "OVERCONFIDENT on IT stocks", "Stops too tight on RELIANCE"
 ```
+
+The report is shown on the dashboard's **AI learning** page (`/api/dashboard/learning[/symbol]`).
 
 ## MCP Tools
 
@@ -37,10 +36,10 @@ Inject into Agent → Next analysis uses these insights
 
 - `signal_records` — Every signal with outcome (Fly.io Postgres)
 
-## Self-Correction
+## What it does not do
 
-The learning engine enables **self-correction**:
-
-- If AI is overconfident (says 80% but wins 50%), it learns to lower confidence
-- If stops are hit 60% of the time, it widens stops automatically
-- If a sector consistently loses, the AI deprioritizes it in scans
+The insights are for review: nothing reads them back into trading, and they change no
+stop, size or ranking. The models that learn are the Adaptive AI's (the swing model,
+`skopaq swing-train`; the scalper's `learn-train` / `adaptive-train`; RL policies), each
+through a registry with gates, a shadow period and an admin's promotion — see
+[Pipeline](pipeline.md) and [Execution safety](execution-safety.md#learning-lifecycle).

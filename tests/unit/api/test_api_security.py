@@ -1,6 +1,5 @@
-"""API hardening: authenticated status/scanner/portfolio routes, docs and startup checks
-for live mode, the trusted client address, duplicate-submission protection, and the chat
-bridge's refusal of order-placing tools in live mode."""
+"""API hardening: authenticated status/portfolio routes, docs and startup checks for live
+mode, the trusted client address, and duplicate-submission protection."""
 
 from __future__ import annotations
 
@@ -35,8 +34,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-@pytest.mark.parametrize("path", ["/api/status", "/api/portfolio", "/api/scanner/status",
-                                  "/api/scanner/candidates"])
+@pytest.mark.parametrize("path", ["/api/status", "/api/portfolio"])
 def test_account_routes_need_a_login(client, monkeypatch, path):
     assert client.get(path).status_code == 503                 # no auth configured: closed
     monkeypatch.setattr(dashboard_auth, "SkopaqConfig",
@@ -98,62 +96,3 @@ async def test_idempotency_replays_and_refuses_duplicates():
     assert len(calls) == 3
 
 
-def _live(monkeypatch, live: bool):
-    monkeypatch.setattr("skopaq.chat.bridge._live_mode", lambda: live)
-
-
-@pytest.fixture
-def bridge(monkeypatch):
-    from fastapi import FastAPI
-
-    from skopaq.chat.bridge import _sessions, router
-
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[auth.require_api_token] = lambda: None
-    _sessions.clear()
-    yield TestClient(app)
-    _sessions.clear()
-
-
-def test_chat_tool_refuses_trade_stock_in_live_mode(bridge, monkeypatch):
-    _live(monkeypatch, True)
-    session = MagicMock(id="s1")
-    monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", lambda sid: session)
-    tool = MagicMock()
-    tool.name = "trade_stock"
-    tool.ainvoke = AsyncMock(return_value="TRADED")
-    monkeypatch.setattr("skopaq.chat.tools.get_all_tools", lambda: [tool])
-    monkeypatch.setattr("skopaq.chat.tools.init_tools", lambda infra: None)
-    r = bridge.post("/api/chat/tool", json={"tool": "trade_stock", "args": {"symbol": "TCS"}})
-    assert r.status_code == 403 and tool.ainvoke.await_count == 0
-    _live(monkeypatch, False)
-    r = bridge.post("/api/chat/tool", json={"tool": "trade_stock", "args": {"symbol": "TCS"}})
-    assert r.status_code == 200 and r.json()["result"] == "TRADED"        # paper: as before
-
-
-def test_chat_message_does_not_auto_approve_trades_in_live_mode(bridge, monkeypatch):
-    _live(monkeypatch, True)
-    session = MagicMock(id="s1")
-    session.get_history.return_value = []
-    pending = SimpleNamespace(next=("tools",), values={"messages": [
-        SimpleNamespace(tool_calls=[{"name": "trade_stock", "args": {"symbol": "TCS"}}])]})
-    agent = MagicMock()
-    agent.ainvoke = AsyncMock(return_value={"messages": []})
-    agent.get_state.return_value = pending
-    session.ensure_agent.return_value = agent
-    monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", lambda sid: session)
-    r = bridge.post("/api/chat/message", json={"message": "buy TCS"})
-    assert r.status_code == 200 and "Not run: trade_stock" in r.json()["message"]
-    assert agent.ainvoke.await_count == 1          # the first turn only: never resumed
-
-
-def test_chat_errors_do_not_leak_exception_text(bridge, monkeypatch):
-    def boom(sid):
-        raise RuntimeError("postgres://user:secret@host failed")
-    monkeypatch.setattr("skopaq.chat.bridge._get_or_create_session", boom)
-    bridge = TestClient(bridge.app, raise_server_exceptions=False)
-    r = bridge.post("/api/chat/tool", json={"tool": "get_quote", "args": {}})
-    assert r.status_code == 500 and "secret" not in r.text
-    r = bridge.post("/api/chat/message", json={"message": "x", "session_id": "bad id!"})
-    assert r.status_code in (422, 500) and "secret" not in r.text

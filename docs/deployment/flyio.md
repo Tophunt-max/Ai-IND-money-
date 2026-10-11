@@ -68,8 +68,6 @@ fly ssh console -a skopaq-telegram -C 'chown 1000:1000 /data'
 # API server secrets
 fly secrets set \
   SKOPAQ_INDSTOCKS_TOKEN="..." \
-  SKOPAQ_GOOGLE_API_KEY="..." \
-  SKOPAQ_ANTHROPIC_API_KEY="..." \
   SKOPAQ_SUPABASE_URL="..." \
   SKOPAQ_SUPABASE_SERVICE_KEY="..." \
   -a skopaq-trader
@@ -78,7 +76,6 @@ fly secrets set \
 fly secrets set \
   SKOPAQ_TELEGRAM_BOT_TOKEN="..." \
   SKOPAQ_INDSTOCKS_TOKEN="..." \
-  SKOPAQ_GOOGLE_API_KEY="..." \
   -a skopaq-telegram
 ```
 

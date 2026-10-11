@@ -1,12 +1,13 @@
 "use client";
 
-import { BookOpen, Database, Search, Sparkles, Target } from "lucide-react";
+import { Database, Sparkles, Target } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
-import { Badge, Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Progress, Skeleton, StatCard, Table } from "@/components/ui";
+import { Button, Card, Empty, ErrorBox, KV, Notice, PageTitle, pnlClass, Progress, Skeleton, StatCard, Table } from "@/components/ui";
 import { api, inr } from "@/lib/api";
 import AdaptiveAI from "@/components/AdaptiveAI";
 import RLAgents from "@/components/RLAgents";
+import SwingModel from "@/components/SwingModel";
 import StrategyBuilder from "@/components/StrategyBuilder";
 import ModelRegistry from "@/components/ModelRegistry";
 import RegimeDrift from "@/components/RegimeDrift";
@@ -23,12 +24,6 @@ interface Learning {
   regimes?: Row[];
   timing?: Row[];
   stop_loss?: Row;
-}
-
-interface Memory {
-  memories: Record<string, { recommendation: string; score: number }[]>;
-  reflections: { symbol: string; reflection: string; pnl: number | null; pnl_pct: number | null; trade_date: string }[];
-  errors: Record<string, string>;
 }
 
 const p1 = (v: any) => (v == null ? "—" : `${Number(v).toFixed(1)}%`);
@@ -75,67 +70,14 @@ function SymbolStats() {
   );
 }
 
-function MemorySearch() {
-  const [q, setQ] = useState("");
-  const [data, setData] = useState<Memory | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const go = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      setData(await api<Memory>(`/api/dashboard/memory?q=${encodeURIComponent(q.trim())}`));
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const memories = data ? Object.entries(data.memories).flatMap(([role, items]) => items.map((m) => ({ role, ...m }))) : [];
-
-  return (
-    <Card title="Agent memory" icon={BookOpen} subtitle="Lessons the agents learned from past decisions and trades">
-      <form onSubmit={go} className="relative">
-        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. banking stocks after a rate hike" className="field pl-10 pr-24" />
-        <Button type="submit" size="sm" loading={busy} disabled={q.trim().length < 2} className="absolute right-1.5 top-1/2 -translate-y-1/2">Search</Button>
-      </form>
-      <div className="mt-4 space-y-3">
-        <ErrorBox error={error} />
-        {data && Object.entries(data.errors).map(([k, v]) => <Notice key={k} tone="warning">{k}: {v}</Notice>)}
-        {data && memories.length === 0 && data.reflections.length === 0 && <Empty>No matching memories.</Empty>}
-        {memories.map((m, i) => (
-          <div key={i} className="rounded-xl bg-white/[0.02] p-4 ring-1 ring-white/[0.05]">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <Badge tone="info">{m.role.replace(/_/g, " ")}</Badge>
-              <span className="num text-[11px] text-gray-500">match {m.score.toFixed(2)}</span>
-            </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-300">{m.recommendation}</p>
-          </div>
-        ))}
-        {data && data.reflections.map((r, i) => (
-          <div key={`r${i}`} className="rounded-xl bg-white/[0.02] p-4 ring-1 ring-white/[0.05]">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="font-medium text-white">{r.symbol} <span className="text-xs text-gray-500">{r.trade_date}</span></span>
-              <span className={`num text-sm font-semibold ${pnlClass(r.pnl)}`}>{inr(r.pnl)}</span>
-            </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-300">{r.reflection}</p>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
 export default function LearningPage() {
   const { data, error, loading } = useApi<Learning>("/api/dashboard/learning");
   const sl = data?.stop_loss;
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <PageTitle title="AI learning" icon={Sparkles} subtitle="What the system learns from its own signals and trades" />
+      <PageTitle title="AI learning" icon={Sparkles} subtitle="The Adaptive AI: models trained on our own market data, signals and trades (no LLM)" />
+      <SwingModel />
       <ModelRegistry />
       <StrategyBuilder />
       <AdaptiveAI />
@@ -212,10 +154,7 @@ export default function LearningPage() {
         </>
       )}
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        <SymbolStats />
-        <MemorySearch />
-      </div>
+      <SymbolStats />
     </div>
   );
 }

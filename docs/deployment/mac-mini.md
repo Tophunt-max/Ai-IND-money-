@@ -29,7 +29,7 @@ The scheduler (`skopaq schedule`, `skopaq/execution/scheduler.py`):
   skipped and you get a Telegram alert;
 - starts at most one session per day, even across restarts (a marker file is written
   before launch). The exception: a session whose PRE_OPEN phase failed (exit code 3:
-  INDstocks token missing or expiring before 15:45, broker login, LLM setup; nothing
+  INDstocks token missing or expiring before 15:45, broker login; nothing
   was traded) is started again every 5 minutes until 11:30;
 - checks at **08:45** (`SKOPAQ_SCHEDULER_PREFLIGHT`) that the INDstocks token is set and
   lasts until 15:45, and alerts if not;
@@ -65,13 +65,12 @@ The scheduler (`skopaq schedule`, `skopaq/execution/scheduler.py`):
   scheduler stop (not the deadline) counts as an interrupted session, so the restarted
   scheduler runs `skopaq monitor`. Live order work itself stops within the kill-after
   minus `SKOPAQ_ORDER_SHUTDOWN_MARGIN_SECONDS` (300 − 60 = 240 s) after the SIGTERM, so a
-  session that is not stuck in an analysis ends before the SIGKILL;
+  session that is not stuck ends before the SIGKILL;
 - runs only once per state directory: it holds a lock on `scheduler/scheduler.lock` for
   as long as it runs. A second scheduler on the same volume (`docker compose run
   scheduler`, or `skopaq schedule` without `--check` inside the container) exits 1
   instead of taking the running session for an interrupted one, alerting once a day (a
   restart policy runs it again and again). `skopaq schedule --check` takes no lock;
-- runs `skopaq settle` at **18:30** as a backstop;
 - alerts on Telegram (`SKOPAQ_TELEGRAM_CHAT_ID`) when a session fails, a day is
   missed, the holiday list for the year is missing or the session log cannot be written
   (disk full: the session keeps running and its output still reaches
@@ -80,7 +79,7 @@ The scheduler (`skopaq schedule`, `skopaq/execution/scheduler.py`):
 
 `skopaq daemon` exits 0 when the session ran, 3 when PRE_OPEN failed (nothing traded,
 retried until 11:30) and 1 only when the session itself failed (an exception ended it).
-A candidate whose analysis failed (an LLM rate limit, a data error) is listed in the
+A swing idea whose trade failed (a data or broker error) is listed in the
 session report but does not fail the session, so it causes no failure alert, failed ping
 or recovery monitor.
 
@@ -101,14 +100,14 @@ State lives in two named volumes, shared by every container:
 | `skopaq-home` | `/home/skopaq/.skopaq/HALT` | kill-switch file |
 | `skopaq-home` | `/home/skopaq/.skopaq/locks/` | per-symbol SELL locks (`sell-<SYMBOL>.lock`): one SELL of a symbol at a time across containers; per-order locks (`order-<ID>.lock`): one process at a time resumes an order and records its late fill |
 | `skopaq-home` | `/home/skopaq/.skopaq/orders/` | order journal (`YYYY-MM-DD.jsonl`): Skopaq's own live orders, so a later process resumes the ones left open |
-| `skopaq-home` | `/home/skopaq/.tradingagents/` | decision log (settled by `skopaq settle`) |
-| `skopaq-home` | `/home/skopaq/results/`, `/home/skopaq/.cache/` | analysis reports, data cache |
+| `skopaq-home` | `/home/skopaq/.skopaq/models/` | model registries, incl. the swing model (`swing/`: champion, shadow, candidates) |
+| `skopaq-home` | `/home/skopaq/.skopaq/signals/` | signal journal (every candidate and decision) |
+| `skopaq-home` | `/home/skopaq/.tradingagents/cache/` | market-data cache |
 | `skopaq-home` | `/home/skopaq/scheduler/` | scheduler markers (`daemon-YYYY-MM-DD.started`, `.rc`, `monitor-…` for the recovery monitor) and `scheduler.lock` |
 | `skopaq-home` | `/home/skopaq/logs/daemon/` | one log per session (`daemon-YYYY-MM-DD.log`, kept 60 days) |
 | `skopaq-data` | `/data/` | spare data volume (kept for existing installs; nothing needs it now) |
 
-Native on the Mac (not in Docker): Ollama (optional, uses the Metal GPU),
-`cloudflared` (optional, for HTTPS to the dashboard API), and the Claude Code MCP server (optional).
+Native on the Mac (not in Docker): `cloudflared` (optional, for HTTPS to the dashboard API), and the Claude Code MCP server (optional).
 
 ## 2. Cutover (do this first)
 
@@ -142,7 +141,7 @@ Register the IP with INDstocks, put it in
   This requires FileVault off. If you keep FileVault on, someone must unlock the Mac
   after every power loss; use `sudo fdesetup authrestart` for planned reboots.
 - **Docker Desktop:** turn on "Start Docker Desktop when you sign in"; give it 4–6 CPUs,
-  6–8 GB RAM (leave room for native Ollama) and 64 GB or more of disk; turn off
+  6–8 GB RAM and 64 GB or more of disk; turn off
   Resource Saver and automatic updates (update on weekends). OrbStack works too.
 - **macOS updates:** turn off automatic installation; apply updates on weekends.
 - **Network:** wired Ethernet, a DHCP reservation, and a UPS for the Mac and the router.
@@ -169,10 +168,13 @@ docker compose ps
 
 `api`, `telegram` and `scheduler` turn "healthy" within about 2 minutes.
 
-Minimum `.env`: an LLM key (`SKOPAQ_GOOGLE_API_KEY`), the Supabase URL and service key,
+Minimum `.env`: the Supabase URL and service key,
 `SKOPAQ_TELEGRAM_BOT_TOKEN`, `SKOPAQ_TELEGRAM_CHAT_ID` (scheduler alerts go here),
 `SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS`, and `SKOPAQ_CORS_ORIGINS`. Keep
 `SKOPAQ_SCHEDULER_MODE=paper`.
+
+Then train the swing model once (`docker compose run --rm swing-train`): without one the
+swing book opens no entries (paper can use `SKOPAQ_SWING_RULES_ONLY=true` instead).
 
 ## 6. Verify
 
@@ -182,7 +184,7 @@ Minimum `.env`: an LLM key (`SKOPAQ_GOOGLE_API_KEY`), the Supabase URL and servi
 | `scripts/macmini/verify.sh --build --up` | build and start first |
 | `scripts/macmini/verify.sh --probe-kill-switch` | halt in `api`, check the scheduler sees it, lift the probe's own halt |
 | `scripts/macmini/verify.sh --unit-tests` | run `tests/unit` inside the image, without `.env` or the stack's volumes |
-| `scripts/macmini/verify.sh --dry-run-daemon` | a scan-only session now (makes LLM calls) |
+| `scripts/macmini/verify.sh --dry-run-daemon` | a scan-only session now (reads market data; no orders) |
 
 Each line is `PASS`, `WARN`, `FAIL` or `INFO`; the script exits 1 if anything FAILs and
 never prints secret values. Fix every FAIL. The kill-switch probe refuses to run on a
@@ -198,6 +200,7 @@ PASS  engine architecture: aarch64 (native arm64 images)
 PASS  api: running/healthy
 PASS  api port: 127.0.0.1:8000 (loopback only)
 PASS  volumes: home (.skopaq, .tradingagents, working directory) and /data are writable
+PASS  swing model: shadow swing-lightgbm-20260925T081500
 PASS  schedule --check: ok
         Today:          NSE trading day
         Next session:   Mon 2026-09-28 at 09:15 IST
@@ -258,23 +261,23 @@ next year's list every December, or set `SKOPAQ_NSE_HOLIDAYS` (comma-separated
 current year the scheduler refuses to trade and alerts once a day. Ad-hoc closures go
 in `SKOPAQ_NSE_HOLIDAYS` too. Special sessions (Muhurat trading) are not traded.
 
-## 11. Ollama (optional)
+## 11. Swing model
 
-- Install it natively (the app, or `brew services start ollama`) so it uses Metal, and
-  pull a 7–8B model (`ollama pull qwen2.5:7b`).
-- Set `SKOPAQ_OLLAMA_ENABLED=true` and `SKOPAQ_OLLAMA_MODEL`. Containers reach it at
-  `http://host.docker.internal:11434` (`SKOPAQ_DOCKER_OLLAMA_BASE_URL`).
-- It is only used when no Gemini key is set.
-- If containers get "connection refused", run Ollama with `OLLAMA_HOST=0.0.0.0` and
-  block port 11434 from the LAN in the macOS firewall.
+- Train: `docker compose run --rm swing-train` (outside market hours; it reads years of
+  daily history). A candidate that passes the gates becomes the **shadow** model.
+- Check: `docker compose exec api skopaq swing-status` (verify.sh `swing model` WARNs
+  while none is trained).
+- Paper sessions use the champion, else the shadow; live sessions only the champion:
+  `skopaq swing-promote` after the shadow days (or **Promote** on the dashboard's AI
+  learning page), `skopaq swing-rollback` to undo.
 
 ## 12. Cloudflare Tunnel (optional)
 
 - `brew install cloudflared`, then `sudo cloudflared service install <token>` (a
   LaunchDaemon, so it runs without a login), with the tunnel pointing at
   `http://localhost:8000`, to give the dashboard an HTTPS API URL.
-- Set `SKOPAQ_API_TOKEN` (guards `/api/chat/*`) and `SKOPAQ_CORS_ORIGINS` to the
-  dashboard's origin.
+- Set `SKOPAQ_CORS_ORIGINS` to the dashboard's origin. `SKOPAQ_API_TOKEN`, if set, is a
+  bearer token the dashboard API accepts as an admin: keep it long and secret.
 
 ## 13. Claude Code MCP on the Mac (optional)
 
@@ -285,9 +288,8 @@ in `SKOPAQ_NSE_HOLIDAYS` too. Special sessions (Muhurat trading) are not traded.
 /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m pip install -e ".[deploy]"
 ```
 
-`SKOPAQ_API_TOKEN`, if you set one, is read from `.env` like the other keys (the server
-runs from the repo); pick one without `$`, because compose turns `$$` into `$` but the
-native server reads `.env` literally. Market data comes from INDstocks, which answers
+The server reads `.env` from the repo like the containers do; avoid `$` in the values it
+needs, because compose turns `$$` into `$` but the native server reads `.env` literally. Market data comes from INDstocks, which answers
 quotes from any IP; orders need the whitelisted one.
 
 **Container** alternative, in your MCP config:
@@ -329,13 +331,13 @@ run `docker system prune -f && docker builder prune -f` monthly.
 | Telegram `Conflict: terminated by other getUpdates request` (HTTP 409) | Another poller uses the token: `fly scale count 0 -a skopaq-telegram`, stop other copies |
 | `scheduler` unhealthy | `docker compose logs scheduler`; `docker compose exec scheduler skopaq schedule --check` |
 | INDstocks 401/403 | Today's token not set, or the egress IP is not whitelisted (verify.sh `egress IP`) |
-| Ollama unreachable from containers | Section 11 (`OLLAMA_HOST=0.0.0.0`) |
+| verify.sh WARN `swing model: none trained` | Section 11: `docker compose run --rm swing-train` |
 | A value with `$` is cut short | Write `$$` in `.env` (compose interpolates `$`) |
 | No session on a weekday | `schedule --check`: holiday, missing holiday list, live not confirmed, or `SKOPAQ_SCHEDULER_ENABLED=false` |
 | Alert "PRE_OPEN failed" or "pre-flight" | Usually the INDstocks token: set it; the session is retried every 5 min until 11:30 |
 | Alert "session ... was interrupted" | The Mac or Docker died mid-session. Check open positions at the broker (in live mode the scheduler runs `skopaq monitor`) |
-| Alert "daemon exited rc=N" | The session itself failed or was killed (a failed candidate analysis alone exits 0): read `logs/daemon/daemon-<date>.log`. In live mode before 15:45 the scheduler runs `skopaq monitor`; otherwise check open positions at the broker |
-| Alert "did not stop within 300s ... was killed" | The session ignored SIGTERM (e.g. mid-analysis), so CLOSING may not have finished. Check open positions at the broker; in live mode a scheduler back before 15:45 runs `skopaq monitor` |
+| Alert "daemon exited rc=N" | The session itself failed or was killed (a failed swing trade alone exits 0): read `logs/daemon/daemon-<date>.log`. In live mode before 15:45 the scheduler runs `skopaq monitor`; otherwise check open positions at the broker |
+| Alert "did not stop within 300s ... was killed" | The session ignored SIGTERM, so CLOSING may not have finished. Check open positions at the broker; in live mode a scheduler back before 15:45 runs `skopaq monitor` |
 | Alert "recovery `skopaq monitor` ... was stopped" or "... was cut off" | The scheduler stopped or died during the recovery monitor. Before 15:45 the restarted scheduler runs it again; otherwise check open positions at the broker |
 | Alert "could not run the recovery `skopaq monitor`" | Launching it failed (out of memory, process limit). Check open positions at the broker; the scheduler retries every poll until 15:45 without further alerts |
 | Alert "recovery `skopaq monitor` ... rc=4" ("positions still open, failed exits or unconfirmed orders") | The monitor ended with shares still held, an exit that did not fill or an order it could not confirm. Check positions and the order book at the broker now: delivery positions are carried overnight |
@@ -359,11 +361,8 @@ run `docker system prune -f && docker builder prune -f` monthly.
 | Service | Needed for | Notes |
 |---------|------------|-------|
 | INDstocks | the only broker: market data, equity and F&O orders | daily token; static egress IPv4 whitelisted |
-| Supabase | kill switch across processes, P&L history, memory | apply migrations 001–003 |
-| Upstash / LangCache | optional semantic LLM cache | |
+| Supabase | kill switch across processes, trades, P&L history, dashboard login | apply migrations 001–003 |
+| Upstash Redis | optional: API shared state across replicas, account leases across hosts | `SKOPAQ_API_SHARED_STATE_ENABLED`, `SKOPAQ_ACCOUNT_LEASE_ENABLED` |
 | Telegram | bot, scheduler alerts | one poller per token |
-| LLM providers | analysis (Gemini, Anthropic, OpenRouter, Perplexity) | keys in `.env` |
-| TypeSafe / Jev | optional post screening and decisions | `SKOPAQ_TYPESAFE_API_KEY` |
 | Data vendors | yfinance, etc. | outbound HTTPS |
 | Vercel | optional dashboard | set `SKOPAQ_CORS_ORIGINS` to its origin |
-| Ollama | optional local fallback | native on the Mac |

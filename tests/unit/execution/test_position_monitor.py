@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from skopaq.agents.sell_analyst import SellDecision
 from skopaq.broker.models import OrderType, Position, Quote, TradingSignal
 from skopaq.execution.position_monitor import (
     MonitoredPosition,
@@ -82,26 +81,10 @@ def mock_executor():
     return executor
 
 
-@pytest.fixture
-def mock_llm():
-    """Mock LLM for sell analyst."""
-    return MagicMock()
-
-
-def _make_monitor(
-    executor, client, router, config,
-    llm=None, stop_event=None, ai_enabled=True,
-) -> PositionMonitor:
+def _make_monitor(executor, client, router, config, stop_event=None) -> PositionMonitor:
     """Helper to build a PositionMonitor with mocks."""
-    return PositionMonitor(
-        executor=executor,
-        client=client,
-        router=router,
-        config=config,
-        llm=llm,
-        stop_event=stop_event,
-        ai_enabled=ai_enabled,
-    )
+    return PositionMonitor(executor=executor, client=client, router=router, config=config,
+                           stop_event=stop_event)
 
 
 # ── Safety Tier Tests ────────────────────────────────────────────────────────
@@ -113,7 +96,7 @@ class TestSafetyTier:
     def test_hard_stop_triggers_sell(self, config):
         """LTP below hard stop (4%) should trigger SELL."""
         mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
+            MagicMock(), MagicMock(), MagicMock(), config,
         )
         pos = MonitoredPosition(
             symbol="TEST", scrip_code="NSE_123",
@@ -127,7 +110,7 @@ class TestSafetyTier:
     def test_no_stop_within_range(self, config):
         """LTP within safe range should NOT trigger safety exit."""
         mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
+            MagicMock(), MagicMock(), MagicMock(), config,
         )
         pos = MonitoredPosition(
             symbol="TEST", scrip_code="NSE_123",
@@ -150,7 +133,7 @@ class TestSafetyTier:
         """Trailing stop should ratchet UP with price but never down."""
         config.monitor_trailing_stop_enabled = True
         mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
+            MagicMock(), MagicMock(), MagicMock(), config,
         )
         pos = MonitoredPosition(
             symbol="TEST", scrip_code="NSE_123",
@@ -172,7 +155,7 @@ class TestSafetyTier:
         """Trailing stop should NOT fire if LTP is above the trail line."""
         config.monitor_trailing_stop_enabled = True
         mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
+            MagicMock(), MagicMock(), MagicMock(), config,
         )
         pos = MonitoredPosition(
             symbol="TEST", scrip_code="NSE_123",
@@ -192,7 +175,7 @@ class TestSafetyTier:
     def test_eod_exit(self, config):
         """Should trigger sell when IST time is past EOD threshold."""
         mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
+            MagicMock(), MagicMock(), MagicMock(), config,
         )
         pos = MonitoredPosition(
             symbol="TEST", scrip_code="NSE_123",
@@ -213,71 +196,6 @@ class TestSafetyTier:
 # ── AI Tier Tests ────────────────────────────────────────────────────────────
 
 
-class TestAITier:
-    """Tests for AI sell analyst integration."""
-
-    @pytest.mark.asyncio
-    async def test_ai_sell_triggers_execution(self, config, mock_llm):
-        """AI SELL recommendation should produce a SellDecision with SELL."""
-        mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config,
-            llm=mock_llm, ai_enabled=True,
-        )
-        sell_decision = SellDecision(
-            action="SELL", confidence=75,
-            reasoning="RSI overbought, MACD crossing down",
-        )
-        with patch(
-            "skopaq.execution.position_monitor.analyze_exit",
-            return_value=sell_decision,
-        ):
-            pos = MonitoredPosition(
-                symbol="TEST", scrip_code="NSE_123",
-                entry_price=100.0, quantity=10,
-            )
-            decision = await mon._check_ai(pos, ltp=105.0, pnl_pct=5.0)
-            assert decision is not None
-            assert decision.action == "SELL"
-            assert decision.confidence == 75
-
-    @pytest.mark.asyncio
-    async def test_ai_hold_keeps_position(self, config, mock_llm):
-        """AI HOLD recommendation should not trigger a sell."""
-        mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config,
-            llm=mock_llm, ai_enabled=True,
-        )
-        hold_decision = SellDecision(
-            action="HOLD", confidence=60,
-            reasoning="Momentum still bullish",
-        )
-        with patch(
-            "skopaq.execution.position_monitor.analyze_exit",
-            return_value=hold_decision,
-        ):
-            pos = MonitoredPosition(
-                symbol="TEST", scrip_code="NSE_123",
-                entry_price=100.0, quantity=10,
-            )
-            decision = await mon._check_ai(pos, ltp=102.0, pnl_pct=2.0)
-            assert decision is not None
-            assert decision.action == "HOLD"
-
-    @pytest.mark.asyncio
-    async def test_ai_failure_defaults_to_hold(self, config):
-        """When LLM is None, AI tier returns None (no action)."""
-        mon = _make_monitor(
-            MagicMock(), MagicMock(), MagicMock(), config,
-            llm=None, ai_enabled=False,
-        )
-        pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
-        )
-        decision = await mon._check_ai(pos, ltp=102.0, pnl_pct=2.0)
-        assert decision is None
-
-
 # ── Execution Tests ──────────────────────────────────────────────────────────
 
 
@@ -293,7 +211,7 @@ class TestExecution:
         A LIMIT at the entry price (100) would never fill for this stop at 95.
         """
         mon = _make_monitor(
-            mock_executor, MagicMock(), MagicMock(), config, ai_enabled=False,
+            mock_executor, MagicMock(), MagicMock(), config,
         )
         mon._router = MagicMock()
         mon._router._paper = MagicMock()
@@ -327,7 +245,7 @@ class TestExecution:
         mock_router._paper = mock_paper
 
         mon = _make_monitor(
-            mock_executor, MagicMock(), mock_router, config, ai_enabled=False,
+            mock_executor, MagicMock(), mock_router, config,
         )
         # Override router reference
         mon._router = mock_router
@@ -356,7 +274,7 @@ class TestExecution:
         executor.execute_signal = AsyncMock(return_value=fail_result)
 
         mon = _make_monitor(
-            executor, MagicMock(), MagicMock(), config, ai_enabled=False,
+            executor, MagicMock(), MagicMock(), config,
         )
         mon._router = MagicMock()
         mon._router._paper = MagicMock()
@@ -393,7 +311,7 @@ class TestMonitorRun:
             return_value="NSE_123",
         ):
             mon = _make_monitor(
-                mock_executor, mock_client, router, config, ai_enabled=False,
+                mock_executor, mock_client, router, config,
             )
             result = await mon.run()
 
@@ -413,7 +331,7 @@ class TestMonitorRun:
         ):
             mon = _make_monitor(
                 mock_executor, mock_client, mock_router, config,
-                stop_event=stop_event, ai_enabled=False,
+                stop_event=stop_event,
             )
 
             # Set stop event after a short delay
@@ -447,7 +365,7 @@ class TestMonitorRun:
         ):
             mon = _make_monitor(
                 mock_executor, client, mock_router, config,
-                stop_event=stop_event, ai_enabled=False,
+                stop_event=stop_event,
             )
 
             # Let it run 1 cycle then stop
@@ -463,96 +381,13 @@ class TestMonitorRun:
         # Should not have sold (zero LTP skipped)
         assert result.sells_executed == 0
 
-    @pytest.mark.asyncio
-    async def test_safety_overrides_ai_hold(
-        self, config, mock_client, mock_router, mock_executor, mock_llm,
-    ):
-        """Safety stop-loss should fire even if AI would say HOLD.
-
-        This tests the two-tier architecture: safety runs FIRST, and if it
-        triggers, AI is never consulted.
-        """
-        # LTP well below stop-loss
-        mock_client.get_ltp = AsyncMock(return_value=90.0)  # 10% below entry
-
-        stop_event = asyncio.Event()
-
-        with patch(
-            "skopaq.broker.scrip_resolver.resolve_scrip_code",
-            return_value="NSE_123",
-        ):
-            mon = _make_monitor(
-                mock_executor, mock_client, mock_router, config,
-                llm=mock_llm, stop_event=stop_event, ai_enabled=True,
-            )
-
-            # AI would say HOLD — but safety should override
-            with patch(
-                "skopaq.execution.position_monitor.analyze_exit",
-                return_value=SellDecision(action="HOLD", confidence=80),
-            ) as mock_ai:
-                with patch.object(mon, "_should_eod_exit", return_value=False):
-                    result = await mon.run()
-
-            # Safety should have sold, AI should NOT have been called
-            assert result.sells_executed == 1
-            assert "HARD STOP" in result.exit_reasons[0]
-            mock_ai.assert_not_called()
-
-
-# ── SellDecision Parsing Tests ───────────────────────────────────────────────
-
-
-class TestSellDecisionParsing:
-    """Tests for the _parse_decision helper in sell_analyst."""
-
-    def test_parse_sell_decision(self):
-        from skopaq.agents.sell_analyst import _parse_decision
-
-        text = """Based on the analysis, the stock shows bearish divergence.
-
-DECISION: SELL
-CONFIDENCE: 75
-REASONING: RSI divergence detected, MACD crossing below signal line."""
-
-        decision = _parse_decision(text)
-        assert decision.action == "SELL"
-        assert decision.confidence == 75
-        assert "RSI divergence" in decision.reasoning
-
-    def test_parse_hold_decision(self):
-        from skopaq.agents.sell_analyst import _parse_decision
-
-        text = """The stock is still in an uptrend.
-
-DECISION: HOLD
-CONFIDENCE: 60
-REASONING: Strong momentum, no reversal signals yet."""
-
-        decision = _parse_decision(text)
-        assert decision.action == "HOLD"
-        assert decision.confidence == 60
-
-    def test_parse_empty_text_defaults_to_hold(self):
-        from skopaq.agents.sell_analyst import _parse_decision
-
-        decision = _parse_decision("")
-        assert decision.action == "HOLD"
-
-    def test_parse_confidence_clamped(self):
-        from skopaq.agents.sell_analyst import _parse_decision
-
-        text = "DECISION: SELL\nCONFIDENCE: 150\nREASONING: test"
-        decision = _parse_decision(text)
-        assert decision.confidence == 100  # Clamped to max
-
 
 class TestExitRecording:
     """on_exit persists each successful sell (its P&L feeds the loss limits)."""
 
     def _monitor(self, config, executor, on_exit):
         mon = PositionMonitor(executor=executor, client=MagicMock(), router=MagicMock(),
-                              config=config, ai_enabled=False, on_exit=on_exit)
+                              config=config, on_exit=on_exit)
         mon._router._paper = MagicMock()
         return mon
 

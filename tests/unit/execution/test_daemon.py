@@ -40,14 +40,11 @@ def config():
     cfg.daemon_max_candidates_to_analyze = 5
     cfg.daemon_pre_open_minutes = 5
     cfg.daemon_scan_delay_after_open_seconds = 0  # No delay in tests
-    cfg.daemon_min_profit_threshold_pct = 0.5
-    cfg.daemon_min_profit_threshold_inr = 150.0
     cfg.daemon_session_log_dir = "logs/daemon"
     cfg.daemon_heartbeat_interval_seconds = 300
     cfg.monitor_poll_interval_seconds = 1
     cfg.monitor_hard_stop_pct = 0.04
     cfg.monitor_eod_exit_minutes_before_close = 10
-    cfg.monitor_ai_interval_cycles = 6
     cfg.monitor_trailing_stop_enabled = False
     cfg.monitor_trailing_stop_pct = 0.02
     cfg.initial_paper_capital = 100_000
@@ -56,20 +53,11 @@ def config():
     cfg.risk_per_trade_pct = 0.01
     cfg.atr_multiplier = 2.0
     cfg.atr_period = 14
-    cfg.selected_analysts = "market,social"
-    cfg.reflection_enabled = False
     cfg.supabase_url = ""
     cfg.supabase_service_key = MagicMock()
     cfg.supabase_service_key.get_secret_value.return_value = ""
-    cfg.google_api_key = MagicMock()
-    cfg.google_api_key.get_secret_value.return_value = "test"
-    cfg.anthropic_api_key = MagicMock()
-    cfg.anthropic_api_key.get_secret_value.return_value = ""
-    cfg.openrouter_api_key = MagicMock()
-    cfg.openrouter_api_key.get_secret_value.return_value = ""
     cfg.regime_detection_enabled = False
     cfg.asset_class = "equity"
-    cfg.langcache_enabled = False
     return cfg
 
 
@@ -91,8 +79,6 @@ def test_daemon_config_defaults():
     assert cfg.daemon_max_candidates_to_analyze == 5
     assert cfg.daemon_pre_open_minutes == 5
     assert cfg.daemon_scan_delay_after_open_seconds == 60
-    assert cfg.daemon_min_profit_threshold_pct == 0.5
-    assert cfg.daemon_min_profit_threshold_inr == 150.0
     assert cfg.daemon_session_log_dir == "logs/daemon"
     assert cfg.daemon_heartbeat_interval_seconds == 300
 
@@ -223,7 +209,6 @@ async def test_a_pre_open_failure_is_flagged_and_nothing_is_scanned(daemon):
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock,
                       side_effect=RuntimeError("INDstocks token invalid")), \
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock) as scan, \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         report = await daemon.run_session()
     assert report.pre_open_failed
@@ -237,7 +222,6 @@ async def test_a_later_failure_is_not_a_pre_open_failure(daemon):
          patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock,
                       side_effect=RuntimeError("scanner down")), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         report = await daemon.run_session()
     assert report.errors == ["scanner down"]
@@ -247,12 +231,13 @@ async def test_a_later_failure_is_not_a_pre_open_failure(daemon):
 
 @pytest.mark.asyncio
 async def test_candidate_errors_do_not_fail_the_session(daemon):
-    daemon._graph = AsyncMock()
+    daemon._swing = MagicMock()
     daemon._router = MagicMock()
     daemon._router._paper = MagicMock()
-    daemon._graph.analyze_and_execute = AsyncMock(side_effect=[
-        MagicMock(error="429 rate limited by Gemini", signal=None, execution=None),
-        MagicMock(error=None, signal=MagicMock(action="HOLD", confidence=30), execution=None),
+    daemon._swing.trade = AsyncMock(side_effect=[
+        MagicMock(error="execution failed: broker timeout", signal=None, execution=None),
+        MagicMock(error=None, signal=MagicMock(action="BUY", confidence=60),
+                  execution=MagicMock(success=False, rejection_reason="Not qualified: net R:R")),
     ])
     candidates = [MagicMock(symbol="AAA", urgency="high"),
                   MagicMock(symbol="BBB", urgency="normal")]
@@ -261,14 +246,13 @@ async def test_candidate_errors_do_not_fail_the_session(daemon):
          patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=candidates), \
          patch.object(daemon, "_phase_close", new_callable=AsyncMock), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock), \
          patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)), \
          patch("skopaq.cli.main._inject_paper_quote", new_callable=AsyncMock):
         report = await daemon.run_session()
 
-    assert report.errors == ["AAA: 429 rate limited by Gemini"]
-    assert report.holds == 1
+    assert report.errors == ["AAA: execution failed: broker timeout"]
+    assert report.trades_rejected == 1
     assert not report.failed
 
 
@@ -285,7 +269,6 @@ async def test_a_failure_after_trades_still_runs_closing(daemon):
          patch.object(daemon, "_phase_monitor", new_callable=AsyncMock,
                       side_effect=RuntimeError("positions unavailable")), \
          patch.object(daemon, "_phase_close", new_callable=AsyncMock) as close, \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         report = await daemon.run_session()
     assert report.errors == ["positions unavailable"]
@@ -300,7 +283,6 @@ async def test_a_failure_before_any_trade_does_not_run_closing(daemon):
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock,
                       side_effect=RuntimeError("scanner down")), \
          patch.object(daemon, "_phase_close", new_callable=AsyncMock) as close, \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         await daemon.run_session()
     close.assert_not_awaited()
@@ -312,26 +294,24 @@ async def test_a_failure_before_any_trade_does_not_run_closing(daemon):
 @pytest.mark.asyncio
 async def test_scan_returns_candidates(daemon):
     """Scanner phase returns candidate list."""
-    mock_candidate = MagicMock()
-    mock_candidate.symbol = "RELIANCE"
-    mock_candidate.urgency = "high"
-
-    with patch("skopaq.cli.main._run_scan", new_callable=AsyncMock) as mock_scan:
-        mock_scan.return_value = [mock_candidate]
-        result = await daemon._phase_scan()
+    mock_candidate = MagicMock(symbol="RELIANCE", reason="breakout")
+    daemon._swing = MagicMock(scan=AsyncMock(return_value=[mock_candidate]))
+    daemon._config.swing_symbols = "RELIANCE,TCS"
+    result = await daemon._phase_scan()
 
     assert len(result) == 1
     assert result[0].symbol == "RELIANCE"
+    universe, limit = daemon._swing.scan.await_args.args
+    assert universe == ["RELIANCE", "TCS"] and limit == daemon._max_candidates
 
 
 @pytest.mark.asyncio
 async def test_scan_returns_empty_on_failure(daemon):
-    """Scanner phase returns empty list if scanner raises."""
-    with patch("skopaq.cli.main._run_scan", new_callable=AsyncMock) as mock_scan:
-        mock_scan.side_effect = RuntimeError("Scanner crash")
-        result = await daemon._phase_scan()
-
-    assert result == []
+    """Scanner phase returns empty list if the swing scan raises, or without an engine."""
+    daemon._swing = MagicMock(scan=AsyncMock(side_effect=RuntimeError("Scanner crash")))
+    assert await daemon._phase_scan() == []
+    daemon._swing = None
+    assert await daemon._phase_scan() == []
 
 
 @pytest.mark.asyncio
@@ -355,10 +335,9 @@ async def test_analyze_respects_max_trades(daemon):
     """Analysis stops after max_trades BUYs."""
     daemon._config.daemon_max_trades_per_session = 1
     daemon._max_trades = 1
-    daemon._graph = AsyncMock()
+    daemon._swing = MagicMock()
     daemon._router = MagicMock()
     daemon._router._paper = MagicMock()
-    daemon._config.reflection_enabled = False
 
     # Two candidates, but max_trades = 1
     candidates = [
@@ -371,7 +350,7 @@ async def test_analyze_respects_max_trades(daemon):
     mock_result.error = None
     mock_result.signal = MagicMock(action="BUY", confidence=80, quantity=1)
     mock_result.execution = MagicMock(success=True, fill_price=100.0)
-    daemon._graph.analyze_and_execute = AsyncMock(return_value=mock_result)
+    daemon._swing.trade = AsyncMock(return_value=mock_result)
 
     report = DaemonSessionReport()
 
@@ -388,7 +367,7 @@ async def test_analyze_stops_on_stop_event(config):
     """Analysis halts when stop event is set."""
     stop = asyncio.Event()
     d = TradingDaemon(config, stop_event=stop)
-    d._graph = AsyncMock()
+    d._swing = MagicMock()
     d._router = MagicMock()
 
     stop.set()  # Signal shutdown
@@ -404,42 +383,16 @@ async def test_analyze_stops_on_stop_event(config):
 
 
 @pytest.mark.asyncio
-async def test_analyze_skips_hold_signals(daemon):
-    """HOLD signals don't count toward max trades."""
-    daemon._graph = AsyncMock()
-    daemon._router = MagicMock()
-    daemon._router._paper = MagicMock()
-
-    # Returns HOLD
-    mock_result = MagicMock()
-    mock_result.error = None
-    mock_result.signal = MagicMock(action="HOLD", confidence=30)
-    mock_result.execution = None
-    daemon._graph.analyze_and_execute = AsyncMock(return_value=mock_result)
-
-    candidates = [MagicMock(symbol="AAA", urgency="high")]
-    report = DaemonSessionReport()
-
-    with patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)):
-        with patch("skopaq.cli.main._inject_paper_quote", new_callable=AsyncMock):
-            buys = await daemon._phase_analyze_and_trade(candidates, report)
-
-    assert report.holds == 1
-    assert report.trades_opened == 0
-    assert len(buys) == 0
-
-
-@pytest.mark.asyncio
 async def test_analyze_handles_errors_gracefully(daemon):
     """Individual analysis failures don't crash the session."""
-    daemon._graph = AsyncMock()
+    daemon._swing = MagicMock()
     daemon._router = MagicMock()
     daemon._router._paper = MagicMock()
 
     # First candidate raises, second succeeds
-    daemon._graph.analyze_and_execute = AsyncMock(
+    daemon._swing.trade = AsyncMock(
         side_effect=[
-            RuntimeError("LLM timeout"),
+            RuntimeError("model file missing"),
             MagicMock(
                 error=None,
                 signal=MagicMock(action="BUY", confidence=80, quantity=1),
@@ -472,15 +425,14 @@ async def test_monitor_receives_positions(daemon):
     daemon._executor = MagicMock()
     daemon._client = MagicMock()
     daemon._router = MagicMock()
-    daemon._llm_map = {"sell_analyst": MagicMock()}
-
+    
     from skopaq.execution.position_monitor import MonitorResult
 
     mock_result = MonitorResult(
         positions_monitored=1,
         sells_executed=1,
         total_pnl=450.0,
-        exit_reasons=["AI SELL"],
+        exit_reasons=["STOP"],
     )
 
     with patch(
@@ -568,44 +520,7 @@ async def test_dry_run_skips_trading(daemon):
     assert report.sells_executed == 0
 
 
-@pytest.mark.asyncio
-async def test_dry_run_does_not_settle_decisions(daemon):
-    """Settling makes LLM reflection calls and Supabase writes: not in a dry run."""
-    with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock), \
-         patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=[]), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock,
-                      return_value=5) as settle:
-        dry = await daemon.run_session(dry_run=True)
-        settle.assert_not_awaited()
-        real = await daemon.run_session()
-
-    assert dry.decisions_settled == 0
-    assert real.decisions_settled == 5
-
-
 # ── Min Profit Gate (integration check) ──────────────────────────────────────
-
-
-def test_min_profit_gate_config_exists():
-    """Config has min profit threshold fields for the daemon."""
-    from skopaq.config import SkopaqConfig
-
-    cfg = SkopaqConfig()
-    assert hasattr(cfg, "daemon_min_profit_threshold_pct")
-    assert hasattr(cfg, "daemon_min_profit_threshold_inr")
-    assert cfg.daemon_min_profit_threshold_pct > 0
-    assert cfg.daemon_min_profit_threshold_inr > 0
-
-
-def test_sell_analyst_accepts_min_profit_params():
-    """analyze_exit() accepts min_profit_threshold_pct and estimated_round_trip_brokerage."""
-    import inspect
-    from skopaq.agents.sell_analyst import analyze_exit
-
-    sig = inspect.signature(analyze_exit)
-    params = list(sig.parameters.keys())
-    assert "min_profit_threshold_pct" in params
-    assert "estimated_round_trip_brokerage" in params
 
 
 @pytest.mark.asyncio
@@ -635,12 +550,10 @@ async def test_record_exit_goes_through_the_trade_lifecycle(daemon):
     from skopaq.broker.models import TradingSignal
 
     signal = TradingSignal(symbol="TCS", action="SELL", confidence=100, entry_price=4000.0)
-    daemon._config.reflection_enabled = False
     with patch("skopaq.cli.main._run_lifecycle", new_callable=AsyncMock) as lifecycle:
         await daemon._record_exit(signal, MagicMock(success=True))
 
-    config, graph, _store, result = lifecycle.await_args.args
-    assert graph is None  # reflection off: record only
+    config, result = lifecycle.await_args.args
     assert (result.symbol, result.signal) == ("TCS", signal)
 
 
@@ -652,7 +565,6 @@ async def test_session_report_notification_is_awaited(daemon):
     """The report reaches Telegram even when the session fails (not fire-and-forget)."""
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock,
                       side_effect=RuntimeError("token expired")), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch("skopaq.notifications.notify", new_callable=AsyncMock) as notify:
         report = await daemon.run_session()
 
@@ -670,7 +582,6 @@ async def test_slow_notification_does_not_hold_up_the_session(daemon):
 
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock,
                       side_effect=RuntimeError("x")), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch("skopaq.notifications.notify", side_effect=slow), \
          patch("skopaq.execution.daemon._NOTIFY_TIMEOUT_SECONDS", 0.1):
         loop = asyncio.get_running_loop()
@@ -709,7 +620,6 @@ async def test_the_scalper_runs_beside_the_session_and_reports(daemon, config):
          patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=[]), \
          patch("skopaq.scalping.engine.ScalpEngine", FakeScalper), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         report = await daemon.run_session()
 
@@ -724,7 +634,6 @@ async def test_no_scalper_unless_enabled_or_in_a_dry_run(daemon, config):
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock), \
          patch.object(daemon, "_halt_status", return_value=MagicMock(halted=False)), \
          patch.object(daemon, "_phase_scan", new_callable=AsyncMock, return_value=[]), \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0), \
          patch.object(daemon, "_notify_report", new_callable=AsyncMock):
         report = await daemon.run_session()
     assert report.scalp_summary == ""

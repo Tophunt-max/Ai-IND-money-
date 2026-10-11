@@ -47,7 +47,7 @@ class TradeRecord(BaseModel):
     nifty_level: Optional[Decimal] = None
     india_vix: Optional[Decimal] = None
 
-    # Trade lifecycle (BUY → SELL linkage for reflection)
+    # Trade lifecycle (BUY → SELL linkage)
     opening_trade_id: Optional[UUID] = None
     closed_at: Optional[datetime] = None
 

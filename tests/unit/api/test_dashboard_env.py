@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv(env_overrides.FILE_ENV, str(tmp_path / "env_overrides.json"))
     monkeypatch.setenv("SKOPAQ_TRADING_MODE", "paper")
     for key in ("SKOPAQ_SCHEDULER_MODE", "SKOPAQ_SCHEDULER_CONFIRM_LIVE",
-                "SKOPAQ_SCANNER_MAX_CANDIDATES", "SKOPAQ_GOOGLE_API_KEY"):
+                "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE", "SKOPAQ_TELEGRAM_BOT_TOKEN"):
         monkeypatch.delenv(key, raising=False)
     from skopaq.api import dashboard_auth
 
@@ -51,38 +51,38 @@ def client(tmp_path, monkeypatch):
 
 def test_needs_a_login(client):
     assert client.get(PATH).status_code == 401
-    r = client.post(PATH, json={"set": {"SKOPAQ_SCANNER_MAX_CANDIDATES": "7"}})
+    r = client.post(PATH, json={"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}})
     assert r.status_code == 401
     assert not os.path.exists(os.environ[env_overrides.FILE_ENV])
 
 
 def test_lists_settings_without_secret_values(client):
-    os.environ["SKOPAQ_GOOGLE_API_KEY"] = "AIza-secret"
+    os.environ["SKOPAQ_TELEGRAM_BOT_TOKEN"] = "AIza-secret"
     r = client.get(PATH, headers=AUTH)
     assert r.status_code == 200
     assert "AIza-secret" not in r.text
     items = {s["key"]: s for s in r.json()["settings"]}
-    assert items["SKOPAQ_GOOGLE_API_KEY"]["is_set"] is True
-    assert items["SKOPAQ_GOOGLE_API_KEY"]["value"] is None
+    assert items["SKOPAQ_TELEGRAM_BOT_TOKEN"]["is_set"] is True
+    assert items["SKOPAQ_TELEGRAM_BOT_TOKEN"]["value"] is None
     assert items["SKOPAQ_TRADING_MODE"]["value"] == "paper"
     assert items["SKOPAQ_DASHBOARD_USERS"]["locked"]
 
 
 def test_saves_and_notifies(client):
-    r = client.post(PATH, headers=AUTH, json={"set": {"SKOPAQ_SCANNER_MAX_CANDIDATES": "7"}})
+    r = client.post(PATH, headers=AUTH, json={"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}})
     assert r.status_code == 200
     body = r.json()
-    assert body["changed"] == ["SKOPAQ_SCANNER_MAX_CANDIDATES"] and body["live"] == []
-    item = {s["key"]: s for s in body["settings"]}["SKOPAQ_SCANNER_MAX_CANDIDATES"]
+    assert body["changed"] == ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"] and body["live"] == []
+    item = {s["key"]: s for s in body["settings"]}["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]
     assert item["value"] == "7" and item["source"] == "dashboard"
     assert body["history"][0]["by"] == "dashboard:api-token"
-    assert len(client.sent) == 1 and "SKOPAQ_SCANNER_MAX_CANDIDATES" in client.sent[0]
+    assert len(client.sent) == 1 and "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE" in client.sent[0]
     assert "LIVE" not in client.sent[0]
 
 
 @pytest.mark.parametrize("change", [
     {"set": {"SKOPAQ_API_TOKEN": "x"}},
-    {"set": {"SKOPAQ_SCANNER_MAX_CANDIDATES": "lots"}},
+    {"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "lots"}},
     {"set": {"NOT_OURS": "1"}},
     {},
 ])
@@ -106,8 +106,8 @@ def test_live_needs_confirm_live(client):
 
 
 def test_reset(client):
-    client.post(PATH, headers=AUTH, json={"set": {"SKOPAQ_SCANNER_MAX_CANDIDATES": "7"}})
-    r = client.post(PATH, headers=AUTH, json={"remove": ["SKOPAQ_SCANNER_MAX_CANDIDATES"]})
-    assert r.status_code == 200 and r.json()["removed"] == ["SKOPAQ_SCANNER_MAX_CANDIDATES"]
-    item = {s["key"]: s for s in r.json()["settings"]}["SKOPAQ_SCANNER_MAX_CANDIDATES"]
+    client.post(PATH, headers=AUTH, json={"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}})
+    r = client.post(PATH, headers=AUTH, json={"remove": ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]})
+    assert r.status_code == 200 and r.json()["removed"] == ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]
+    item = {s["key"]: s for s in r.json()["settings"]}["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]
     assert item["source"] == "default" and item["value"] == "5"

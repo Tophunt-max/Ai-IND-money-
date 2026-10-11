@@ -1,7 +1,5 @@
-"""Scanner engine — background screening loop for trade candidates."""
+"""Watchlists (NIFTY 50). The swing scanner itself is ``skopaq.swing.engine``."""
 
-from skopaq.scanner.models import ScannerCandidate
 from skopaq.scanner.watchlist import Watchlist
-from skopaq.scanner.engine import ScannerEngine
 
-__all__ = ["ScannerCandidate", "Watchlist", "ScannerEngine"]
+__all__ = ["Watchlist"]

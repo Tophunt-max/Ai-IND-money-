@@ -101,14 +101,18 @@ In Claude Code, type:
 
 | Skill | File | Tools Used |
 |-------|------|-----------|
-| `/quote` | `.claude/skills/quote/SKILL.md` | `get_quote` |
-| `/analyze` | `.claude/skills/analyze/SKILL.md` | `gather_all_analysis_data`, `get_quote`, `recall_agent_memories`, `check_safety` |
-| `/scan` | `.claude/skills/scan/SKILL.md` | `get_quote`, `get_historical`, `WebSearch` |
-| `/portfolio` | `.claude/skills/portfolio/SKILL.md` | `get_positions`, `get_holdings`, `get_funds` |
-| `/trade` | `.claude/skills/trade/SKILL.md` | `get_quote`, `get_historical`, `get_funds`, `check_safety`, `place_order` |
+| `/quote` | `.claude/skills/quote/SKILL.md` | `get_quote` (called through Bash) |
+| `/analyze` | `.claude/skills/analyze/SKILL.md` | `swing_idea`, `get_quote`, `gather_market_data`, `check_safety`, `system_status` |
+| `/scan` | `.claude/skills/scan/SKILL.md` | `swing_ideas`, `get_quote` |
+| `/portfolio` | `.claude/skills/portfolio/SKILL.md` | `get_positions`, `get_holdings`, `get_funds` (called through Bash) |
+| `/trade` | `.claude/skills/trade/SKILL.md` | `swing_idea`, `get_quote`, `get_funds`, `check_safety`, `place_order` |
 | `/options` | `.claude/skills/options/SKILL.md` | `get_option_chain`, `suggest_option_trade`, `get_quote` |
 
 ## Best Practices
+
+### Report the Adaptive AI, don't replace it
+
+The Adaptive AI is the only decision-maker. A skill that touches trading should show its output (`swing_idea` / `swing_ideas`: setup, entry, stop, target, P(win) vs threshold) and never have Claude invent a BUY/SELL verdict, confidence or price levels — as `/analyze`, `/scan` and `/trade` do.
 
 ### Use MCP Tools, Not Code
 

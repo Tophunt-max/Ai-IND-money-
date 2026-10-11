@@ -1,4 +1,4 @@
-"""MCP Server for SkopaqTrader — exposes broker and analysis tools.
+"""MCP Server for SkopaqTrader — exposes broker, data, swing-model and backtest tools.
 
 Run as a standalone MCP server via stdio transport::
 
@@ -21,7 +21,6 @@ automatically discover these tools and make them available to the AI.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -37,7 +36,7 @@ mcp = FastMCP(
     instructions=(
         "SkopaqTrader MCP server for Indian equity and crypto trading. "
         "Provides real-time quotes, historical data, portfolio management, "
-        "AI-powered stock analysis, market scanning, and trade execution. "
+        "the Adaptive-AI swing ideas, backtests, and trade execution. "
         "Paper trading mode is the default — safe for experimentation."
     ),
 )
@@ -51,11 +50,8 @@ _infra_cache: dict = {}
 def _get_config():
     if "config" not in _infra_cache:
         from skopaq.config import SkopaqConfig
-        from skopaq.llm import bridge_env_vars
 
-        config = SkopaqConfig()
-        bridge_env_vars(config)
-        _infra_cache["config"] = config
+        _infra_cache["config"] = SkopaqConfig()
     return _infra_cache["config"]
 
 
@@ -222,158 +218,6 @@ async def get_orders() -> str:
 
 
 @mcp.tool()
-async def analyze_stock(symbol: str, date: str = "") -> str:
-    """Run full multi-agent AI analysis on a stock symbol.
-
-    Returns BUY/SELL/HOLD recommendation with confidence, entry/stop/target
-    prices, and reasoning. Takes 2-5 minutes.
-
-    Args:
-        symbol: Stock symbol (e.g. RELIANCE, TCS).
-        date: Trade date YYYY-MM-DD (defaults to today).
-    """
-    config = _get_config()
-
-    from skopaq.broker.paper_engine import PaperEngine
-    from skopaq.execution.executor import Executor
-    from skopaq.execution.order_router import OrderRouter
-    from skopaq.execution.safety_checker import SafetyChecker
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-    from skopaq.llm import build_llm_map
-    from skopaq.llm.model_tier import GEMINI_FLASH
-
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
-    router = OrderRouter(config, paper)
-    safety = SafetyChecker(
-        max_sector_concentration_pct=config.max_sector_concentration_pct
-    )
-    from skopaq.execution.pnl_history import seed_safety_checker
-    seed_safety_checker(safety, config)
-    executor = Executor(router, safety)
-
-    llm_map = build_llm_map()
-    is_crypto = config.asset_class == "crypto"
-    upstream = {
-        "llm_provider": "google",
-        "deep_think_llm": GEMINI_FLASH,
-        "quick_think_llm": GEMINI_FLASH,
-        "llm_map": llm_map,
-        "max_debate_rounds": config.max_debate_rounds,
-        "max_risk_discuss_rounds": config.max_risk_discuss_rounds,
-        "asset_class": config.asset_class,
-        "data_vendors": {
-            "core_stock_apis": "yfinance" if is_crypto else "indstocks,yfinance",
-            "technical_indicators": "yfinance",
-            "fundamental_data": "yfinance",
-            "news_data": "yfinance",
-        },
-        "yfinance_symbol_suffix": "" if is_crypto else ".NS",
-    }
-
-    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
-    graph = SkopaqTradingGraph(upstream, executor, selected_analysts=analysts)
-    result = await graph.analyze(symbol, date)
-
-    if result.error:
-        return json.dumps({"error": result.error})
-
-    signal = result.signal
-    output = {
-        "symbol": symbol,
-        "date": date,
-        "duration_seconds": result.duration_seconds,
-    }
-    if signal:
-        output.update({
-            "action": signal.action,
-            "confidence": signal.confidence,
-            "entry_price": signal.entry_price,
-            "stop_loss": signal.stop_loss,
-            "target": signal.target,
-            "reasoning": signal.reasoning[:500] if signal.reasoning else "",
-        })
-    else:
-        output["raw_decision"] = result.raw_decision[:500]
-
-    return json.dumps(output)
-
-
-@mcp.tool()
-async def scan_market(max_candidates: int = 5) -> str:
-    """Scan the market for top trading candidates using multi-model AI.
-
-    Args:
-        max_candidates: Maximum candidates to return (default 5).
-    """
-    config = _get_config()
-
-    from langchain_core.messages import HumanMessage
-
-    from skopaq.llm import build_llm_map, extract_text
-    from skopaq.llm.jev import get_jev
-    from skopaq.scanner import ScannerEngine, Watchlist
-
-    llm_map = build_llm_map()
-    watchlist = Watchlist()
-
-    async def quote_fetcher(symbols):
-        from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.scrip_resolver import resolve_scrip_code
-        from skopaq.broker.token_manager import TokenManager
-
-        token_mgr = TokenManager()
-        async with INDstocksClient(config, token_mgr) as client:
-            resolved = []
-            for sym in symbols:
-                try:
-                    code = await resolve_scrip_code(client, sym)
-                    resolved.append((sym, code))
-                except ValueError:
-                    pass
-            if not resolved:
-                return []
-            syms, codes = zip(*resolved)
-            raw = await client.get_quotes(list(codes), symbols=list(syms))
-            return [
-                {"symbol": q.symbol, "ltp": q.ltp, "open": q.open,
-                 "high": q.high, "low": q.low, "close": q.close, "volume": q.volume}
-                for q in raw
-            ]
-
-    async def _invoke(role, prompt):
-        llm = llm_map.get(role, llm_map.get("_default"))
-        if not llm:
-            return "[]"
-        resp = await llm.ainvoke([HumanMessage(content=prompt)])
-        return extract_text(resp.content)
-
-    scanner = ScannerEngine(
-        watchlist=watchlist,
-        max_candidates=max_candidates,
-        quote_fetcher=quote_fetcher,
-        llm_screener=lambda p: _invoke("market_analyst", p),
-        news_screener=lambda p: _invoke("news_analyst", p),
-        social_screener=lambda p: _invoke("social_analyst", p),
-        jev=get_jev(),
-    )
-    candidates = await scanner.scan_once()
-
-    return json.dumps([
-        {
-            "symbol": c.symbol,
-            "reason": c.reason,
-            "urgency": c.urgency,
-            "source": c.metrics.get("source"),
-            "catalyst_score": c.metrics.get("catalyst_score"),
-        }
-        for c in candidates[:max_candidates]
-    ])
-
-
-@mcp.tool()
 async def check_safety(
     symbol: str,
     quantity: int = 1,
@@ -442,29 +286,27 @@ async def check_safety(
 
 @mcp.tool()
 async def system_status() -> str:
-    """Check SkopaqTrader system health: version, mode, token status, LLMs."""
+    """Check SkopaqTrader system health: version, mode, token status, the swing model."""
     from skopaq import __version__
     from skopaq.broker.token_manager import TokenManager
 
     config = _get_config()
     health = TokenManager().get_health()
 
-    llms = []
-    for name, key_attr in [
-        ("Gemini", "google_api_key"), ("Claude", "anthropic_api_key"),
-        ("Perplexity", "perplexity_api_key"), ("Grok", "xai_api_key"),
-    ]:
-        if getattr(config, key_attr).get_secret_value():
-            llms.append(name)
-
     from skopaq.execution import kill_switch
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.model import swing_registry
+
+    reg = swing_registry(model_dir(config))
+    champ, shadow = reg.champion(), reg.shadow()
 
     return json.dumps({
         "version": __version__,
         "mode": config.trading_mode,
         "asset_class": config.asset_class,
         "token_valid": health.valid,
-        "llms": llms,
+        "swing_model": {"champion": champ["version"] if champ else None,
+                        "shadow": shadow["version"] if shadow else None},
         "paper_capital": config.initial_paper_capital,
         "trading": kill_switch.status().describe(),
     })
@@ -472,11 +314,11 @@ async def system_status() -> str:
 
 @mcp.tool()
 async def performance_report(days: int = 90) -> str:
-    """Track record: AI calls vs NIFTY, closed trades, confidence calibration.
+    """Track record: the engines' signals (qualified, executed, closed net), closed
+    trades, confidence calibration.
 
-    Forward results from the decision log and the trades table, in the
-    current trading mode. Below 30 settled calls the hit rate is mostly noise
-    (``enough_data`` is false).
+    Forward results from the signal journal and the trades table, in the current trading
+    mode. Below 30 closed signals the win rate is mostly noise (``enough_data`` false).
 
     Args:
         days: How many days back to include (default 90).
@@ -489,7 +331,8 @@ async def performance_report(days: int = 90) -> str:
     return json.dumps({
         "days": report.days,
         "mode": report.mode,
-        "calls": {**asdict(report.calls), "enough_data": report.calls.enough_data},
+        "signals": {**asdict(report.signals), "win_rate": report.signals.win_rate,
+                    "enough_data": report.signals.enough_data},
         "trades": {**asdict(report.trades), "win_rate": report.trades.win_rate},
         "calibration": [
             {"confidence": b.label, "trades": b.trades, "win_rate": b.win_rate}
@@ -719,7 +562,7 @@ async def suggest_option_trade(
     strategy: str = "SHORT_PUT",
     expiry_index: int = 0,
 ) -> str:
-    """AI-powered option trade suggestion. Analyzes the chain and recommends
+    """Rule-based option trade suggestion. Analyzes the chain and recommends
     the optimal strike to sell with full risk metrics.
 
     Strategies:
@@ -762,9 +605,8 @@ async def suggest_option_trade(
         return json.dumps({"error": str(exc)})
 
 
-# ── Data Gathering Tools (for Claude-native analysis) ────────────────────────
-# These tools fetch raw data that the multi-agent pipeline analysts need.
-# Claude Code reasons with this data directly — no separate LLM calls.
+# ── Data Gathering Tools ─────────────────────────────────────────────────────
+# Raw market, news, fundamentals and social data for an MCP client to read.
 
 
 def _setup_dataflow_config():
@@ -791,7 +633,7 @@ async def gather_market_data(symbol: str, date: str = "") -> str:
     """Gather OHLCV price data and all key technical indicators for a symbol.
 
     Returns stock data + RSI, MACD, Bollinger Bands, SMA, EMA, ATR, VWMA.
-    This is the data the Market Analyst uses for technical analysis.
+    Price history and technical indicators, for your own review.
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
@@ -846,8 +688,7 @@ async def gather_market_data(symbol: str, date: str = "") -> str:
 async def gather_news_data(symbol: str, date: str = "") -> str:
     """Gather company-specific news and global macroeconomic news.
 
-    Returns news articles from the past 7 days. This is the data the
-    News Analyst and Social Analyst use.
+    Returns news articles from the past 7 days, for your own review.
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
@@ -899,7 +740,7 @@ async def gather_news_data(symbol: str, date: str = "") -> str:
 async def gather_fundamentals_data(symbol: str, date: str = "") -> str:
     """Gather company profile, balance sheet, cash flow, and income statement.
 
-    This is the data the Fundamentals Analyst uses for financial evaluation.
+    Company financials, for your own review.
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
@@ -938,7 +779,7 @@ async def gather_fundamentals_data(symbol: str, date: str = "") -> str:
 async def gather_social_data(symbol: str, date: str = "") -> str:
     """Gather social media sentiment and company news for sentiment analysis.
 
-    This is the data the Social Media Analyst uses.
+    Social and news sentiment inputs, for your own review.
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
@@ -970,124 +811,10 @@ async def gather_social_data(symbol: str, date: str = "") -> str:
     })
 
 
-def _jev_failed(jev) -> str:
-    """quick_decision's error when a Jev request failed: where it went and why."""
-    return json.dumps({
-        "error": "Jev request failed",
-        "reason": jev.last_error or "no usable answer in the response",
-        "endpoint": jev.endpoint,
-        "model": jev.model,
-    })
-
-
-@mcp.tool()
-async def quick_decision(
-    text: str,
-    question: str,
-    options: list[str] | None = None,
-) -> str:
-    """Answer a question about a text with calibrated probabilities (TypeSafe Jev).
-
-    Takes about a tenth of a second, instead of a full LLM analysis. Use it
-    for semantic judgments: "Is this headline bullish for the stock?",
-    "Does this filing announce a buyback?", "Which of BUY / HOLD / SELL does
-    this note recommend?". Jev is weak at arithmetic and dates, so do not
-    ask it to compare numbers or work out when something happened.
-
-    Needs SKOPAQ_JEV_ENABLED=true and SKOPAQ_TYPESAFE_API_KEY.
-
-    Args:
-        text: The text to judge (a headline, report, filing excerpt, ...).
-        question: What to decide about the text. Without options it must be
-            a yes/no question.
-        options: Optional labels to choose between (2-10), e.g.
-            ["BUY", "HOLD", "SELL"]. Omit for a yes/no answer.
-    """
-    from skopaq.llm.jev import get_jev
-
-    if not text.strip() or not question.strip():
-        return json.dumps({"error": "text and question are required"})
-    labels = list(dict.fromkeys(o.strip() for o in options or [] if o.strip()))
-    if options is not None and not 2 <= len(labels) <= 10:
-        return json.dumps({"error": "options needs 2-10 distinct labels"})
-
-    jev = get_jev()
-    if jev is None:
-        return json.dumps({
-            "error": "Jev is off: set SKOPAQ_JEV_ENABLED=true and SKOPAQ_TYPESAFE_API_KEY",
-        })
-
-    instructions = f"About `text`: {question.strip()}"
-    if labels:
-        verdict = await jev.ask(
-            {"text": text},
-            {"type": "choice", "instructions": instructions,
-             "criteria": {label: label for label in labels}},
-        )
-        if verdict is None:
-            return _jev_failed(jev)
-        return json.dumps({
-            "answer": verdict.choice,
-            "confidence": round(verdict.confidence, 3),
-            "probabilities": {k: round(v, 3) for k, v in verdict.probabilities.items()},
-            "model": verdict.model,
-        })
-
-    result = await jev.noul({"text": text}, instructions)
-    if result is None:
-        return _jev_failed(jev)
-    probability, model = result
-    return json.dumps({
-        "answer": "yes" if probability >= 0.5 else "no",
-        "probability_yes": round(probability, 3),
-        "model": model,
-    })
-
-
-@mcp.tool()
-async def recall_agent_memories(situation_summary: str) -> str:
-    """Retrieve past lessons from agent memory using BM25 similarity search.
-
-    Searches the decision log (each past decision and, once settled, its
-    outcome and reflection) plus the per-agent lessons (bull, bear, trader,
-    invest_judge, risk_manager) recorded before the upstream v0.5.1 sync.
-
-    Args:
-        situation_summary: Description of current market situation
-            (typically a summary of the analyst reports).
-    """
-    config = _get_config()
-
-    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
-        return json.dumps({"memories": {}, "note": "Supabase not configured"})
-
-    try:
-        from skopaq.memory.store import MemoryStore
-        from supabase import create_client
-
-        client = create_client(
-            config.supabase_url,
-            config.supabase_service_key.get_secret_value(),
-        )
-        store = MemoryStore(client, max_entries=config.reflection_max_memory_entries)
-        memories = store.recall(situation_summary, n_matches=2)
-
-        return json.dumps({
-            "memories": memories,
-            "total_loaded": sum(len(v) for v in memories.values()),
-        })
-
-    except Exception as e:
-        logger.warning("Memory recall failed: %s", e)
-        return json.dumps({"memories": {}, "error": str(e)})
-
-
 @mcp.tool()
 async def gather_all_analysis_data(symbol: str, date: str = "") -> str:
-    """One-shot data gathering for the full multi-agent analysis pipeline.
-
-    Fetches market data, news, fundamentals, and social data in parallel,
-    plus agent memories. Returns a complete data bundle. Takes 10-30 seconds.
+    """One-shot data gathering: market data, news, fundamentals and social data in
+    parallel, as one bundle. Takes 10-30 seconds.
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
@@ -1114,13 +841,6 @@ async def gather_all_analysis_data(symbol: str, date: str = "") -> str:
         if isinstance(val, Exception):
             locals()[name] = json.dumps({"error": str(val)})
 
-    # Retrieve agent memories using a brief summary
-    summary = f"Analyzing {symbol} on {date}"
-    try:
-        memories = await recall_agent_memories(summary)
-    except Exception:
-        memories = json.dumps({"memories": {}})
-
     return json.dumps({
         "symbol": symbol,
         "date": date,
@@ -1128,78 +848,48 @@ async def gather_all_analysis_data(symbol: str, date: str = "") -> str:
         "news_data": json.loads(news) if isinstance(news, str) else {"error": str(news)},
         "fundamentals_data": json.loads(fundamentals) if isinstance(fundamentals, str) else {"error": str(fundamentals)},
         "social_data": json.loads(social) if isinstance(social, str) else {"error": str(social)},
-        "agent_memories": json.loads(memories) if isinstance(memories, str) else {"error": str(memories)},
     })
 
 
-@mcp.tool()
-async def save_trade_reflection(
-    symbol: str,
-    side: str,
-    entry_price: float,
-    exit_price: float,
-    pnl: float,
-    pnl_pct: float,
-    entry_reason: str = "",
-    exit_reason: str = "",
-) -> str:
-    """Generate and store a post-trade reflection to update agent memory.
+# ── Swing book (Adaptive AI) ─────────────────────────────────────────────────
 
-    This creates a lesson learned from the trade outcome so future
-    analyses benefit from past experience.
+
+@mcp.tool()
+async def swing_ideas(limit: int = 10, symbols: str = "") -> str:
+    """Today's swing ideas: daily setups ranked by the swing model (no orders).
 
     Args:
-        symbol: Stock symbol.
-        side: BUY or SELL.
-        entry_price: Entry fill price.
-        exit_price: Exit fill price.
-        pnl: Realized P&L in INR.
-        pnl_pct: P&L as percentage.
-        entry_reason: Why the entry signal was generated.
-        exit_reason: Why the position was closed.
+        limit: How many ideas.
+        symbols: Comma-separated NSE symbols (default the configured universe / NIFTY 50).
     """
+    from skopaq.cli.main import _swing_symbols
+    from skopaq.swing.engine import SwingEngine
+
     config = _get_config()
+    engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
+    ideas = await engine.scan(_swing_symbols(config, symbols), max(1, min(limit, 50)))
+    return json.dumps({"model": getattr(engine.model, "version", None),
+                       "model_state": engine.model_state,
+                       "threshold": getattr(engine.model, "threshold", None),
+                       "ideas": [i.as_dict() for i in ideas]}, default=str)
 
-    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
-        return json.dumps({"saved": False, "reason": "Supabase not configured"})
 
-    try:
-        from supabase import create_client
-        from skopaq.memory.reflection import generate_reflection, store_reflection
-        from skopaq.llm import build_llm_map
+@mcp.tool()
+async def swing_idea(symbol: str) -> str:
+    """One symbol's swing setup on its last closed daily bar and the model's probability
+    (null setup: none fired today).
 
-        llm_map = build_llm_map()
-        llm = llm_map.get("sell_analyst", llm_map.get("_default"))
+    Args:
+        symbol: NSE symbol (e.g. RELIANCE).
+    """
+    from skopaq.swing.engine import SwingEngine
 
-        reflection = await generate_reflection(
-            llm,
-            symbol=symbol,
-            side=side,
-            entry_price=entry_price,
-            exit_price=exit_price,
-            pnl=pnl,
-            pnl_pct=pnl_pct,
-            entry_reason=entry_reason,
-            exit_reason=exit_reason,
-        )
-
-        client = create_client(
-            config.supabase_url,
-            config.supabase_service_key.get_secret_value(),
-        )
-        store_reflection(
-            client,
-            symbol=symbol,
-            reflection=reflection,
-            pnl=pnl,
-            pnl_pct=pnl_pct,
-        )
-
-        return json.dumps({"saved": True, "reflection": reflection})
-
-    except Exception as e:
-        logger.warning("Reflection save failed: %s", e)
-        return json.dumps({"saved": False, "error": str(e)})
+    config = _get_config()
+    engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
+    idea = await engine.idea(symbol.strip().upper())
+    return json.dumps({"symbol": symbol.upper(), "model": getattr(engine.model, "version", None),
+                       "threshold": getattr(engine.model, "threshold", None),
+                       "idea": idea.as_dict() if idea else None}, default=str)
 
 
 # ── Strategy Refinement ──────────────────────────────────────────────────────

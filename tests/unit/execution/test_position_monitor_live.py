@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from skopaq.agents.sell_analyst import SellDecision
 from skopaq.broker.client import BrokerError
 from skopaq.broker.models import ExecutionResult, OrderRequest, OrderType, Side
 from skopaq.broker.paper_engine import PaperEngine
@@ -68,7 +67,7 @@ class Live:
     """A live monitor over PositionBroker, with its exits and late fills recorded."""
 
     def __init__(self, held, *, ltps=None, lag=False, wall=BASE_WALL, sell_on_stop=True,
-                 llm=None, **config):
+                 **config):
         self.clock = FakeClock(wall)
         self.broker = PositionBroker(self.clock, held, ltps=ltps, lag=lag)
         self.config = _config(**config)
@@ -87,8 +86,8 @@ class Live:
             self.late.append((tracked, conf))
 
         self.monitor = PositionMonitor(
-            self.executor, self.broker, self.router, self.config, llm=llm,
-            stop_event=self.stop, ai_enabled=llm is not None, on_exit=on_exit,
+            self.executor, self.broker, self.router, self.config,
+            stop_event=self.stop, on_exit=on_exit,
             sell_on_stop=sell_on_stop, on_late_fill=on_late_fill,
             sleep=self.clock.sleep, wall=self.clock.wall,
         )
@@ -306,26 +305,6 @@ async def test_an_intraday_position_is_left_to_the_broker(alerts, caplog):
 
 
 # ── The loop ─────────────────────────────────────────────────────────────────
-
-
-async def test_the_rest_of_a_partial_ai_exit_is_sold_next_without_asking_again(alerts):  # T6
-    live = Live({"TCS": (10, 100.0)}, ltps={TCS: 99.0}, llm=MagicMock())
-    partial = {"status": "PARTIALLY FILLED", "traded_qty": 4, "traded_price": "99"}
-    live.broker.by_symbol["TCS"] = [Script(timeline=[(0, partial)]), Script(), Script(),
-                                    Script(timeline=[(0, _filled(6, "99"))])]
-    decision = SellDecision(action="SELL", confidence=75, reasoning="RSI rolling over")
-
-    with patch("skopaq.execution.position_monitor.analyze_exit",
-               new=AsyncMock(return_value=decision)) as ai:
-        result = await live.run(stop_at=900)
-
-    orders = live.broker.placed_orders("TCS")
-    assert [int(o.request.quantity) for o in orders] == [10, 6, 6, 6]
-    ai.assert_awaited_once()                          # the remainder did not ask the AI again
-    [first, second] = [signal for signal, _ in live.exits]
-    assert second.reasoning == first.reasoning and "AI SELL" in second.reasoning
-    assert second.quantity == 6
-    assert result.sells_executed == 2 and result.positions_left == []
 
 
 async def test_an_unconfirmed_buy_keeps_the_monitor_alive_until_it_resolves(alerts):   # T7
@@ -769,7 +748,6 @@ async def test_an_order_like_an_uncertain_placement_is_watched_even_when_the_jou
     assert live.cancels(order_id) == []               # never cancelled
     assert [p.internal_id for p in live.router.registry.uncertain()] == ["abc"]   # counts on
     assert "placement-match:abc" in alerts.keys("CRITICAL")
-
 
 
 async def test_a_stuck_order_being_resumed_does_not_slow_another_positions_stop(alerts):

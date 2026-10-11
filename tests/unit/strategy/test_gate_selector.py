@@ -126,31 +126,37 @@ def test_candle_builder_closes_on_time_and_drops_duplicates_and_late_ticks():
 async def test_swing_buys_are_qualified_before_the_executor(tmp_path):
     from unittest.mock import AsyncMock
 
-    from skopaq.broker.models import TradingSignal
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
+    from skopaq.broker.models import ExecutionResult
+    from skopaq.swing.engine import SwingEngine, SwingIdea
+    from skopaq.swing.setups import Setup, SwingParams
 
-    executor = SimpleNamespace(execute_signal=AsyncMock(), _router=SimpleNamespace(mode="paper"))
-    graph = SkopaqTradingGraph({}, executor)
-    gate = SignalGate(journal=SignalJournal(tmp_path),
+    gate = SignalGate(journal=SignalJournal(tmp_path), model_dir=None, regime_dir=None,
                       rules=QualifyRules(require_reliable_regime=False, min_stop_pct=0.005,
                                          max_stop_pct=0.15))
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     daily = [Candle(today - timedelta(days=80 - i), 100 + i, 102 + i, 99 + i, 101 + i, 10_000)
              for i in range(80)]
 
-    async def candles(symbol):
-        return daily
-    graph.set_signal_gate(gate, candles)
-    sig = TradingSignal(symbol="TCS", action="BUY", confidence=80, entry_price=180.0)
-    assert await graph._qualify_swing(sig) is None             # 4 % stop, 2 R target
-    assert sig.agent_state["signal_id"]
-
-    async def none(symbol):
+    async def no_candles(symbol):
         return []
-    graph.set_signal_gate(gate, none)
-    refused = await graph._qualify_swing(TradingSignal(symbol="TCS", action="BUY",
-                                                       confidence=80, entry_price=180.0))
-    assert not refused.success and "Not qualified" in refused.rejection_reason
+
+    engine = SwingEngine(SimpleNamespace(), paper=True, gate=gate, candles=no_candles,
+                         params=SwingParams(rr=2.0))
+    executor = SimpleNamespace(execute_signal=AsyncMock(side_effect=lambda s, **k: ExecutionResult(
+        success=True, signal=s, mode="paper", fill_price=180.0)))
+    good = SwingIdea("TCS", Setup("breakout", 180.0, 172.8, 195.2, "test"), 0.7, 0.7, {}, daily)
+    result = await engine.trade(good, executor)                # 4 % stop, 2 R target
+    assert result.execution.success
+    sent = executor.execute_signal.await_args.args[0]
+    assert sent.agent_state["signal_id"] and sent.agent_state["target_rr"] == 2.0
+
+    executor.execute_signal.reset_mock()
+    refused = await engine.trade(
+        SwingIdea("TCS", Setup("breakout", 180.0, 172.8, 195.2, "test"), 0.7, 0.7, {}, []),
+        executor)
+    assert not refused.execution.success
+    assert "Not qualified" in refused.execution.rejection_reason
+    executor.execute_signal.assert_not_awaited()
     assert [r["status"] for r in SignalJournal(tmp_path).signals()] == ["QUALIFIED", "REJECTED"]
 
 

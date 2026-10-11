@@ -1,6 +1,6 @@
 # MCP Server Architecture
 
-The MCP (Model Context Protocol) server is how SkopaqTrader integrates with Claude Code and other AI assistants. It exposes 29 tools via the FastMCP framework over stdio transport.
+The MCP (Model Context Protocol) server is how SkopaqTrader integrates with Claude Code and other AI assistants. It exposes 26 tools via the FastMCP framework over stdio transport. The tools read data, the Adaptive AI's swing ideas and the track record, run safety checks and backtests, and place paper orders; no tool calls an LLM.
 
 ## What Is MCP?
 
@@ -14,9 +14,10 @@ AI Assistant (Claude Code)
   skopaq/mcp_server.py
        │
        ├── Broker API (INDstocks)
-       ├── LLM Providers (Gemini, Claude, Grok)
-       ├── Analysis Pipeline (LangGraph agents)
-       └── Memory Store (Supabase)
+       ├── Order router (paper engine) + SafetyChecker
+       ├── Swing engine + swing model registry (Adaptive AI)
+       ├── Data vendors (tradingagents/dataflows)
+       └── Signal journal / trade history
 ```
 
 ## FastMCP Framework
@@ -72,18 +73,16 @@ _infra_cache: dict = {}
 def _get_config():
     if "config" not in _infra_cache:
         from skopaq.config import SkopaqConfig
-        from skopaq.llm import bridge_env_vars
-        config = SkopaqConfig()
-        bridge_env_vars(config)
-        _infra_cache["config"] = config
+        _infra_cache["config"] = SkopaqConfig()
     return _infra_cache["config"]
 ```
 
-The first tool call triggers initialization of:
+At startup (`python -m skopaq.mcp_server`) the server applies the settings saved from the dashboard (`skopaq.env_overrides.apply()`), then waits on stdin. The first tool call that needs them builds:
 
-1. `SkopaqConfig` -- Loads `.env` and validates all settings
-2. `bridge_env_vars()` -- Copies `SKOPAQ_*` to standard env vars for upstream compatibility
-3. `OrderRouter` + `PaperEngine` -- Paper trading infrastructure (on first use)
+1. `SkopaqConfig` -- loads `.env` and validates all settings (`_get_config()`)
+2. `OrderRouter` + `PaperEngine` -- paper trading infrastructure (`_get_router()`)
+
+The data tools (`gather_*`, `backtest_strategy`, `run_monte_carlo_test`) also call `_setup_dataflow_config()`, which sets the vendored `tradingagents/dataflows` config for `route_to_vendor`: INDstocks then yfinance for prices (yfinance only for crypto), yfinance for indicators, fundamentals and news, with the `.NS` suffix for NSE symbols. The swing tools build a `SwingEngine` from the config on each call.
 
 Subsequent calls reuse cached objects.
 
@@ -102,17 +101,18 @@ async def get_quote(symbol: str) -> str:
 
 ## Tool Categories
 
-The 29 tools are organized into categories:
+The 26 tools are organized into categories:
 
 | Category | Tools | Source |
 |----------|-------|--------|
 | Market Data | `get_quote`, `get_historical` | INDstocks |
 | Portfolio | `get_positions`, `get_holdings`, `get_funds`, `get_orders` | Order router (paper engine) |
-| Analysis | `analyze_stock`, `scan_market`, `check_safety`, `quick_decision` | LLM pipeline |
-| Data Gathering | `gather_*` (5 tools), `recall_agent_memories`, `save_trade_reflection` | Dataflows / Supabase |
-| Execution | `place_order`, `system_status`, `halt_trading`, `resume_trading` | Order router / kill switch |
+| Swing Ideas | `swing_ideas`, `swing_idea` | Swing engine + swing model (Adaptive AI) |
+| Safety | `check_safety` | SafetyChecker (paper rules) |
+| Data Gathering | `gather_*` (5 tools) | Dataflows |
+| Execution & System | `place_order`, `system_status`, `halt_trading`, `resume_trading` | Order router / kill switch / swing registry |
 | Options | `get_option_chain`, `suggest_option_trade` | INDstocks |
-| Learning | `performance_report`, `backtest_strategy`, `run_monte_carlo_test`, `get_learning_insights`, `get_symbol_stats`, `evolve_strategy` | Trade history / backtester |
+| Learning | `performance_report`, `backtest_strategy`, `run_monte_carlo_test`, `get_learning_insights`, `get_symbol_stats`, `evolve_strategy` | Signal journal, trade history, backtester |
 
 `place_order` is the only order tool. GTT, bracket, cover, basket, AMO, F&O order and mutual fund tools were removed with Kite Connect.
 
@@ -149,10 +149,11 @@ docker run -it --env-file .env samuelvinay91/skopaq:latest mcp
 
 | File | Purpose |
 |------|---------|
-| `skopaq/mcp_server.py` | MCP server with all 29 tool definitions |
+| `skopaq/mcp_server.py` | MCP server with all 26 tool definitions |
 | `.claude/.mcp.json` | Claude Code MCP server configuration |
 | `skopaq/config.py` | Configuration loaded by `_get_config()` |
-| `skopaq/llm/env_bridge.py` | Environment variable bridging |
+| `skopaq/env_overrides.py` | Settings saved from the dashboard, applied at startup |
+| `skopaq/swing/engine.py` | Swing engine behind `swing_ideas` / `swing_idea` |
 | `skopaq/broker/client.py` | INDstocks broker client |
 | `skopaq/broker/fno.py` | F&O underlyings, expiries, lot sizes, contracts |
 | `skopaq/options/chain.py` | Option chain fetcher (INDstocks) |

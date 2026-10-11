@@ -1,151 +1,61 @@
-# Multi-Agent Pipeline
+# Trading Pipeline (Adaptive AI)
 
-The core of SkopaqTrader is a 15-agent LangGraph pipeline that produces trading decisions through structured debate and multi-perspective analysis. This page describes the architecture in detail.
+SkopaqTrader has **one decision-maker: the Adaptive AI** — machine-learning models trained on our own market data, signals and trades. There is no LLM and no API AI anywhere in the trading path.
 
-## Overview
+## The three books
 
-The pipeline is built on the vendored [TradingAgents v0.2.0](https://github.com/TauricResearch/TradingAgents) framework (Apache 2.0), extended by `skopaq/graph/skopaq_graph.py`.
+| Book | Engine | Decides with | Command |
+|------|--------|--------------|---------|
+| Swing (delivery, out the same day) | `skopaq/swing/engine.py` | daily setups + the swing model | `skopaq daemon`, `skopaq scan` |
+| Intraday scalps | `skopaq/scalping/engine.py` | rule strategies, adaptive models, RL policies | `skopaq scalp` |
+| F&O (options buying) | `skopaq/scalping/fno_engine.py` | index setups + adaptive models | `skopaq fno` |
+
+All three send every entry through the same `SignalGate` (`skopaq/strategy/gate.py`) and the same `Executor` → `SafetyChecker` → `OrderRouter`.
+
+## Swing book
 
 ```
-Raw Data → 4 Analysts → Bull/Bear Debate → Research Manager
-    → Trader → 3-Way Risk Debate → Risk Manager → Trade Signal
+PRE_OPEN   load the swing model (champion; on paper the shadow if there is no champion)
+SCANNING   SwingEngine.scan(universe)
+             for each symbol: a year of daily candles (today's forming bar dropped)
+             → the setup on the last closed bar (trend_pullback / breakout / oversold_bounce)
+             → point-in-time features → the model's P(win)
+             → kept when P(win) ≥ the threshold chosen on validation data; best first
+TRADING    SwingEngine.trade(idea)
+             → SignalGate.decide: net reward/risk after delivery charges, data quality,
+               stop distance 0.5–15 %, journalled QUALIFIED / REJECTED
+             → Executor: ATR position sizing, regime and calendar scaling,
+               SafetyChecker (kill switch, limits, funds), paper or live
+             → exit plan: the setup's ATR stop and its R-multiple target
+MONITORING PositionMonitor: stop, target (partial booking), trailing, EOD exit at 15:20
+CLOSING    sells what is still held; REPORTING sends the session summary
 ```
 
-Total agents: 15. Total LLM calls: 12-15 (some agents use the same model).
+Without a usable model the swing book makes **no entries**. `SKOPAQ_SWING_RULES_ONLY=true` lets a paper account trade the raw setups (ranked by trend strength) to collect a record; it is ignored on a live account.
 
-## LangGraph State Machine
+### Setups
 
-The pipeline is a LangGraph directed graph where each node is an agent. State flows forward through the graph, accumulating analyst reports, debate arguments, and decisions.
+Rules on closed daily bars (`skopaq/swing/setups.py`); the first that fires wins:
 
-```python
-# Simplified graph structure
-graph = StateGraph(AnalysisState)
-graph.add_node("market_analyst", market_analyst_fn)
-graph.add_node("social_analyst", social_analyst_fn)
-graph.add_node("news_analyst", news_analyst_fn)
-graph.add_node("fundamentals_analyst", fundamentals_analyst_fn)
-graph.add_node("bull_researcher", bull_fn)
-graph.add_node("bear_researcher", bear_fn)
-graph.add_node("research_manager", judge_fn)
-graph.add_node("trader", trader_fn)
-graph.add_node("aggressive_debator", agg_fn)
-graph.add_node("conservative_debator", cons_fn)
-graph.add_node("neutral_debator", neut_fn)
-graph.add_node("risk_manager", risk_judge_fn)
-```
+| Setup | When |
+|-------|------|
+| `trend_pullback` | close > SMA50 > SMA200, EMA20 > SMA50, a low within 1 % of EMA20, green bar above EMA20, RSI 40–65 |
+| `breakout` | close above the 20-day high on > 1.5× average volume, closing in the top 30 % of the bar, above SMA50 |
+| `oversold_bounce` | above SMA200, yesterday's RSI < 35, close above yesterday's high |
 
-## Phase Details
+Entry = the last close; stop = entry − `SKOPAQ_ATR_MULTIPLIER` × ATR(14); target = entry + `SKOPAQ_SWING_TARGET_RR` × risk.
 
-### Phase 1: Data Gathering
+### The swing model
 
-Before agents run, raw data is fetched via the dataflow layer:
+`skopaq/swing/model.py`:
 
-| Data Type | Source | Module |
-|-----------|--------|--------|
-| OHLCV prices | INDstocks / yfinance | `tradingagents/dataflows/` |
-| Technical indicators | Computed (RSI, MACD, etc.) | `tradingagents/dataflows/` |
-| Company news | News APIs | `tradingagents/dataflows/` |
-| Insider transactions | Financial APIs | `tradingagents/dataflows/` |
-| Social sentiment | News/social APIs | `tradingagents/dataflows/` |
-| Fundamentals | yfinance | `tradingagents/dataflows/` |
+1. **Dataset** — every historical bar where a setup fired, with its features (returns, RSI, ATR %, distance to the moving averages, SMA50 slope, volume ratio, range position, gap, the setup) and the outcome of trading it: buy at the next open plus slippage, stop first, then target, else out at that day's close — the same-day exit the live book makes — **net of delivery charges**.
+2. **Split by date** — train (60 %), validation (15 %: picks the probability threshold), test (the latest 25 %, never seen).
+3. **Gates** — the model becomes a **shadow** only if, on the test dates, it has enough samples and taken trades, beats taking every setup, has a profit factor ≥ 1.1, a 90 % expectancy CI above zero, no worse drawdown and a better Brier score. Otherwise it stays a **candidate**.
+4. **Promotion** — after the shadow period (`SafetyRules`, 7 days) an admin promotes it to **champion** (`skopaq swing-promote`, dashboard AI learning page). Live sessions trade only a champion. `skopaq swing-rollback` restores the previous one.
 
-### Phase 2: Analyst Reports
+Bundles are pickle-free (the model library's own format, the pipeline as JSON, a SHA-256 manifest verified on every load); a tampered bundle is refused and the book makes no entries.
 
-Four analysts run concurrently, each producing a detailed report:
+## What the AI cannot change
 
-**Market Analyst** -- Selects 8 most relevant technical indicators, provides fine-grained trend analysis (not just "mixed"), appends a summary table.
-
-**Social Analyst** -- Analyzes social media posts, company news, public sentiment. Reports implications for traders.
-
-**News Analyst** -- Covers company-specific news, global macro trends, and insider transactions.
-
-**Fundamentals Analyst** -- Deep dive into balance sheet, cash flow, income statement, and company profile.
-
-### Phase 3: Bull/Bear Debate
-
-Two researchers take opposing positions:
-
-- **Bull Researcher**: Growth potential, competitive advantages, positive indicators
-- **Bear Researcher**: Risks, challenges, negative indicators, counterpoints to bull
-
-The debate runs for `max_debate_rounds` rounds (configurable, default 1).
-
-### Phase 4: Research Manager
-
-The judge role (Claude Opus 5) evaluates the debate and makes a definitive decision. It is instructed to NOT default to HOLD -- it must commit to a stance backed by the strongest arguments.
-
-### Phase 5: Trader
-
-Translates the research manager's recommendation into a concrete trade with entry, stop-loss, and target prices.
-
-### Phase 6: Risk Debate
-
-Three risk analysts with different philosophies debate the trader's plan:
-
-- **Aggressive**: Emphasizes upside potential, questions conservative caution
-- **Conservative**: Emphasizes protection, questions aggressive optimism
-- **Neutral**: Balances both, challenges extremes
-
-The debate runs for `max_risk_discuss_rounds` rounds (configurable, default 1).
-
-### Phase 7: Risk Manager
-
-The final judge (Claude Opus 5) produces the ultimate decision with:
-
-- BUY/SELL/HOLD recommendation
-- Confidence score (0-100)
-- Refined trading plan
-
-## Model Assignment
-
-| Agent | Provider | Model | Why |
-|-------|----------|-------|-----|
-| Market Analyst | Google | gemini-3.8-flash | Fast, cost-effective for data analysis |
-| Social Analyst | OpenRouter | x-ai/grok-4.6 | Strong at social sentiment |
-| News Analyst | Google | gemini-3.8-flash | Handles news well |
-| Fundamentals Analyst | Google | gemini-3.8-flash | Good with financial data |
-| Bull/Bear Researchers | Google | gemini-3.8-flash | Fast for debate |
-| Research Manager | Anthropic | claude-opus-5 | Strongest reasoning for judge role |
-| Trader | Google | gemini-3.8-flash | Action-oriented |
-| Risk Debaters (3) | Google | gemini-3.8-flash | Fast for multi-round debate |
-| Risk Manager | Anthropic | claude-opus-5 | Strongest reasoning for final decision |
-
-Model assignments are configured in `skopaq/llm/model_tier.py`. Each role has a fallback chain -- if the primary provider is unavailable, it falls back to the next option.
-
-## Agent Memory
-
-Each agent role has persistent memory backed by Supabase using BM25 similarity search. Five memory roles store lessons from past trades:
-
-- `bull_memory` -- Lessons for the bull researcher
-- `bear_memory` -- Lessons for the bear researcher
-- `trader_memory` -- Lessons for the trader
-- `invest_judge_memory` -- Lessons for the research manager
-- `risk_manager_memory` -- Lessons for the risk manager
-
-Before each analysis, relevant past lessons are retrieved and injected into the agent prompts.
-
-## Entry Points
-
-| Method | Module | Description |
-|--------|--------|-------------|
-| `SkopaqTradingGraph.analyze()` | `skopaq/graph/skopaq_graph.py` | Primary entry point |
-| `analyze_stock` MCP tool | `skopaq/mcp_server.py` | MCP-accessible |
-| `skopaq analyze` CLI | `skopaq/cli/main.py` | Command line |
-| `/analyze` Telegram | `skopaq/telegram_bot.py` | Telegram bot |
-
-## Configuration
-
-```bash
-# Number of bull/bear debate rounds
-SKOPAQ_MAX_DEBATE_ROUNDS=1
-
-# Number of risk debate rounds
-SKOPAQ_MAX_RISK_DISCUSS_ROUNDS=1
-
-# Which analysts to include
-SKOPAQ_SELECTED_ANALYSTS=market_analyst,news_analyst,fundamentals_analyst,social_analyst
-```
-
-## Upstream Modifications
-
-Changes to the vendored `tradingagents/` code are minimal and documented in `UPSTREAM_CHANGES.md`. The `skopaq/` layer wraps the upstream pipeline without modifying its core logic.
+`SafetyRules` (`skopaq/constants.py`), the loss limits, the kill switch, position and order caps, the stop on every BUY and paper-by-default are outside every model. Learning only decides *which* qualified setups to take.

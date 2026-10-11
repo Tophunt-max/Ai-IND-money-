@@ -1,0 +1,143 @@
+"""Telegram bot: only allow-listed chats; commands only, no LLM chat."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+pytest.importorskip("telegram")
+
+from skopaq import telegram_bot  # noqa: E402
+
+
+def _update(chat_id: int):
+    message = MagicMock()
+    message.chat.id = chat_id
+    message.reply_text = AsyncMock()
+    message.chat.send_action = AsyncMock()
+    return SimpleNamespace(effective_chat=SimpleNamespace(id=chat_id), message=message)
+
+
+@pytest.fixture
+def allow(monkeypatch):
+    monkeypatch.setenv("SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS", "111, -222")
+
+
+@pytest.mark.asyncio
+async def test_strangers_get_only_their_chat_id(allow):
+    handler = AsyncMock()
+    update = _update(999)
+
+    await telegram_bot.authorized(handler)(update, MagicMock())
+
+    handler.assert_not_awaited()
+    assert "999" in update.message.reply_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_allow_listed_chats_reach_the_handler(allow):
+    handler = AsyncMock()
+    for chat_id in (111, -222):  # group chats have negative IDs
+        await telegram_bot.authorized(handler)(_update(chat_id), MagicMock())
+    assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_allow_list_answers_nobody(monkeypatch):
+    monkeypatch.delenv("SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.delenv("SKOPAQ_TELEGRAM_CHAT_ID", raising=False)
+    handler = AsyncMock()
+    await telegram_bot.authorized(handler)(_update(111), MagicMock())
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owner_notification_chat_is_allowed(monkeypatch):
+    monkeypatch.delenv("SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.setenv("SKOPAQ_TELEGRAM_CHAT_ID", "555")
+    handler = AsyncMock()
+    await telegram_bot.authorized(handler)(_update(555), MagicMock())
+    handler.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_halt_and_resume_commands(allow, tmp_path, monkeypatch):
+    from skopaq.execution import kill_switch
+
+    monkeypatch.setenv("SKOPAQ_HALT_FILE", str(tmp_path / "HALT"))
+    update = _update(111)
+
+    await telegram_bot.cmd_halt(update, SimpleNamespace(args=["results", "day"]))
+    assert kill_switch.status(use_cache=False).reason == "results day"
+    assert "HALTED" in update.message.reply_text.await_args.args[0]
+
+    await telegram_bot.cmd_resume(update, SimpleNamespace(args=[]))
+    assert not kill_switch.status(use_cache=False).halted
+
+
+
+def _health(valid, remaining_s=None, warning=""):
+    from datetime import timedelta
+
+    return SimpleNamespace(
+        valid=valid, warning=warning,
+        remaining=timedelta(seconds=remaining_s) if remaining_s is not None else None)
+
+
+@pytest.mark.asyncio
+async def test_token_command_reports_the_indstocks_token(allow, monkeypatch):
+    update = _update(111)
+    monkeypatch.setattr(telegram_bot, "_token_health", lambda: _health(True, 5 * 3600 + 60))
+    await telegram_bot.cmd_token(update, MagicMock())
+    assert update.message.reply_text.await_args.args[0] == "INDstocks token valid (5h 1m left)."
+
+    monkeypatch.setattr(telegram_bot, "_token_health", lambda: _health(False))
+    await telegram_bot.cmd_token(update, MagicMock())
+    text = update.message.reply_text.await_args.args[0]
+    assert "missing or expired" in text and "Broker page" in text
+
+
+@pytest.mark.asyncio
+async def test_pre_market_job_sends_the_token_status(monkeypatch):
+    from datetime import datetime
+
+    from skopaq.risk.calendar import IST
+
+    monkeypatch.setenv("SKOPAQ_NSE_HOLIDAYS", "")
+    monkeypatch.setattr("skopaq.risk.calendar.now_ist",
+                        lambda: datetime(2026, 10, 8, 9, 0, tzinfo=IST))  # a Thursday
+    monkeypatch.setattr(telegram_bot, "alert_chat_ids", {111})
+    monkeypatch.setattr(telegram_bot, "_token_health", lambda: _health(False))
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    await telegram_bot.job_pre_market_token(context)
+    text = context.bot.send_message.await_args.kwargs["text"]
+    assert "INDstocks token missing" in text
+
+
+def test_bot_has_no_kite_login():
+    assert not hasattr(telegram_bot, "cmd_login")
+    assert not hasattr(telegram_bot, "_kite_token")
+
+
+@pytest.mark.asyncio
+async def test_market_jobs_skip_non_trading_days(monkeypatch):
+    from datetime import datetime
+
+    from skopaq.risk.calendar import IST
+
+    monkeypatch.setenv("SKOPAQ_NSE_HOLIDAYS", "")
+    monkeypatch.setattr("skopaq.risk.calendar.now_ist",
+                        lambda: datetime(2026, 10, 2, 9, 0, tzinfo=IST))  # a holiday
+    monkeypatch.setattr(telegram_bot, "alert_chat_ids", {111})
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    for job in (telegram_bot.job_pre_market_token, telegram_bot.job_market_scan,
+                telegram_bot.job_eod_summary):
+        await job(context)
+
+    context.bot.send_message.assert_not_awaited()

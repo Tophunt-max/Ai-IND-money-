@@ -36,7 +36,7 @@ async def _record(tracked, conf, repo):
     from skopaq.cli.main import _record_late_fill
 
     with patch("skopaq.cli.main._trade_repository", return_value=repo):
-        return await _record_late_fill(MagicMock(), None, None, tracked, conf)
+        return await _record_late_fill(MagicMock(), tracked, conf)
 
 
 async def test_a_late_buy_fill_updates_its_open_row():   # T11
@@ -81,10 +81,10 @@ async def test_a_stuck_exit_filling_later_is_recorded_as_an_exit_of_the_extra_sh
     from skopaq.cli.main import _record_late_fill
 
     with patch("skopaq.cli.main._record_exit", new_callable=AsyncMock) as record:
-        await _record_late_fill(MagicMock(), None, None,
+        await _record_late_fill(MagicMock(),
                                 _tracked("SELL", reported=4, price=95), _conf(10, "96.2"))
 
-    _config, _graph, _store, signal, execution = record.await_args.args
+    _config, signal, execution = record.await_args.args
     assert (signal.action, signal.quantity, signal.order_type.value) == ("SELL", 6, "MARKET")
     assert signal.entry_price == pytest.approx(97.0)          # (96.2×10 − 95×4) / 6
     assert (execution.success, execution.mode, execution.outcome) == (True, "live", "late_fill")
@@ -109,9 +109,9 @@ async def test_a_late_exit_fill_without_a_broker_price_uses_an_estimate(monkeypa
     tracked = _tracked("SELL")
     tracked.signal = TradingSignal(symbol="TCS", action="SELL", entry_price=94.0)
     with patch("skopaq.cli.main._record_exit", new_callable=AsyncMock) as record:
-        await _record_late_fill(MagicMock(), None, None, tracked, _conf(10, None))
+        await _record_late_fill(MagicMock(), tracked, _conf(10, None))
 
-    _config, _graph, _store, signal, execution = record.await_args.args
+    _config, signal, execution = record.await_args.args
     assert signal.entry_price == 94.0 and execution.fill_price == 94.0   # never a P&L of 0
     assert execution.fill_price_source == "estimate"
     assert "fill-price-unknown:EQ-1" in spy.keys("WARNING")
@@ -125,7 +125,7 @@ async def test_a_late_exit_fill_with_no_price_at_all_leaves_the_rows_open(monkey
     spy = AlertSpy()
     monkeypatch.setattr(order_alerts, "_alerter", spy)
     with patch("skopaq.cli.main._record_exit", new_callable=AsyncMock) as record:
-        await _record_late_fill(MagicMock(), None, None, _tracked("SELL"), _conf(10, None))
+        await _record_late_fill(MagicMock(), _tracked("SELL"), _conf(10, None))
 
     record.assert_not_awaited()                                # not booked at break-even
     assert "exit-late-unpriced:EQ-1" in spy.keys("CRITICAL")
@@ -188,7 +188,7 @@ async def test_a_late_exit_fill_is_booked_only_if_the_exit_was(monkeypatch):
     for booked in (True, False):
         with patch("skopaq.cli.main._record_exit", new_callable=AsyncMock,
                    return_value=booked) as record:
-            assert await _record_late_fill(MagicMock(), None, None,
+            assert await _record_late_fill(MagicMock(),
                                            _tracked("SELL", reported=4, price=95),
                                            _conf(10, "96.2")) is booked
         assert record.await_args.kwargs == {"rollback_unbooked": True}
@@ -203,6 +203,6 @@ async def test_a_late_exit_fill_with_no_price_at_all_is_left_to_the_user(monkeyp
 
     monkeypatch.setattr(order_alerts, "_alerter", AlertSpy())
     with patch("skopaq.cli.main._record_exit", new_callable=AsyncMock) as record:
-        assert await _record_late_fill(MagicMock(), None, None, _tracked("SELL"),
+        assert await _record_late_fill(MagicMock(), _tracked("SELL"),
                                        _conf(10, None)) is True
     record.assert_not_awaited()

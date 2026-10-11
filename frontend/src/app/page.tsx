@@ -2,13 +2,14 @@
 
 import {
   Activity, ArrowRight, Brain, CalendarClock, Cpu, Database, LineChart,
-  MessagesSquare, OctagonX, PlugZap, Radar, RefreshCw, TrendingUp, Wallet, Zap,
+  FlaskConical, OctagonX, PlugZap, Radar, RefreshCw, TrendingUp, Wallet, Zap,
 } from "lucide-react";
 import Link from "next/link";
 
 import { BarChart, EquityChart } from "@/components/charts";
 import ModeSwitch, { useModeChanged } from "@/components/ModeSwitch";
 import RiskCapacity from "@/components/RiskCapacity";
+import type { SwingStatus } from "@/components/SwingModel";
 import {
   Badge, Button, Card, Change, Empty, ErrorBox, Notice, pnlClass, Segmented, Skeleton, StatCard,
 } from "@/components/ui";
@@ -22,7 +23,7 @@ interface SystemStatus {
   version: string;
   mode: string;
   broker: { name: string; token_valid: boolean; token_remaining: string | null; token_warning: string | null };
-  services: { supabase: boolean; redis: boolean; llms: Record<string, boolean> };
+  services: { supabase: boolean; redis: boolean };
 }
 
 interface Position {
@@ -88,10 +89,11 @@ export default function Home() {
   const ov = useApi<Overview>("/api/dashboard/overview", open ? 15000 : 60000);
   const pnl = useApi<PnlHistory>(`/api/dashboard/pnl-history?days=${days}`, 120000);
   const sched = useApi<SchedulerStatus>("/api/dashboard/scheduler", 60000);
+  const swing = useApi<SwingStatus>("/api/dashboard/swing", 300000);
 
   const s = status.data;
   const o = ov.data;
-  const llms = s ? Object.entries(s.services.llms).filter(([, v]) => v).map(([k]) => k) : [];
+  const sw = swing.data;
   const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   const todayDaemon = sched.data?.days.find((d) => d.date === todayKey)?.jobs.daemon;
   const total = o ? o.realized_pnl + (o.unrealized_pnl || 0) : null;
@@ -256,8 +258,8 @@ export default function Home() {
                   detail={o?.database === "ok" ? "Connected" : s.services.supabase ? "Configured" : "Not configured"} />
                 <StatusRow icon={Zap} label="Upstash Redis" value="" ok={s.services.redis ? true : null}
                   detail={s.services.redis ? "Connected" : "Not configured (optional)"} />
-                <StatusRow icon={Brain} label="LLM models" value="" ok={llms.length > 0}
-                  detail={llms.join(", ") || "No LLM keys configured"} />
+                <StatusRow icon={Brain} label="Adaptive AI · swing model" value="" ok={sw ? (sw.active ? true : sw.rules_only ? null : false) : null}
+                  detail={!sw ? (swing.error ? "Unavailable" : "…") : sw.active ? `${sw.active} (${sw.active === sw.champion ? "champion" : "shadow"})` : sw.rules_only ? "No model · rules only (paper)" : "No model trained yet"} />
               </div>
             ) : !status.error ? <div className="space-y-2"><Skeleton className="h-9" /><Skeleton className="h-9" /></div> : null}
           </Card>
@@ -269,10 +271,10 @@ export default function Home() {
       {/* Quick actions */}
       <div className="grid grid-cols-4 gap-2">
         {[
-          { href: "/analyze", label: "Analyze", icon: Brain },
           { href: "/market", label: "Charts", icon: LineChart },
-          { href: "/scanner", label: "Scan", icon: Radar },
-          { href: "/chat", label: "Ask AI", icon: MessagesSquare },
+          { href: "/scanner", label: "Swing scan", icon: Radar },
+          { href: "/backtest", label: "Backtest", icon: FlaskConical },
+          { href: "/learning", label: "AI learning", icon: Brain },
         ].map((a) => (
           <Link key={a.href} href={a.href}
             className="surface flex flex-col items-center gap-1.5 p-3 text-center text-[11px] font-semibold text-gray-300 transition hover:border-brand-500/30 hover:text-white sm:flex-row sm:justify-center sm:text-[13px]">

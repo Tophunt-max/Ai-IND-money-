@@ -1,20 +1,17 @@
 "use client";
 
-import { CalendarClock, CheckCheck, FileText, RefreshCw, X } from "lucide-react";
+import { CalendarClock, FileText, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
 
-import { useAuth } from "@/components/AuthGate";
-import { Badge, Button, Card, Empty, ErrorBox, Notice, PageTitle, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, Empty, ErrorBox, PageTitle, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
-import { useApi, useJob } from "@/lib/hooks";
+import { useApi } from "@/lib/hooks";
 import { rcLabel, type SchedulerStatus } from "@/lib/scheduler";
 
 export default function SchedulerPage() {
-  const { isAdmin } = useAuth();
   const { data, error, loading, reload } = useApi<SchedulerStatus>("/api/dashboard/scheduler", 60000);
   const [log, setLog] = useState<{ day: string; job: string; lines: string[] } | null>(null);
   const [logErr, setLogErr] = useState<string | null>(null);
-  const settle = useJob();
 
   const openLog = async (day: string, job: string) => {
     setLogErr(null);
@@ -25,22 +22,12 @@ export default function SchedulerPage() {
     }
   };
 
-  const runSettle = () => {
-    if (!confirm("Settle past AI decisions now? It scores their outcome and writes reflections (LLM calls). No orders are placed.")) return;
-    settle.start({ kind: "settle" });
-  };
-
   return (
     <div className="space-y-3 sm:space-y-4">
       <PageTitle title="Scheduler" icon={CalendarClock} subtitle="One autonomous session per NSE trading day"
-        right={<>
-          {isAdmin && <Button variant="ghost" icon={CheckCheck} loading={settle.running} onClick={runSettle}>Settle now</Button>}
-          <Button variant="ghost" icon={RefreshCw} onClick={reload}>Refresh</Button>
-        </>} />
+        right={<Button variant="ghost" icon={RefreshCw} onClick={reload}>Refresh</Button>} />
 
-      <ErrorBox error={error || (data && !data.ok ? data.error : null) || settle.error || (settle.job?.status === "failed" ? settle.job.error : null)} />
-      {settle.job?.status === "done" && <Notice tone="ok">Settled {settle.job.result?.settled ?? 0} decisions.</Notice>}
-      {settle.running && <Notice tone="info">Settling past decisions (LLM reflections, can take a few minutes)...</Notice>}
+      <ErrorBox error={error || (data && !data.ok ? data.error : null)} />
 
       {loading && !data ? <Skeleton className="h-40" /> : data?.ok ? (
         <>
@@ -74,7 +61,6 @@ export default function SchedulerPage() {
                             <button className="link flex items-center gap-1 text-xs" onClick={() => openLog(d.date, "daemon")}>
                               <FileText className="h-3.5 w-3.5" /> Log
                             </button>
-                            {d.jobs.settle && <button className="link text-xs" onClick={() => openLog(d.date, "settle")}>Settle</button>}
                           </div>
                         )}
                       </div>

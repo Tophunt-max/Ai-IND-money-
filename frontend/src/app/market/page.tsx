@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Brain, NotebookPen, Radar, Search, Star } from "lucide-react";
+import { ArrowLeft, Radar, Search, Star } from "lucide-react";
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -219,13 +219,11 @@ function Detail({ symbol, every, back }: { symbol: string; every: number; back: 
 
       {!isIndex && <AnalysisPanel symbol={symbol} />}
 
-      {/* Order / analysis actions: fixed above the tab bar on a phone */}
+      {/* Order actions: fixed above the tab bar on a phone */}
       {isAdmin && !isIndex && (
-        <div className="fixed inset-x-0 bottom-[calc(3.6rem+env(safe-area-inset-bottom))] z-20 grid grid-cols-4 gap-2 border-t border-white/[0.06] bg-ink-950/95 p-2 backdrop-blur lg:static lg:border-0 lg:bg-transparent lg:p-0">
+        <div className="fixed inset-x-0 bottom-[calc(3.6rem+env(safe-area-inset-bottom))] z-20 grid grid-cols-2 gap-2 border-t border-white/[0.06] bg-ink-950/95 p-2 backdrop-blur lg:static lg:border-0 lg:bg-transparent lg:p-0">
           <Link href={`/control?symbol=${encodeURIComponent(symbol)}&side=BUY#order`}><Button variant="success" className="w-full">BUY</Button></Link>
           <Link href={`/control?symbol=${encodeURIComponent(symbol)}&side=SELL#order`}><Button variant="danger" className="w-full">SELL</Button></Link>
-          <Link href={`/analyze?symbol=${encodeURIComponent(symbol)}`}><Button variant="ghost" icon={Brain} className="w-full">AI</Button></Link>
-          <Link href={`/analyze?symbol=${encodeURIComponent(symbol)}&trade=1`}><Button variant="ghost" icon={NotebookPen} className="w-full">Paper</Button></Link>
         </div>
       )}
     </div>

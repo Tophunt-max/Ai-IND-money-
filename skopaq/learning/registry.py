@@ -194,7 +194,13 @@ class ModelRegistry:
         assert_no_safety_keys(params)
         assert_no_safety_keys(model)
         now = self._clock()
-        version = f"{strategy_id.replace('.', '-')}-{now.strftime('%Y%m%dT%H%M%S')}"
+        base = f"{strategy_id.replace('.', '-')}-{now.strftime('%Y%m%dT%H%M%S')}"
+        # Two registrations in the same second must not share a version: the second
+        # would overwrite the first's entry under its shadow / champion pointer
+        version, n = base, 1
+        while self._path(version).exists():
+            n += 1
+            version = f"{base}-{n}"
         entry = {"version": version, "strategy_id": strategy_id, "state": "candidate",
                  "created_at": now.isoformat(), "report": report, "params": params,
                  "dataset": dataset, "model": model, "notes": notes,

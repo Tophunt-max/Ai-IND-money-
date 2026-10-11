@@ -123,7 +123,7 @@ def test_a_position_grown_since_its_plan_books_a_share_of_all_of_it(tmp_path):
 
 def _monitor(config=None, planner=None) -> PositionMonitor:
     config = config or _settings()
-    return PositionMonitor(MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
+    return PositionMonitor(MagicMock(), MagicMock(), MagicMock(), config,
                            wall=lambda: BASE_WALL, exit_planner=planner or ExitPlanner(config))
 
 
@@ -212,7 +212,7 @@ async def test_paper_buy_books_at_the_target_and_trails_the_rest(tmp_path, monke
         exits.append((signal.quantity, signal.reasoning))
 
     monitor = PositionMonitor(executor, _Prices([100.0, 109.0, 112.0, 109.0]), router, config,
-                              ai_enabled=False, on_exit=on_exit, wall=lambda: BASE_WALL,
+                              on_exit=on_exit, wall=lambda: BASE_WALL,
                               exit_planner=planner)
     result = await asyncio.wait_for(monitor.run(), 10)
 

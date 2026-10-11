@@ -15,7 +15,7 @@ every reason, so the signal journal shows why a setup was or was not traded:
 
 Qualification is *not* the risk gateway: a QUALIFIED signal still goes through
 ``Executor`` → ``EntryGate`` → ``SafetyChecker`` (limits, funds, kill switch), which can
-refuse it. An LLM may add evidence, but nothing here lets it set prices or skip a check.
+refuse it. A model may add evidence, but nothing here lets it set prices or skip a check.
 """
 
 from __future__ import annotations

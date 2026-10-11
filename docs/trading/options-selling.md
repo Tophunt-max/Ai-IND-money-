@@ -1,6 +1,6 @@
 # Options Selling
 
-SkopaqTrader includes an AI-powered options selling module that analyzes option chains and selects optimal OTM strikes for theta decay strategies.
+SkopaqTrader includes a rule-based options selling module that reads option chains and selects OTM strikes for theta decay strategies. It is advisory and places no orders.
 
 ## Supported Strategies
 
@@ -34,7 +34,7 @@ Similar logic applies to `SHORT_CALL` (3-8% above spot) and `SHORT_STRANGLE` (bo
 
 ## Using /options
 
-The simplest way to get an options recommendation:
+The simplest way to get an options recommendation is the Claude Code `/options` skill (an MCP client of `skopaq/mcp_server.py`):
 
 ```
 /options                          # NIFTY SHORT_PUT (default)
@@ -67,13 +67,13 @@ Risk Management:
 | Tool | Purpose |
 |------|---------|
 | `get_option_chain` | Fetch raw chain data from INDstocks (calls + puts with OI, volume) |
-| `suggest_option_trade` | Get AI recommendation with risk metrics |
+| `suggest_option_trade` | Rule-based strike recommendation with risk metrics (`skopaq/options/strategy.py`) |
 
 **Example -- fetch chain manually:**
 
 > Show me the NIFTY option chain for the nearest expiry.
 
-Claude calls `mcp__skopaq__get_option_chain(symbol="NIFTY", expiry_index=0)`.
+The MCP client calls `mcp__skopaq__get_option_chain(symbol="NIFTY", expiry_index=0)`.
 
 ## Risk Management
 
@@ -109,10 +109,10 @@ Before selling options, check for:
   get_option_chain(NIFTY)   ← chain from INDstocks
         │
         ▼
-  suggest_option_trade()    ← AI selects strike
+  suggest_option_trade()    ← rules select the strike
         │
         ▼
-  Claude presents risk analysis
+  the MCP client shows the risk metrics
         │
         ▼
   User decides (the selector places nothing)

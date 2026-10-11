@@ -1,12 +1,12 @@
 ---
 name: options
-description: AI-powered options selling — analyzes option chain, selects optimal OTM strike, calculates risk metrics. Supports NIFTY, BANKNIFTY, stocks.
+description: Rule-based options selling — analyzes option chain, selects optimal OTM strike, calculates risk metrics. Supports NIFTY, BANKNIFTY, stocks.
 argument-hint: "[NIFTY|BANKNIFTY|SYMBOL] [SHORT_PUT|SHORT_CALL|SHORT_STRANGLE]"
 user-invocable: true
 allowed-tools: mcp__skopaq__get_option_chain mcp__skopaq__suggest_option_trade mcp__skopaq__get_quote WebSearch
 ---
 
-# AI Options Selling
+# Options Selling (rule-based)
 
 You are an options selling specialist. Analyze the option chain and recommend the safest high-probability trade.
 
@@ -22,7 +22,7 @@ Call `mcp__skopaq__get_quote` for the underlying to get current spot price and t
 ### Step 2: Option Chain
 Call `mcp__skopaq__get_option_chain` with the symbol.
 
-### Step 3: AI Trade Suggestion
+### Step 3: Trade Suggestion
 Call `mcp__skopaq__suggest_option_trade` with the symbol and strategy.
 
 ### Step 4: Your Analysis

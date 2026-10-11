@@ -1,59 +1,46 @@
 # SkopaqTrader
 
-**AI Algorithmic Trading Platform for Indian Equities**
+**Algorithmic Trading Platform for Indian Equities — one AI: the Adaptive AI**
 
-SkopaqTrader is an open-source AI trading platform that combines a 15-agent analysis pipeline with broker integration, options selling, and autonomous trading — all controllable from Claude Code, Telegram, or the CLI.
+SkopaqTrader trades NSE stocks and index options with machine-learning models trained on its own market data, signals and trades. There is no LLM and no API AI: every decision comes from models you can retrain, test on unseen data, shadow on paper and promote by hand — behind safety rules no model can change.
 
 ---
 
-## What Makes It Different
+## What It Does
 
 | Feature | Description |
 |---------|-------------|
-| **Claude Code Native** | 29 MCP tools + 6 custom skills — trade directly from Claude Code |
-| **15-Agent Pipeline** | 4 analysts, bull/bear debate, risk debate, trader — all perspectives before every trade |
-| **Zero Extra LLM Cost** | Claude Code IS the analyst — no separate API calls needed |
-| **Telegram Bot** | AI chatbot on your phone with scheduled scans and alerts |
-| **Options Selling** | AI selects optimal OTM strikes with win probability and Greeks |
-| **Auto-Notifications** | Every trade event fires Telegram alerts automatically |
-| **Ollama Fallback** | Works offline with local models on Apple Silicon |
-| **Docker Ready** | One image, 10 services — `docker compose up` |
+| **Swing book** | Daily setups (trend pullback, breakout, oversold bounce) ranked by a swing model trained on their net outcomes |
+| **Intraday scalper & F&O engine** | Rule strategies, adaptive models (LightGBM, XGBoost, CatBoost, PyTorch …) and RL policies (PPO / A2C / DQN) |
+| **Continual learning** | Shadow → champion promotion with gates, rollback, drift checks; a no-code strategy builder |
+| **Safety first** | Immutable limits, loss circuit breakers, kill switch, paper by default |
+| **Dashboard** | Mobile-first trading UI: charts, positions, signals, swing scanner, AI learning |
+| **Telegram & MCP** | Alerts, `/ideas`, `/halt`; 26 MCP tools for Claude Code (data and the Adaptive AI's output) |
+| **Docker Ready** | One image — `docker compose up` |
 
 ## Quick Start
 
 ```bash
-# 3 commands to start trading:
 git clone https://github.com/Tophunt-max/Ai-IND-money-.git && cd Ai-IND-money-
-cp .env.example .env        # Add your API keys
-pip install -e .             # Install
-skopaq chat                  # Start trading
-```
-
-Or with Docker:
-```bash
-docker pull samuelvinay91/skopaq
-docker run -it --env-file .env samuelvinay91/skopaq chat
+pip install -e .
+cp .env.example .env          # INDstocks token, Supabase (optional), Telegram (optional)
+skopaq swing-train            # train the swing model (no orders)
+skopaq scan                   # today's swing ideas
+skopaq daemon --once --paper  # a full paper session
 ```
 
 ## Architecture at a Glance
 
 ```
-User → Claude Code / Telegram / CLI
+Swing scan / scalper / F&O engine   (Adaptive AI: setups + models)
   ↓
-MCP Server (29 tools)
+SignalGate   net R:R after charges, data quality, stop bounds — journalled
   ↓
-┌─────────────────────────────────┐
-│ Analysis Pipeline               │
-│  4 Analysts → Bull/Bear Debate  │
-│  → Research Manager → Trader    │
-│  → Risk Debate → Final Decision │
-└─────────────────────────────────┘
+Executor → PositionSizer → SafetyChecker → OrderRouter
   ↓
-Safety Checker → Order Router
+INDstocks / Paper Engine → PositionMonitor (stop, target, trailing, EOD)
   ↓
-INDstocks / Paper Engine
-  ↓
-Telegram Notification
+Signal journal → continual learning (shadow models, admin promotion)
 ```
 
 !!! warning "Disclaimer"
@@ -62,6 +49,7 @@ Telegram Notification
 ## Next Steps
 
 - [Installation](getting-started/installation.md) — Set up the platform
-- [Quick Start](getting-started/quickstart.md) — Your first trade in 5 minutes
-- [Claude Code Setup](claude-code/setup.md) — Integrate with Claude Code
-- [Telegram Bot](telegram/setup.md) — Trade from your phone
+- [Quick Start](getting-started/quickstart.md) — Your first paper session
+- [Swing Trading](trading/swing-trading.md) — Train, scan, promote
+- [Trading Pipeline](architecture/pipeline.md) — How the Adaptive AI decides
+- [Telegram Bot](telegram/setup.md) — Alerts and commands on your phone

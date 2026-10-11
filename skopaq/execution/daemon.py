@@ -1,4 +1,7 @@
-"""Autonomous Trading Daemon — Scan -> Trade -> Monitor -> Close.
+"""Autonomous Trading Daemon — Scan -> Trade -> Monitor -> Close (no LLM).
+
+The swing book's decisions come from the Adaptive AI (``skopaq.swing``: daily setups
+ranked and filtered by the swing model); the scalper and the F&O engine run beside it.
 
 Finite state machine that composes four existing subsystems into a single
 trading session:
@@ -45,7 +48,7 @@ if TYPE_CHECKING:
     from skopaq.config import SkopaqConfig
     from skopaq.execution.live_orders import Confirmation, TrackedOrder
     from skopaq.execution.position_monitor import MonitorResult
-    from skopaq.scanner.models import ScannerCandidate
+    from skopaq.swing.engine import SwingIdea
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 # The end-of-session Telegram report may not hold up the process exit for longer.
 _NOTIFY_TIMEOUT_SECONDS = 15
 
-# `skopaq daemon` exit code when PRE_OPEN failed (token, broker session, LLM setup): nothing
+# `skopaq daemon` exit code when PRE_OPEN failed (token, broker session): nothing
 # was scanned or traded, so the scheduler may start the session again later that morning.
 PRE_OPEN_FAILED_EXIT_CODE = 3
 
@@ -98,7 +101,6 @@ class DaemonSessionReport:
     sells_executed: int = 0
     sells_failed: int = 0
     gross_pnl: float = 0.0
-    decisions_settled: int = 0
     halted: str = ""  # kill switch description when the session was halted
     pre_open_failed: bool = False  # PRE_OPEN raised: nothing was scanned or traded
     # The session itself failed (an exception ended it); a candidate's failed analysis
@@ -120,17 +122,17 @@ class TradingDaemon:
     """Orchestrates a full autonomous trading session.
 
     Phases:
-        1. PRE_OPEN:   Validate token, build LLM/executor infra.
-        2. SCANNING:   Wait for prices to settle, run multi-model scanner.
-        3. ANALYZING:  For each candidate, run multi-agent graph.
-        4. TRADING:    Execute BUY signals (up to max_trades).
+        1. PRE_OPEN:   Validate token, build the executor stack and the swing engine.
+        2. SCANNING:   Wait for prices to settle, rank the swing setups (swing model).
+        3. ANALYZING:  Qualify each idea (signal gate) ...
+        4. TRADING:    ... and execute its BUY (up to max_trades).
         5. MONITORING: Run PositionMonitor until all positions closed or EOD.
         6. CLOSING:    Safety net — force-sell any remaining positions.
         7. REPORTING:  Compile and log session report.
 
     Error recovery:
         - Scanner failure -> 0 candidates -> skip to REPORTING
-        - Individual analysis failure -> skip candidate, continue
+        - A failed qualification or execution -> skip the idea, continue
         - All trades rejected -> 0 positions -> MONITORING exits immediately
         - SIGTERM -> stop opening positions, jump to MONITORING -> CLOSING
     """
@@ -173,9 +175,7 @@ class TradingDaemon:
         self._fno_stop: Optional[asyncio.Event] = None
         self._fno_feed = None
         self._started_wall = _time.time()
-        self._graph = None        # SkopaqTradingGraph
-        self._llm_map = None      # Per-role LLM map
-        self._memory_store = None # MemoryStore (optional)
+        self._swing = None        # skopaq.swing.engine.SwingEngine (the Adaptive AI)
         # Live CLOSING: symbols whose exit the orders-per-minute rule refused this pass
         self._rate_refused: set[str] = set()
 
@@ -275,7 +275,7 @@ class TradingDaemon:
             if self._stop.is_set():
                 return report
 
-            # Phase 3+4: ANALYZING + TRADING — run graph for each candidate
+            # Phase 3+4: ANALYZING + TRADING — qualify and trade each swing idea
             trade_results = await self._timed_phase(
                 DaemonPhase.ANALYZING,
                 self._phase_analyze_and_trade,
@@ -342,9 +342,8 @@ class TradingDaemon:
             report.phase_times = dict(self._phase_times)
             await self._finish_scalper(report)
             await self._finish_fno(report)
-            # A dry run is scan-only: no LLM reflection calls or Supabase writes.
+            # A dry run is scan-only: no retraining or Supabase writes.
             if not dry_run:
-                report.decisions_settled = await self._settle_due_decisions()
                 await self._check_model_drift()
                 await self._adaptive_retrain()
 
@@ -544,19 +543,13 @@ class TradingDaemon:
         return datetime.combine(day, end, tzinfo=_IST)
 
     async def _phase_pre_open(self) -> None:
-        """Validate token, build LLM map, create executor stack."""
+        """Validate token, create the executor stack and the swing engine."""
         from skopaq.broker.client import INDstocksClient
         from skopaq.broker.paper_engine import PaperEngine
         from skopaq.broker.token_manager import TokenManager, session_token_problem
-        from skopaq.cli.main import (
-            _build_upstream_config,
-            _create_memory_store,
-        )
         from skopaq.execution.executor import Executor
         from skopaq.execution.order_router import OrderRouter
         from skopaq.execution.safety_checker import SafetyChecker
-        from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-        from skopaq.llm import bridge_env_vars, build_llm_map
         from skopaq.risk.position_sizer import PositionSizer
 
         config = self._config
@@ -607,12 +600,7 @@ class TradingDaemon:
             profile.name or profile.email or "unknown",
         )
 
-        # 3. Build LLM map (env bridging + multi-model tiering)
-        bridge_env_vars(config)
-        self._llm_map = build_llm_map()
-        logger.info("LLM map built: %d roles", len(self._llm_map))
-
-        # 4. Build executor stack
+        # 3. Build executor stack
         is_paper = config.trading_mode == "paper"
         paper = PaperEngine(initial_capital=config.initial_paper_capital)
 
@@ -643,30 +631,15 @@ class TradingDaemon:
         self._executor = Executor(self._router, safety, position_sizer=sizer,
                                   exit_planner=self._exit_planner)
 
-        # 5. Build analysis graph
-        upstream_config = _build_upstream_config(config)
-        self._memory_store = _create_memory_store(config)
-
-        analysts = [
-            a.strip()
-            for a in config.selected_analysts.split(",")
-            if a.strip()
-        ]
-        self._graph = SkopaqTradingGraph(
-            upstream_config,
-            self._executor,
-            selected_analysts=analysts,
-            memory_store=self._memory_store,
-        )
-
-        # Every swing BUY is qualified on daily candles and journalled before the executor
-        self._wire_swing_gate(config, is_paper)
+        # 4. The swing book's Adaptive AI: daily setups + the swing model, behind the
+        # signal gate (journalled) and the executor's checks
+        self._wire_swing_engine(config, is_paper)
 
         logger.info(
-            "PRE_OPEN complete — mode=%s, max_trades=%d, analysts=%s",
+            "PRE_OPEN complete — mode=%s, max_trades=%d, swing model=%s",
             config.trading_mode,
             self._max_trades,
-            analysts,
+            getattr(self._swing, "model_state", "none"),
         )
 
     async def _check_model_drift(self) -> None:
@@ -756,34 +729,31 @@ class TradingDaemon:
             await lease.release()
             self._session_lease = None
 
-    def _wire_swing_gate(self, config: object, is_paper: bool) -> None:
-        if getattr(config, "swing_qualification_enabled", True) is False:
-            return
+    def _wire_swing_engine(self, config: object, is_paper: bool) -> None:
+        """The swing engine (setups + swing model + signal gate); never stops PRE_OPEN."""
         try:
-            from skopaq.strategy.gate import gate_from_config
-            from skopaq.strategy.signal import QualifyRules
+            from skopaq.swing.engine import SwingEngine
 
-            def num(name: str, default: float) -> float:
-                v = getattr(config, name, default)
-                return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) \
-                    else default
-
-            rules = QualifyRules(require_reliable_regime=False,
-                                 min_net_rr=num("swing_min_net_rr", 1.0),
-                                 slippage_pct=num("swing_slippage_pct", 0.001),
-                                 min_stop_pct=0.005, max_stop_pct=0.15)
-            gate = gate_from_config(config, rules, paper=is_paper,
-                                    model_gate_attr="swing_model_gate_enabled")
-            self._graph.set_signal_gate(
-                gate, _daily_candles,
-                notional_inr=num("swing_notional_inr", 100_000.0),
-                hard_stop_pct=num("monitor_hard_stop_pct", 0.04),
-                target_rr=num("monitor_target_rr", 2.0))
+            self._swing = SwingEngine.from_config(config, paper=is_paper)
+            logger.info("Swing engine: model %s (%s)%s",
+                        getattr(self._swing.model, "version", None) or "none",
+                        self._swing.model_state,
+                        " · rules only (paper)" if self._swing.rules_only else "")
         except Exception:
-            logger.warning("Swing qualification not wired", exc_info=True)
+            logger.warning("Swing engine not built — no swing entries this session",
+                           exc_info=True)
+            self._swing = None
 
-    async def _phase_scan(self) -> list[ScannerCandidate]:
-        """Wait for prices to settle, then run multi-model scanner."""
+    def _swing_universe(self) -> list[str]:
+        raw = getattr(self._config, "swing_symbols", "") or ""
+        if isinstance(raw, str) and raw.strip():
+            return [x.strip().upper() for x in raw.split(",") if x.strip()][:100]
+        from skopaq.scanner.watchlist import NIFTY_50
+
+        return list(NIFTY_50)
+
+    async def _phase_scan(self) -> list[SwingIdea]:
+        """Wait for prices to settle, then rank today's swing setups (the swing model)."""
         # Delay after market open for prices to stabilise
         if self._scan_delay > 0 and not self._stop.is_set():
             logger.info(
@@ -798,32 +768,28 @@ class TradingDaemon:
                 pass  # Normal
 
         # Check stop again — may have been set while we weren't waiting
-        if self._stop.is_set():
+        if self._stop.is_set() or self._swing is None:
             return []
-
-        # Reuse the same scanner wiring from main.py's _run_scan()
-        from skopaq.cli.main import _run_scan
-
         try:
-            candidates = await _run_scan(self._max_candidates)
+            ideas = await self._swing.scan(self._swing_universe(), self._max_candidates)
         except Exception as exc:
-            logger.error("Scanner failed: %s", exc, exc_info=True)
-            candidates = []
-
-        return candidates
+            logger.error("Swing scan failed: %s", exc, exc_info=True)
+            return []
+        for idea in ideas:
+            logger.info("Swing idea %s — %s", idea.symbol, idea.reason)
+        return ideas
 
     async def _phase_analyze_and_trade(
         self,
-        candidates: list[ScannerCandidate],
+        candidates: list[SwingIdea],
         report: DaemonSessionReport,
     ) -> list:
-        """Analyze each candidate and execute BUY signals.
+        """Trade the ranked swing ideas, best first, through the gate and the executor.
 
-        Processes candidates sequentially (capital reduces with each BUY).
-        Stops after max_trades BUYs or when all candidates are exhausted.
+        Sequential (capital reduces with each BUY); stops after max_trades BUYs.
         """
         from skopaq.broker.models import filled_quantity_of, is_unconfirmed, outcome_of
-        from skopaq.cli.main import _compute_risk_scales, _reflection_graph, _run_lifecycle
+        from skopaq.cli.main import _compute_risk_scales, _run_lifecycle
 
         config = self._config
         trade_date = datetime.now(_IST).strftime("%Y-%m-%d")
@@ -832,33 +798,25 @@ class TradingDaemon:
         buys = []
         buys_placed = 0
 
-        for i, candidate in enumerate(candidates[: self._max_candidates]):
+        for i, idea in enumerate(candidates[: self._max_candidates]):
             if self._stop.is_set():
-                logger.info("Stop event — halting analysis")
+                logger.info("Stop event — halting swing entries")
                 break
 
             halt = self._halt_status()
             if halt.halted:
                 report.halted = halt.describe()
-                logger.warning("%s — stopping analysis", report.halted)
+                logger.warning("%s — stopping swing entries", report.halted)
                 break
 
             if buys_placed >= self._max_trades:
-                logger.info(
-                    "Max trades (%d) reached — stopping analysis",
-                    self._max_trades,
-                )
+                logger.info("Max trades (%d) reached — stopping", self._max_trades)
                 break
 
             report.candidates_analyzed += 1
-            symbol = candidate.symbol
-            logger.info(
-                "Analyzing candidate %d/%d: %s (urgency=%s)",
-                i + 1,
-                min(len(candidates), self._max_candidates),
-                symbol,
-                candidate.urgency,
-            )
+            symbol = idea.symbol
+            logger.info("Swing idea %d/%d: %s", i + 1,
+                        min(len(candidates), self._max_candidates), idea.reason)
 
             # For paper mode, inject a real-time quote
             if config.trading_mode == "paper":
@@ -872,90 +830,50 @@ class TradingDaemon:
                     )
 
             try:
-                result = await self._graph.analyze_and_execute(
-                    symbol,
-                    trade_date,
-                    regime_scale=regime_scale,
-                    calendar_scale=calendar_scale,
-                )
+                result = await self._swing.trade(idea, self._executor, trade_date=trade_date,
+                                                 regime_scale=regime_scale,
+                                                 calendar_scale=calendar_scale)
             except Exception as exc:
-                logger.error(
-                    "Analysis failed for %s: %s", symbol, exc, exc_info=True,
-                )
-                report.errors.append(f"Analysis error ({symbol}): {exc}")
+                logger.error("Swing trade failed for %s: %s", symbol, exc, exc_info=True)
+                report.errors.append(f"Swing error ({symbol}): {exc}")
                 continue
-
-            # Check outcome
             if result.error:
-                logger.warning("Analysis returned error for %s: %s", symbol, result.error)
+                logger.warning("Swing %s: %s", symbol, result.error)
                 report.errors.append(f"{symbol}: {result.error}")
                 continue
 
-            if result.signal is None or result.signal.action == "HOLD":
-                report.holds += 1
-                logger.info(
-                    "[%s] Decision: HOLD (confidence=%d%%)",
-                    symbol,
-                    result.signal.confidence if result.signal else 0,
-                )
-                continue
-
-            if result.signal.action == "BUY":
-                execution = result.execution
-                if execution and execution.success:
-                    buys_placed += 1
-                    report.trades_opened += 1
-                    buys.append(result)
-                    # Live: the quantity the broker confirmed (paper: the order's)
-                    requested = result.signal.quantity or 1
-                    qty = filled_quantity_of(execution, requested)
-                    partial = (f" PARTIAL {qty}/{requested}"
-                               if outcome_of(execution) == "partial" else "")
-                    logger.info(
-                        "[%s] BUY EXECUTED — fill=%.2f qty=%s%s (%d/%d trades)",
-                        symbol,
-                        execution.fill_price or 0,
-                        qty,
-                        partial,
-                        buys_placed,
-                        self._max_trades,
-                    )
-                    if is_unconfirmed(execution):
-                        report.orders_unconfirmed += 1  # the rest may still fill
-
-                    # Post-trade lifecycle: persist to Supabase (the loss
-                    # limits read realized P&L back) and reflect when enabled.
-                    try:
-                        await _run_lifecycle(
-                            config,
-                            _reflection_graph(config, self._graph, self._memory_store),
-                            self._memory_store, result,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Lifecycle failed for %s", symbol,
-                            exc_info=True,
-                        )
-                elif execution is not None and is_unconfirmed(execution):
-                    # The broker did not confirm it either way: it uses a trade slot, and
-                    # MONITORING/CLOSING run for it. Its row is written once its fill is
-                    # adopted (the monitor records the late fill).
-                    buys_placed += 1
-                    report.orders_unconfirmed += 1
-                    logger.warning(
-                        "[%s] BUY UNCONFIRMED: %s (%d/%d trades)", symbol,
-                        execution.rejection_reason, buys_placed, self._max_trades,
-                    )
-                else:
-                    report.trades_rejected += 1
-                    reason = (
-                        result.execution.rejection_reason
-                        if result.execution
-                        else "no execution result"
-                    )
-                    logger.warning(
-                        "[%s] BUY REJECTED: %s", symbol, reason,
-                    )
+            execution = result.execution
+            if execution and execution.success:
+                buys_placed += 1
+                report.trades_opened += 1
+                buys.append(result)
+                # Live: the quantity the broker confirmed (paper: the order's)
+                requested = result.signal.quantity or 1
+                qty = filled_quantity_of(execution, requested)
+                partial = (f" PARTIAL {qty}/{requested}"
+                           if outcome_of(execution) == "partial" else "")
+                logger.info("[%s] BUY EXECUTED — fill=%.2f qty=%s%s (%d/%d trades)", symbol,
+                            execution.fill_price or 0, qty, partial, buys_placed,
+                            self._max_trades)
+                if is_unconfirmed(execution):
+                    report.orders_unconfirmed += 1  # the rest may still fill
+                # Persist the trade row (the loss limits read realized P&L back)
+                try:
+                    await _run_lifecycle(config, result)
+                except Exception:
+                    logger.warning("Booking failed for %s", symbol, exc_info=True)
+            elif execution is not None and is_unconfirmed(execution):
+                # The broker did not confirm it either way: it uses a trade slot, and
+                # MONITORING/CLOSING run for it. Its row is written once its fill is
+                # adopted (the monitor records the late fill).
+                buys_placed += 1
+                report.orders_unconfirmed += 1
+                logger.warning("[%s] BUY UNCONFIRMED: %s (%d/%d trades)", symbol,
+                               execution.rejection_reason, buys_placed, self._max_trades)
+            else:
+                report.trades_rejected += 1
+                reason = execution.rejection_reason if execution else "no execution result"
+                logger.warning("[%s] BUY REJECTED: %s", symbol, reason)
 
         return buys
 
@@ -996,20 +914,12 @@ class TradingDaemon:
     async def _run_monitor(self) -> MonitorResult:
         from skopaq.execution.position_monitor import PositionMonitor
 
-        llm = None
-        if self._llm_map:
-            llm = self._llm_map.get(
-                "sell_analyst", self._llm_map.get("_default"),
-            )
-
         monitor = PositionMonitor(
             executor=self._executor,
             client=self._client,
             router=self._router,
             config=self._config,
-            llm=llm,
             stop_event=self._stop,
-            ai_enabled=llm is not None,
             on_exit=self._record_exit,
             # CLOSING follows: no shutdown pass of its own after a stop
             sell_on_stop=False,
@@ -1046,18 +956,17 @@ class TradingDaemon:
         return kill_switch.status(use_cache=False)
 
     async def _record_exit(self, signal, execution) -> None:
-        """Persist a monitor or close-phase exit like an analysed trade."""
+        """Persist a monitor or close-phase exit as a trade row."""
         from skopaq.cli.main import _record_exit
 
-        await _record_exit(self._config, self._graph, self._memory_store, signal, execution)
+        await _record_exit(self._config, signal, execution)
 
     async def _record_late_fill(self, tracked: TrackedOrder, conf: Confirmation) -> bool:
         """Persist a fill the broker confirmed after its order was reported (live); False
         when it was not booked."""
         from skopaq.cli.main import _record_late_fill
 
-        return await _record_late_fill(self._config, self._graph, self._memory_store,
-                                       tracked, conf)
+        return await _record_late_fill(self._config, tracked, conf)
 
     def _live_worker(self):
         """The router's live order worker, or None (paper, or a router without one)."""
@@ -1099,16 +1008,6 @@ class TradingDaemon:
             await drain()
         except Exception:
             logger.warning("Draining order alerts failed", exc_info=True)
-
-    async def _settle_due_decisions(self) -> int:
-        """Settle past decisions whose holding window has traded (all tickers)."""
-        if self._graph is None or self._stop.is_set():
-            return 0
-        try:
-            return await asyncio.to_thread(self._graph.settle_due, self._stop.is_set)
-        except Exception:
-            logger.warning("Settling past decisions failed", exc_info=True)
-            return 0
 
     async def _phase_close(self, report: Optional[DaemonSessionReport] = None) -> None:
         """Safety net — force-sell any remaining positions.
@@ -1457,7 +1356,6 @@ class TradingDaemon:
         logger.info("Sells executed:      %d", report.sells_executed)
         logger.info("Sells failed:        %d", report.sells_failed)
         logger.info("Gross P&L:           %.2f", report.gross_pnl)
-        logger.info("Decisions settled:   %d", report.decisions_settled)
         if report.halted:
             logger.warning("Halted:              %s", report.halted)
         if report.orders_unconfirmed:

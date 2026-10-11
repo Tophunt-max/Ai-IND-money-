@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from skopaq import __version__
 from skopaq.api.auth import cors_origins, docs_enabled, startup_problems
-from skopaq.api.dashboard_auth import current_user, require_admin
+from skopaq.api.dashboard_auth import current_user
 from skopaq.broker.token_manager import TokenManager
 from skopaq.config import SkopaqConfig
 
@@ -56,11 +56,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── Chat bridge (OpenClaw + external channels) ───────────────────────────────
-from skopaq.chat.bridge import router as chat_router
-
-app.include_router(chat_router)
 
 # ── Web dashboard (frontend/): Supabase login or SKOPAQ_API_TOKEN ─────────────
 from skopaq.api.dashboard import router as dashboard_router
@@ -116,78 +111,8 @@ async def system_status() -> dict:
         "services": {
             "supabase": bool(config.supabase_url),
             "redis": bool(config.upstash_redis_url),
-            "llms": {
-                "gemini": bool(config.google_api_key.get_secret_value()),
-                "claude": bool(config.anthropic_api_key.get_secret_value()),
-                "perplexity": bool(config.perplexity_api_key.get_secret_value()),
-                "grok": bool(config.xai_api_key.get_secret_value()),
-                "custom": bool(config.custom_llm_base_url and config.custom_llm_model
-                               and config.custom_llm_api_key.get_secret_value()),
-            },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-# ── Scanner ───────────────────────────────────────────────────────────────────
-
-_scanner_engine = None
-
-
-def _get_scanner():
-    """Lazy-init scanner engine singleton."""
-    global _scanner_engine
-    if _scanner_engine is None:
-        from skopaq.scanner import ScannerEngine, Watchlist
-        config = SkopaqConfig()
-        _scanner_engine = ScannerEngine(
-            watchlist=Watchlist(),
-            cycle_seconds=config.scanner_cycle_seconds,
-            max_candidates=config.scanner_max_candidates,
-        )
-    return _scanner_engine
-
-
-@app.on_event("startup")
-async def _start_scanner():
-    """Start scanner as a background task if enabled in config."""
-    config = SkopaqConfig()
-    if config.scanner_enabled:
-        scanner = _get_scanner()
-        await scanner.start()
-        logger.info("Scanner background task started")
-
-
-@app.on_event("shutdown")
-async def _stop_scanner():
-    """Stop scanner on shutdown."""
-    if _scanner_engine and _scanner_engine.running:
-        await _scanner_engine.stop()
-
-
-@app.get("/api/scanner/status", dependencies=[Depends(current_user)])
-async def scanner_status() -> dict:
-    """Scanner engine status."""
-    scanner = _get_scanner()
-    return scanner.status
-
-
-# Admin: reading drains the candidate queue other consumers wait on
-@app.get("/api/scanner/candidates", dependencies=[Depends(require_admin)])
-async def scanner_candidates() -> dict:
-    """Recent scanner candidates."""
-    scanner = _get_scanner()
-    candidates = []
-    # Drain the queue (non-blocking)
-    while not scanner.candidate_queue.empty():
-        try:
-            c = scanner.candidate_queue.get_nowait()
-            candidates.append(c.to_dict())
-        except Exception:
-            break
-    return {
-        "candidates": candidates,
-        "last_candidates": [c.to_dict() for c in scanner._last_candidates],
     }
 
 

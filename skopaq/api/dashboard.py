@@ -3,11 +3,10 @@
 Every endpoint needs a logged-in user (``skopaq/api/dashboard_auth.py``): a Supabase Auth
 session of an email listed in ``SKOPAQ_DASHBOARD_USERS``, or ``SKOPAQ_API_TOKEN``. Without
 either configured the dashboard answers 503. ``viewer`` accounts may only read; starting
-jobs, the kill switch and chat need ``admin``.
+jobs and the kill switch need ``admin``.
 
 - ``GET  /api/dashboard/me``                  the logged-in user and role
 - ``GET  /api/dashboard/auth/logins``         login history (own; ``scope=all`` for admins)
-- ``POST /api/dashboard/chat``                the AI chat agent (admin)
 - ``GET  /api/dashboard/overview``            mode, kill switch, open positions, P&L
 - ``GET  /api/dashboard/trades``              recent trades from Supabase
 - ``GET  /api/dashboard/report?days=``        track record (``skopaq report``)
@@ -16,18 +15,17 @@ jobs, the kill switch and chat need ``admin``.
 - ``POST /api/dashboard/kill-switch/resume``  lift the dashboard/CLI halt
 - ``GET  /api/dashboard/settings/env``        SKOPAQ_* settings and their source (admin)
 - ``POST /api/dashboard/settings/env``        set / remove dashboard overrides (admin)
-- ``POST /api/dashboard/jobs``                start an ``analyze``, paper ``trade``, ``scan``,
-  ``backtest``, ``montecarlo`` or ``settle`` job
+- ``POST /api/dashboard/jobs``                start a ``scan`` (swing ideas), ``swing_train``,
+  ``backtest`` or ``montecarlo`` job
 - ``GET  /api/dashboard/jobs``                recent jobs
 - ``GET  /api/dashboard/jobs/{id}``           one job (poll until done)
 - ``GET  /api/dashboard/market/{quotes,indices,history,watchlist}``  Yahoo Finance prices
 - ``GET  /api/dashboard/pnl-history``         realized P&L per day
 - ``GET  /api/dashboard/scheduler[/log]``     today's plan, session markers and logs
 
-Analyze and scan never place orders: they run the same code as ``skopaq analyze`` and
-``skopaq scan``. ``trade`` runs ``skopaq trade`` (analysis, safety checks, execution) and
-is refused (403) unless the server is in paper mode. One job runs at a time (they make
-many LLM calls).
+No job places an order: ``scan`` runs ``skopaq scan`` (today's swing setups ranked by the
+swing model), ``swing_train`` runs ``skopaq swing-train`` (a candidate model behind the
+gates). One job runs at a time (they are CPU and data heavy).
 """
 
 from __future__ import annotations
@@ -366,13 +364,13 @@ async def scheduler_status() -> dict:
     for back in range(0, 10):
         day = now.date() - timedelta(days=back)
         jobs = {}
-        for job in ("daemon", "monitor", "settle"):
+        for job in ("daemon", "monitor"):
             if state.started(job, day):
                 jobs[job] = {"started": state.started_note(job, day),
                              "rc": state.last_exit(job, day)}
         has_log = settings.log_dir is not None and any(
             (settings.log_dir / f"{j}-{day.isoformat()}.log").exists()
-            for j in ("daemon", "settle"))
+            for j in ("daemon",))
         if jobs or has_log:
             days.append({"date": day.isoformat(), "jobs": jobs, "has_log": has_log})
     return {
@@ -385,7 +383,7 @@ async def scheduler_status() -> dict:
 
 
 @router.get("/scheduler/log")
-async def scheduler_log(day: str, job: Literal["daemon", "settle"] = "daemon",
+async def scheduler_log(day: str, job: Literal["daemon"] = "daemon",
                         lines: int = Query(300, ge=10, le=2000)) -> dict:
     """The last *lines* of one session log (logs/daemon/<job>-<day>.log)."""
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
@@ -432,6 +430,11 @@ async def report(days: int = Query(90, ge=1, le=3650)) -> dict:
         raise HTTPException(500, f"Report failed: {exc}") from exc
     data = _jsonable(rep)
     data["min_sample"] = MIN_SAMPLE
+    data["signals"]["win_rate"] = rep.signals.win_rate
+    data["signals"]["enough_data"] = rep.signals.enough_data
+    for name, st in rep.signals.by_strategy.items():
+        data["signals"]["by_strategy"][name]["win_rate"] = st.win_rate
+    data["trades"]["win_rate"] = rep.trades.win_rate
     return data
 
 
@@ -537,7 +540,7 @@ async def env_settings_change(body: EnvChangeRequest,
     return {"changed": result.set, "removed": result.removed, "live": result.live, **payload}
 
 
-# ── Jobs (analyze, scan) ──────────────────────────────────────────────────────
+# ── Jobs (swing scan / training, backtests) ───────────────────────────────────
 
 _SYMBOL = re.compile(r"^[A-Z0-9&\-]{1,20}(\.(NS|BO))?$")
 _jobs: dict[str, dict[str, Any]] = {}
@@ -546,7 +549,7 @@ _lock = asyncio.Lock()
 
 
 class JobRequest(BaseModel):
-    kind: Literal["analyze", "trade", "scan", "backtest", "montecarlo", "settle"]
+    kind: Literal["scan", "swing_train", "backtest", "montecarlo"]
     symbol: str = ""
     max_candidates: int = Field(5, ge=1, le=20)
     # backtest / montecarlo
@@ -556,86 +559,69 @@ class JobRequest(BaseModel):
     simulations: int = Field(1000, ge=100, le=10000)
 
 
-_SYMBOL_KINDS = ("analyze", "trade", "backtest", "montecarlo")
+_SYMBOL_KINDS = ("backtest", "montecarlo")
 
 
-def _analysis_dict(result) -> dict[str, Any]:
-    sig = result.signal
-    reports = {}
-    for key, value in (result.agent_state or {}).items():
-        if isinstance(value, str) and value.strip():
-            reports[key] = value[:20000]
-        elif isinstance(value, dict):
-            for sub in ("judge_decision", "history"):
-                text = value.get(sub)
-                if isinstance(text, str) and text.strip():
-                    reports[f"{key}.{sub}"] = text[:20000]
-    return {
-        "symbol": result.symbol,
-        "trade_date": result.trade_date,
-        "error": result.error,
-        "duration_seconds": round(result.duration_seconds or 0, 1),
-        "signal": None if sig is None else {
-            "action": sig.action, "confidence": sig.confidence,
-            "entry_price": sig.entry_price, "stop_loss": sig.stop_loss,
-            "target": sig.target, "reasoning": (sig.reasoning or "")[:5000],
-        },
-        "decision": (result.raw_decision or "")[:20000],
-        "reports": reports,
-        "execution": _execution_dict(getattr(result, "execution", None)),
-    }
+def _swing_scan_job(limit: int) -> dict[str, Any]:
+    from skopaq.cli.main import _swing_symbols
+    from skopaq.swing.engine import SwingEngine
+
+    config = SkopaqConfig()
+    engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
+    ideas = asyncio.run(engine.scan(_swing_symbols(config, ""), limit))
+    return {"model": getattr(engine.model, "version", None), "model_state": engine.model_state,
+            "threshold": getattr(engine.model, "threshold", None),
+            "rules_only": engine.rules_only, "ideas": [i.as_dict() for i in ideas]}
 
 
-def _execution_dict(ex) -> Optional[dict[str, Any]]:
-    if ex is None:
-        return None
-    order = getattr(ex, "order", None)
-    return {
-        "success": bool(ex.success), "mode": ex.mode, "safety_passed": ex.safety_passed,
-        "rejection_reason": ex.rejection_reason or "", "fill_price": ex.fill_price,
-        "quantity": _jsonable(getattr(ex.signal, "quantity", None)) if ex.signal else None,
-        "order_id": getattr(order, "order_id", None) if order else None,
-        "brokerage": ex.brokerage,
-    }
+def _swing_train_job() -> dict[str, Any]:
+    from skopaq.cli.main import _swing_symbols
+    from skopaq.learning.registry import model_dir
+    from skopaq.swing.data import history
+    from skopaq.swing.engine import params_from
+    from skopaq.swing.model import SwingTrainConfig, swing_registry, train_and_register
+
+    config = SkopaqConfig()
+    hist, missing = {}, []
+    for sym in _swing_symbols(config, ""):
+        try:
+            hist[sym] = history(sym, int(config.swing_train_days))
+        except Exception:
+            missing.append(sym)
+    out = train_and_register(hist, SwingTrainConfig(model_kind=config.swing_model_kind,
+                                                    params=params_from(config)),
+                             registry=swing_registry(model_dir(config)))
+    rep = out["report"]
+    return {"version": out["version"], "state": out["state"],
+            "gate_failures": out["gate_failures"], "missing": missing,
+            "report": {k: rep.get(k) for k in ("setups", "train", "validation", "test",
+                                               "threshold", "baseline", "model", "brier",
+                                               "brier_base_rate", "by_setup", "first_test_date",
+                                               "last_test_date", "model_kind")}}
 
 
 async def _run_job(job: dict[str, Any]) -> None:
-    from skopaq.cli import main as cli
+    from skopaq.api import dashboard_tools as tools
 
     async with _lock:
         job["status"] = "running"
         job["started_at"] = time.time()
         try:
-            # Each job gets its own event loop in a worker thread: the upstream graph's
-            # propagate() is synchronous and would block the API for minutes.
-            if job["kind"] in ("analyze", "trade"):
-                date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                runner = cli._run_trade if job["kind"] == "trade" else cli._run_analyze
-                result = await asyncio.to_thread(asyncio.run, runner(job["symbol"], date))
-                job["result"] = _analysis_dict(result)
-                job["status"] = "failed" if result.error else "done"
-                if result.error:
-                    job["error"] = result.error
-            elif job["kind"] in ("backtest", "montecarlo", "settle"):
-                from skopaq.api import dashboard_tools as tools
-
-                p = job["params"]
-                if job["kind"] == "backtest":
-                    result = await asyncio.to_thread(
-                        tools.run_backtest_job, job["symbol"], p["days"],
-                        p["stop_loss_pct"], p["target_pct"])
-                elif job["kind"] == "montecarlo":
-                    result = await asyncio.to_thread(
-                        tools.run_montecarlo_job, job["symbol"], p["days"], p["simulations"])
-                else:
-                    result = await asyncio.to_thread(tools.run_settle_job)
-                job["result"] = result
-                job["status"] = "done"
+            # Each job runs in a worker thread: data fetches and training are blocking
+            p = job["params"]
+            if job["kind"] == "backtest":
+                result = await asyncio.to_thread(
+                    tools.run_backtest_job, job["symbol"], p["days"],
+                    p["stop_loss_pct"], p["target_pct"])
+            elif job["kind"] == "montecarlo":
+                result = await asyncio.to_thread(
+                    tools.run_montecarlo_job, job["symbol"], p["days"], p["simulations"])
+            elif job["kind"] == "swing_train":
+                result = await asyncio.to_thread(_swing_train_job)
             else:
-                candidates = await asyncio.to_thread(
-                    asyncio.run, cli._run_scan(job["max_candidates"]))
-                job["result"] = {"candidates": [c.to_dict() for c in (candidates or [])]}
-                job["status"] = "done"
+                result = await asyncio.to_thread(_swing_scan_job, job["max_candidates"])
+            job["result"] = result
+            job["status"] = "done"
         except Exception as exc:
             logger.exception("dashboard job %s failed", job["id"])
             job["status"] = "failed"
@@ -651,13 +637,11 @@ def _public(job: dict[str, Any]) -> dict[str, Any]:
 @router.post("/jobs", status_code=202)
 async def start_job(body: JobRequest, user: DashboardUser = Depends(require_admin)) -> dict:
     if any(j["status"] in ("queued", "running") for j in _jobs.values()):
-        raise HTTPException(409, "Another job (analysis, scan, backtest, settle) is still "
+        raise HTTPException(409, "Another job (scan, training, backtest) is still "
                                  "running: wait for it")
     symbol = body.symbol.strip().upper()
     if body.kind in _SYMBOL_KINDS and not _SYMBOL.match(symbol):
         raise HTTPException(422, "Give an NSE symbol, e.g. RELIANCE or TCS")
-    if body.kind == "trade" and SkopaqConfig().trading_mode != "paper":
-        raise HTTPException(403, "Dashboard trades are paper only (the server is in live mode)")
     job = {
         "id": uuid.uuid4().hex[:12], "kind": body.kind,
         "symbol": symbol if body.kind in _SYMBOL_KINDS else "",
@@ -687,22 +671,6 @@ async def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(404, "No such job (the API may have restarted)")
     return _public(job)
-
-
-# ── Chat (admin) ──────────────────────────────────────────────────────────────
-
-
-@router.post("/chat")
-async def chat(body: dict, user: DashboardUser = Depends(require_admin)) -> dict:
-    """The chat agent of ``/api/chat/message``, behind the dashboard login."""
-    from skopaq.chat.bridge import ChatMessageRequest, send_message
-
-    try:
-        req = ChatMessageRequest(**body)
-    except Exception as exc:
-        raise HTTPException(422, f"Bad chat request: {exc}") from exc
-    res = await send_message(req)
-    return res.model_dump()
 
 
 # ── Login history ─────────────────────────────────────────────────────────────

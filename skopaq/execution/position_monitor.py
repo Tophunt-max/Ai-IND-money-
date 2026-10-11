@@ -1,8 +1,7 @@
-"""Position Monitor — two-tier auto-sell worker.
+"""Position Monitor — rule-based auto-sell worker.
 
-Safety tier (every poll):  stop-loss (the position's exit plan, or the hard stop),
-                           target with partial booking, trailing stop, EOD exit.
-AI tier (every N polls):   Gemini 3 Flash sell analyst for intelligent exits.
+Every poll: stop-loss (the position's exit plan, or the hard stop), target with partial
+booking, trailing stop, EOD exit.
 
 Each position has an exit plan (``skopaq/execution/exit_plan.py``): the stop-loss and
 target set when its BUY filled, else defaults from the hard stop. At the target,
@@ -12,7 +11,7 @@ what was booked) are saved per day, so a restarted monitor carries on with them.
 
 With the INDstocks price feed (``price_feed``), prices come from its ticks while they are
 fresh (``ws_tick_max_age_seconds``) and the rules run every ``monitor_tick_poll_seconds``;
-the AI tier and the broker resync keep their pace in seconds, and a stale feed falls back
+the broker resync keeps its pace in seconds, and a stale feed falls back
 to REST quotes, never more often than ``monitor_poll_interval_seconds`` per position.
 
 Live (INDstocks), the monitor also keeps in step with the broker:
@@ -22,9 +21,9 @@ Live (INDstocks), the monitor also keeps in step with the broker:
   positions do not show yet. A position is never dropped on a failed read or on one
   empty read (sales already out of its quantity prove nothing), and never sold twice
   because positions lag behind a filled exit or the book behind an uncertain one.
-- Each exit runs as its own task, and so does each AI analysis and each resume of an
-  order left open, so neither a resting exit, a slow LLM call nor a cancel the broker
-  does not confirm holds up another position's stop-loss. Only the quantity the broker
+- Each exit runs as its own task, and so does each resume of an order left open, so
+  neither a resting exit nor a cancel the broker does not confirm holds up another
+  position's stop-loss. Only the quantity the broker
   confirmed counts; the rest of a partial exit is sold next cycle for the same reason.
 - It resumes orders left open (its own stuck exits, unconfirmed BUYs, and orders an
   earlier Skopaq process journalled), records their late fills, and stays alive while
@@ -39,7 +38,7 @@ Paper mode runs the loop exactly as before.
 
 Usage::
 
-    monitor = PositionMonitor(executor, client, router, config, llm, stop_event)
+    monitor = PositionMonitor(executor, client, router, config, stop_event)
     result = await monitor.run()
 """
 
@@ -55,7 +54,6 @@ from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 
-from skopaq.agents.sell_analyst import SellDecision, analyze_exit
 from skopaq.broker.models import (
     OrderType,
     Position,
@@ -151,7 +149,6 @@ class MonitoredPosition:
     # only sales beyond these can corroborate that it is gone
     sells_seen: Decimal = Decimal("0")
     exit_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
-    ai_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
     # Stop-loss, target and booking state (attached by the monitor)
     plan: Optional[ExitPlan] = field(default=None, repr=False, compare=False)
     last_ltp: float = 0.0
@@ -746,12 +743,7 @@ class PositionMonitor:
         * Trailing stop: LTP <= high_water * (1 - trailing_pct) (if enabled)
         * EOD exit: IST time >= (15:30 - eod_minutes)
 
-    Tier 2 — AI (every ``ai_interval_cycles`` cycles):
-        * Invokes the sell_analyst LLM to analyze technicals
-        * SELL recommendation → execute immediately
-        * HOLD → continue monitoring
-
-    Both tiers route SELL orders through the standard executor pipeline.
+    SELL orders go through the standard executor pipeline.
     """
 
     def __init__(
@@ -760,9 +752,7 @@ class PositionMonitor:
         client: INDstocksClient,
         router: OrderRouter,
         config: SkopaqConfig,
-        llm=None,
         stop_event: Optional[asyncio.Event] = None,
-        ai_enabled: bool = True,
         on_exit: Optional[Callable[[TradingSignal, Any], Awaitable[None]]] = None,
         *,
         sell_on_stop: bool = True,
@@ -792,9 +782,7 @@ class PositionMonitor:
         self._client = client
         self._router = router
         self._config = config
-        self._llm = llm
         self._stop = stop_event or asyncio.Event()
-        self._ai_enabled = ai_enabled and llm is not None
         self._sell_on_stop = sell_on_stop
         self._on_late_fill = on_late_fill
         self._sleep = sleep
@@ -814,7 +802,6 @@ class PositionMonitor:
         self._poll_interval = config.monitor_poll_interval_seconds
         self._hard_stop_pct = config.monitor_hard_stop_pct
         self._eod_minutes = config.monitor_eod_exit_minutes_before_close
-        self._ai_interval = config.monitor_ai_interval_cycles
         self._trailing_enabled = config.monitor_trailing_stop_enabled
         self._trailing_pct = config.monitor_trailing_stop_pct
         self._planner = exit_planner or ExitPlanner(config)
@@ -825,8 +812,8 @@ class PositionMonitor:
         self._result: Optional[MonitorResult] = None
         self._order_tasks: set[asyncio.Task] = set()
 
-        # Live ticks: a faster loop; cycle counts for the AI tier and the resync are
-        # scaled so they keep their pace in seconds
+        # Live ticks: a faster loop; the resync's cycle count is scaled so it keeps its
+        # pace in seconds
         self._feed = price_feed
         self._rest_at: dict[str, float] = {}
         self._tick_max_age = _positive(getattr(config, "ws_tick_max_age_seconds", 5.0), 5.0)
@@ -838,19 +825,6 @@ class PositionMonitor:
             if tick_poll < poll:
                 self._loop_interval = tick_poll
                 self._scale = max(1, round(poll / tick_poll))
-
-        # Live: the AI tier's analysis gets at most half the time between two of its
-        # turns (10–60 s), so an answer is never older than that
-        try:
-            self._ai_timeout_s = min(60.0, max(10.0, 0.5 * float(self._poll_interval)
-                                               * float(self._ai_interval)))
-        except (TypeError, ValueError):
-            self._ai_timeout_s = 30.0
-
-        # Minimum profit gate — prevents selling for tiny gains eaten by brokerage
-        self._min_profit_pct = config.daemon_min_profit_threshold_pct
-        self._min_profit_inr = config.daemon_min_profit_threshold_inr
-        self._est_brokerage = 120.0  # ~₹60 per side for INDstocks (brokerage + GST)
 
     async def run(self) -> MonitorResult:
         """Main monitoring loop.  Returns when all positions are closed,
@@ -927,31 +901,6 @@ class PositionMonitor:
                     if ok:
                         positions.remove(pos)
                     continue
-
-                # ── AI TIER (every N cycles) ──
-                if self._ai_enabled and cycle % (self._ai_interval * self._scale) == 0:
-                    decision = await self._check_ai(pos, ltp, pnl_pct)
-                    if decision and decision.action == "SELL":
-                        # Min profit gate: don't sell for tiny gains brokerage eats
-                        if pnl_pct > 0:
-                            gross_profit = (ltp - pos.entry_price) * pos.quantity
-                            net_profit = gross_profit - self._est_brokerage
-                            if (pnl_pct < self._min_profit_pct
-                                    or net_profit < self._min_profit_inr):
-                                logger.info(
-                                    "[%s] AI says SELL but profit too small: "
-                                    "gross=₹%.2f, net=₹%.2f (threshold: %.1f%% / ₹%.0f) "
-                                    "→ overriding to HOLD",
-                                    pos.symbol, gross_profit, net_profit,
-                                    self._min_profit_pct, self._min_profit_inr,
-                                )
-                                continue  # Skip this sell, keep monitoring
-
-                        reason = f"AI SELL (confidence={decision.confidence}%): {decision.reasoning}"
-                        ok = await self._execute_sell(pos, ltp, reason, result)
-                        if ok:
-                            positions.remove(pos)
-                        continue
 
                 # Log status
                 logger.info(
@@ -1042,9 +991,6 @@ class PositionMonitor:
             await self._final_state(positions, result)
         finally:
             armer.cancel()
-            for pos in positions:
-                if pos.ai_task is not None:
-                    pos.ai_task.cancel()
             for task in self._resumes.values():
                 task.cancel()  # its order stays unresolved (journalled) for a later process
             await self._abandon_exits(positions)
@@ -1133,7 +1079,7 @@ class PositionMonitor:
             pos.last_ltp = ltp
             pnl_pct = ((ltp - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price else 0.0
 
-            # The rest of a partial exit goes first, without asking the AI again
+            # The rest of a partial exit goes first
             reason = pos.exit_intent or self._check_safety(pos, ltp)
             qty: Optional[int] = None
             booking = False
@@ -1142,8 +1088,6 @@ class PositionMonitor:
                 if hit:
                     reason, qty = hit
                     booking = True
-            if not reason and pos.quantity > 0:
-                reason = await self._ai_reason(pos, ltp, pnl_pct, cycle)
             if not reason:
                 logger.info("[%s] LTP=%.2f  entry=%.2f  P&L=%+.2f%%  HWM=%.2f",
                             pos.symbol, ltp, pos.entry_price, pnl_pct, pos.high_water_mark)
@@ -1151,60 +1095,10 @@ class PositionMonitor:
             if pos.blocked_by:
                 self._alert_blocked(pos, reason, result)
             if pos.quantity > 0:
-                if pos.ai_task is not None:
-                    pos.ai_task.cancel()  # its answer would come too late to matter
-                    pos.ai_task = None
                 pos.exit_task = asyncio.create_task(
                     self._execute_sell(pos, ltp, reason, result, quantity=qty,
                                        booking=booking))
                 await asyncio.sleep(0)  # the exit starts before the next position's work
-
-    async def _ai_reason(self, pos: MonitoredPosition, ltp: float, pnl_pct: float,
-                         cycle: int) -> str:
-        """The AI tier (every N cycles): a SELL reason, or "" to hold.
-
-        The analysis runs as its own task, bounded by ``_ai_timeout_s``: a quick answer
-        is used this cycle, a slow one in the cycle it arrives. Meanwhile the loop keeps
-        checking every position's stops and the exits keep being worked. None is started
-        once the stop is set.
-        """
-        task = pos.ai_task
-        if task is None:
-            if (not (self._ai_enabled and cycle % (self._ai_interval * self._scale) == 0)
-                    or self._stop.is_set()):
-                return ""
-            task = pos.ai_task = asyncio.create_task(self._bounded_ai(pos, ltp, pnl_pct))
-            await asyncio.sleep(0)       # a quick answer is used this cycle
-        if not task.done():
-            return ""                    # a slow one when it arrives
-        pos.ai_task = None
-        decision = None if task.cancelled() or task.exception() else task.result()
-        if not decision or decision.action != "SELL":
-            return ""
-        # Min profit gate: don't sell for tiny gains brokerage eats
-        if pnl_pct > 0:
-            gross_profit = (ltp - pos.entry_price) * pos.quantity
-            net_profit = gross_profit - self._est_brokerage
-            if pnl_pct < self._min_profit_pct or net_profit < self._min_profit_inr:
-                logger.info(
-                    "[%s] AI says SELL but profit too small: gross=₹%.2f, net=₹%.2f "
-                    "(threshold: %.1f%% / ₹%.0f) → overriding to HOLD",
-                    pos.symbol, gross_profit, net_profit,
-                    self._min_profit_pct, self._min_profit_inr,
-                )
-                return ""
-        return f"AI SELL (confidence={decision.confidence}%): {decision.reasoning}"
-
-    async def _bounded_ai(self, pos: MonitoredPosition, ltp: float,
-                          pnl_pct: float) -> Optional[SellDecision]:
-        """The sell analyst, given at most ``_ai_timeout_s`` (then: hold)."""
-        try:
-            async with asyncio.timeout(self._ai_timeout_s):
-                return await self._check_ai(pos, ltp, pnl_pct)
-        except TimeoutError:
-            logger.warning("[%s] AI sell analysis took over %.0fs — holding", pos.symbol,
-                           self._ai_timeout_s)
-            return None
 
     def _alert_blocked(self, pos: MonitoredPosition, reason: str,
                        result: MonitorResult) -> None:
@@ -1236,11 +1130,8 @@ class PositionMonitor:
 
     @staticmethod
     def _drop(positions: list[MonitoredPosition], pos: MonitoredPosition) -> None:
-        """Stop tracking ``pos`` (and its AI analysis, if one is running)."""
+        """Stop tracking ``pos``."""
         positions.remove(pos)
-        if pos.ai_task is not None:
-            pos.ai_task.cancel()
-            pos.ai_task = None
 
     def _running_exits(self, positions: list[MonitoredPosition]) -> list[asyncio.Task]:
         return [p.exit_task for p in positions
@@ -2119,36 +2010,6 @@ class PositionMonitor:
         close_dt = datetime.combine(datetime.today(), _MARKET_CLOSE)
         exit_dt = close_dt - timedelta(minutes=self._eod_minutes)
         return now_ist >= exit_dt.time()
-
-    # ── AI Tier ──────────────────────────────────────────────────────────
-
-    async def _check_ai(
-        self, pos: MonitoredPosition, ltp: float, pnl_pct: float,
-    ) -> Optional[SellDecision]:
-        """Invoke the sell analyst LLM.  Returns SellDecision or None on error."""
-        if not self._llm:
-            return None
-
-        trade_date = datetime.now(_IST).strftime("%Y-%m-%d")
-
-        logger.info("[%s] Running AI sell analysis...", pos.symbol)
-        decision = await analyze_exit(
-            llm=self._llm,
-            symbol=pos.symbol,
-            entry_price=pos.entry_price,
-            current_price=ltp,
-            quantity=pos.quantity,
-            position_pnl_pct=pnl_pct,
-            trade_date=trade_date,
-            min_profit_threshold_pct=self._min_profit_pct,
-            estimated_round_trip_brokerage=self._est_brokerage,
-        )
-
-        logger.info(
-            "[%s] AI decision: %s (confidence=%d%%) — %s",
-            pos.symbol, decision.action, decision.confidence, decision.reasoning,
-        )
-        return decision
 
     # ── Execution ────────────────────────────────────────────────────────
 

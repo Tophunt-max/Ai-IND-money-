@@ -12,14 +12,19 @@ interface Report {
   days: number;
   mode: string;
   min_sample: number;
-  calls: {
+  signals: {
     total: number;
-    pending: number;
-    settled: number;
-    hit_rate: number | null;
-    directional: number;
-    long_alpha: number | null;
-    by_rating: Record<string, { calls: number; settled: number; avg_return: number | null; avg_alpha: number | null }>;
+    qualified: number;
+    rejected: number;
+    expired: number;
+    executed: number;
+    closed: number;
+    wins: number;
+    net: number;
+    win_rate: number | null;
+    enough_data: boolean;
+    by_strategy: Record<string, { decisions: number; qualified: number; executed: number; closed: number; wins: number; net: number; win_rate: number | null }>;
+    top_rejections: [string, number][];
   };
   trades: {
     closed: number;
@@ -46,7 +51,7 @@ export default function ReportPage() {
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <PageTitle title="Track record" icon={BarChart3} subtitle="Forward results only: every AI call scored against what the market then did"
+      <PageTitle title="Track record" icon={BarChart3} subtitle="Forward results only: every Adaptive AI signal the engines decided, and what its trade then made after charges"
         right={<Button variant="ghost" icon={RefreshCw} onClick={reload}>Refresh</Button>} />
       <Segmented value={days} onChange={setDays} options={RANGES} />
       <ErrorBox error={error} />
@@ -55,16 +60,16 @@ export default function ReportPage() {
       ) : r ? (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard title="AI calls" icon={Target} tone="info" value={r.calls.total} detail={`${r.calls.settled} settled · ${r.calls.pending} pending`} />
-            <StatCard title="Hit rate" icon={Gauge} value={pct(r.calls.hit_rate)} detail={`of ${r.calls.directional} directional calls`}
-              tone={r.calls.directional < r.min_sample ? "warning" : "ok"} />
-            <StatCard title="Buy calls vs NIFTY" icon={TrendingUp} value={<span className={pnlClass(r.calls.long_alpha)}>{pct(r.calls.long_alpha, 2)}</span>} detail="Average excess return" />
+            <StatCard title="AI signals" icon={Target} tone="info" value={r.signals.total} detail={`${r.signals.qualified} qualified · ${r.signals.rejected} rejected`} />
+            <StatCard title="Signal win rate" icon={Gauge} value={pct(r.signals.win_rate)} detail={`of ${r.signals.closed} closed · ${r.signals.executed} executed`}
+              tone={r.signals.enough_data ? "ok" : "warning"} />
+            <StatCard title="Signals net P&L" icon={TrendingUp} value={<span className={pnlClass(r.signals.net)}>{inr(r.signals.net)}</span>} detail="After charges, closed signals" />
             <StatCard title="Realized P&L" icon={Wallet} tone={r.trades.total_pnl >= 0 ? "ok" : "error"}
               value={<span className={pnlClass(r.trades.total_pnl)}>{inr(r.trades.total_pnl)}</span>}
               detail={`${r.trades.closed} closed · ${r.trades.closed ? pct(r.trades.wins / r.trades.closed, 0) : "—"} won`} />
           </div>
-          {r.calls.directional < r.min_sample && (
-            <Notice tone="warning">Only {r.calls.directional} settled directional calls. Below {r.min_sample}, hit rates are mostly noise.</Notice>
+          {!r.signals.enough_data && (
+            <Notice tone="warning">Only {r.signals.closed} closed signals. Below {r.min_sample}, win rates are mostly noise.</Notice>
           )}
 
           <div className="grid gap-3 lg:grid-cols-2">
@@ -106,26 +111,37 @@ export default function ReportPage() {
                 center={<div><div className="num text-lg font-bold text-white">{r.trades.closed ? Math.round((r.trades.wins / r.trades.closed) * 100) : 0}%</div><div className="text-[10px] text-gray-500">won</div></div>} />
             </Card>
           </div>
-          {Object.keys(r.calls.by_rating).length > 0 && (
-            <Card title="Average return by rating" subtitle="Settled AI calls (bars) — vs NIFTY in the table below">
-              <BarChart height={140} format={(v) => `${v.toFixed(2)}%`}
-                bars={Object.entries(r.calls.by_rating).sort().map(([k, s]) => ({ label: k.slice(0, 8), v: (s.avg_return ?? 0) * 100, hint: `${k}: ${s.settled} settled` }))} />
+          {Object.keys(r.signals.by_strategy).length > 0 && (
+            <Card title="Net P&L by strategy" subtitle="Closed signals, after charges">
+              <BarChart height={140} format={(v) => inr(v, 0)}
+                bars={Object.entries(r.signals.by_strategy).sort().map(([k, s]) => ({ label: k.replace(/^(scalp|swing|fno)\./, "").slice(0, 10), v: s.net, hint: `${k}: ${s.closed} closed` }))} />
             </Card>
           )}
 
-          <Card title="Calls by rating">
-            {Object.keys(r.calls.by_rating).length === 0 ? <Empty>No AI calls in this period yet.</Empty> : (
-              <Table head={["Rating", "Calls", "Settled", "Avg return", "Vs NIFTY"]}>
-                {Object.entries(r.calls.by_rating).sort().map(([rating, s]) => (
-                  <tr key={rating} className="hover:bg-white/[0.02]">
-                    <td className="font-medium text-white">{rating}</td><td>{s.calls}</td><td>{s.settled}</td>
-                    <td className={pnlClass(s.avg_return)}>{pct(s.avg_return, 2)}</td>
-                    <td className={pnlClass(s.avg_alpha)}>{pct(s.avg_alpha, 2)}</td>
-                  </tr>
-                ))}
-              </Table>
-            )}
-          </Card>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Card title="Signals by strategy">
+              {Object.keys(r.signals.by_strategy).length === 0 ? <Empty>No signals in this period yet.</Empty> : (
+                <Table head={["Strategy", "Decided", "Qualified", "Executed", "Win rate", "Net"]}>
+                  {Object.entries(r.signals.by_strategy).sort().map(([name, s]) => (
+                    <tr key={name} className="hover:bg-white/[0.02]">
+                      <td className="font-medium text-white">{name}</td><td>{s.decisions}</td><td>{s.qualified}</td><td>{s.executed}</td>
+                      <td>{pct(s.win_rate)}</td>
+                      <td className={pnlClass(s.net)}>{inr(s.net, 0)}</td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
+            </Card>
+            <Card title="Why signals were rejected" subtitle="Most common gate reasons">
+              {r.signals.top_rejections.length === 0 ? <Empty>No rejections in this period.</Empty> : (
+                <Table head={["Reason", "Count"]}>
+                  {r.signals.top_rejections.map(([why, count]) => (
+                    <tr key={why}><td className="text-gray-300">{why}</td><td className="num">{count}</td></tr>
+                  ))}
+                </Table>
+              )}
+            </Card>
+          </div>
           <p className="text-xs text-gray-600">Mode {r.mode} · sources: {r.sources.join(", ") || "none"}</p>
         </>
       ) : null}

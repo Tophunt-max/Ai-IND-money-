@@ -1,34 +1,62 @@
-# Swing Trading
+# Swing Trading (Adaptive AI)
 
-The GTT-based swing workflow (`setup_swing_trade`, `place_gtt_order`) relied on Kite Connect and was removed. Swing trades with automatic target and stop-loss legs will come back on INDstocks smart orders in the next phase (see [GTT Orders](gtt-orders.md)).
+The swing book buys NSE stocks on daily setups that the **swing model** — part of the Adaptive AI — has learned to trust. How it works inside: [Trading Pipeline](../architecture/pipeline.md).
 
-## What Still Works
+!!! note "Out the same day"
+    The position monitor and the daemon's CLOSING sell every position from 15:20 IST, so the swing book does not hold overnight yet. The model is trained on exactly that: entry at the open, stop or target during the day, else out at the close.
 
-| Step | How |
-|------|-----|
-| Find candidates | `skopaq scan`, MCP `scan_market` (Telegram sends an automatic scan at 09:25 IST) |
-| Analyse a stock | `skopaq analyze RELIANCE`, Telegram `/analyze RELIANCE`, MCP `analyze_stock` |
-| Place an order | MCP `place_order` (paper engine, every order passes the `SafetyChecker`) |
-| Automated trading and exits | `skopaq daemon` (scan, analyse, trade) and `skopaq monitor` (stop-loss, trailing stop, end-of-day exits) |
-| Learn from the outcome | MCP `save_trade_reflection` |
+## 1. Train a model (no orders)
 
-## Position Sizing
-
-SkopaqTrader uses the 1% risk rule:
-
-```
-Available capital:    Rs 10,00,000
-Risk per trade:       1% = Rs 10,000
-Stop distance:        Rs 2,400 - Rs 2,350 = Rs 50
-Position size:        Rs 10,000 / Rs 50 = 200 shares
-Order value:          200 x Rs 2,400 = Rs 4,80,000
+```bash
+skopaq swing-train                       # NIFTY 50 (or SKOPAQ_SWING_SYMBOLS), 5 years of daily history
+skopaq swing-train --symbols RELIANCE,TCS,INFY --days 1095 --model linear
+skopaq swing-status                      # champion, shadow, test results per version
 ```
 
-!!! warning "Safety limits apply"
-    The `SafetyChecker` enforces max position size (15% of capital) and max order value (Rs 5,00,000). If your calculated size exceeds these limits, it will be capped.
+Or **Dashboard → AI learning → Swing model → Train swing model**. A model that passes the gates becomes the *shadow*; one that does not stays a *candidate* (the reasons are listed).
 
-## Risk Management
+`--model linear` needs no ML library; `lightgbm` (the default), `xgboost`, `catboost` and `random_forest` need their packages.
 
-1. **Never risk more than 1-2% per trade** -- Position size accordingly
-2. **Avoid earnings** -- Do not swing trade through earnings announcements
-3. **Maximum 3-5 concurrent swings** -- Enforced by `max_open_positions` safety rule
+## 2. See today's ideas
+
+```bash
+skopaq scan --limit 10                   # setup, entry / stop / target, P(win)
+```
+
+Also: dashboard **Swing scanner**, Telegram `/ideas`, MCP `swing_ideas` / `swing_idea`, Claude Code `/scan`.
+
+## 3. Paper sessions
+
+```bash
+skopaq daemon --once --paper             # scan → gate → executor → monitor → close
+```
+
+On paper the shadow model trades when there is no champion. With no model at all, `SKOPAQ_SWING_RULES_ONLY=true` trades the raw setups on paper to build a record (never live).
+
+## 4. Promote, then live
+
+After 7 days in shadow:
+
+```bash
+skopaq swing-promote swing-lightgbm-20261012T... --by "your name" --reason "paper record ok"
+skopaq daemon --once --live --confirm-live
+```
+
+Live sessions use the champion only. `skopaq swing-rollback --by NAME --reason TEXT` goes back to the previous one.
+
+## Settings
+
+| Variable | Default | What |
+|----------|---------|------|
+| `SKOPAQ_SWING_SYMBOLS` | NIFTY 50 | The universe (comma-separated) |
+| `SKOPAQ_SWING_TARGET_RR` | 2.0 | Target in R (risk multiples) |
+| `SKOPAQ_ATR_MULTIPLIER` | 2.0 | Stop distance in ATRs |
+| `SKOPAQ_SWING_MODEL_KIND` | lightgbm | Model trained by `swing-train` |
+| `SKOPAQ_SWING_TRAIN_DAYS` | 1825 | Calendar days of daily history |
+| `SKOPAQ_SWING_MIN_NET_RR` | 1.0 | The gate's minimum reward/risk after charges |
+| `SKOPAQ_SWING_RULES_ONLY` | false | Paper only: trade setups without a model |
+| `SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE` | 5 | Ideas tried per session |
+
+## Position sizing and limits
+
+The executor sizes every entry from its ATR stop (risk per trade), scaled down in a weak market regime and around events (F&O expiry, RBI policy). The `SafetyChecker` then caps it by the position-size and order-value limits, the open-position count, the loss limits and the kill switch. None of these can be changed by a model.

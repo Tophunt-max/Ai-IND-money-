@@ -47,7 +47,7 @@ def _config(**over):
 def _monitor(feed, client=None, config=None, **kw):
     config = config or _config()
     return PositionMonitor(MagicMock(), client or AsyncMock(), MagicMock(), config,
-                           ai_enabled=False, wall=lambda: BASE_WALL, price_feed=feed,
+                           wall=lambda: BASE_WALL, price_feed=feed,
                            exit_planner=ExitPlanner(config), **kw)
 
 
@@ -80,14 +80,13 @@ async def test_a_stale_feed_falls_back_to_rest_at_the_normal_pace():
     assert client.get_ltp.await_count == 3
 
 
-def test_the_fast_loop_keeps_the_ai_and_resync_pace_in_seconds():
+def test_the_fast_loop_keeps_the_resync_pace_in_seconds():
     mon = _monitor(FakeFeed())
     mon._watching = lambda: False                    # nothing open at the broker
     assert (mon._loop_interval, mon._scale) == (1.0, 10)
     # Every 3 polls of 10 s = every 30 one-second cycles
     assert mon._resync_due(10, []) is False and mon._resync_due(30, []) is True
-    plain = PositionMonitor(MagicMock(), AsyncMock(), MagicMock(), _config(),
-                            ai_enabled=False)
+    plain = PositionMonitor(MagicMock(), AsyncMock(), MagicMock(), _config())
     assert (plain._loop_interval, plain._scale) == (10, 1)
 
 
@@ -109,7 +108,7 @@ async def test_paper_positions_are_subscribed_and_stopped_out_on_a_tick(monkeypa
     client = AsyncMock()
     mon = PositionMonitor(executor, client, router, _config(monitor_tick_poll_seconds=0.001,
                                                             monitor_poll_interval_seconds=0.01),
-                          ai_enabled=False, wall=lambda: BASE_WALL, price_feed=feed)
+                          wall=lambda: BASE_WALL, price_feed=feed)
 
     result = await asyncio.wait_for(mon.run(), 5)
 

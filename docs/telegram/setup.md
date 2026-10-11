@@ -1,6 +1,6 @@
 # Telegram Bot Setup
 
-SkopaqTrader includes a Telegram bot (`@Skopaq_bot`) that provides trade alerts, portfolio monitoring, and scheduled market updates. The bot is defined in `skopaq/telegram_bot.py`.
+SkopaqTrader includes a Telegram bot (`@Skopaq_bot`) that provides trade alerts, portfolio monitoring, the Adaptive AI's swing ideas, and scheduled market updates. The bot is defined in `skopaq/telegram_bot.py`.
 
 ## Create Your Bot
 
@@ -32,8 +32,8 @@ SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS=
 !!! tip "Finding your chat ID"
     Send `/start` to your bot: until your chat is allowed, it replies with the chat ID to add. Alternatively, send a message to `@userinfobot`.
 
-!!! warning "Trades need /confirm"
-    When a chat message leads the agent to a trade, the bot shows the trade and waits for `/confirm` (or `/cancel`) before executing it. `/halt REASON` and `/resume` work the kill switch.
+!!! note "No orders from Telegram"
+    The bot answers slash commands only; it places no orders. `/halt REASON` and `/resume` work the kill switch.
 
 ### Step 3: Configure Bot Commands (Optional)
 
@@ -50,8 +50,11 @@ quote - Get real-time stock quote
 portfolio - View positions and P&L
 status - System health check
 pnl - Current P&L summary
-analyze - Quick stock analysis
+analyze - Indicators and the swing model's view
+ideas - Today's swing ideas
 token - INDstocks token status
+halt - Kill switch: stop all new BUYs
+resume - Lift the kill switch
 help - List all commands
 ```
 
@@ -59,12 +62,6 @@ help - List all commands
 
 ```bash
 python -m skopaq.telegram_bot
-```
-
-Or via the CLI:
-
-```bash
-skopaq telegram  # If this command exists
 ```
 
 The bot starts polling for messages and registers 3 scheduled jobs:
@@ -92,7 +89,7 @@ fly launch --name skopaq-telegram --region bom --no-deploy
 fly secrets set \
   SKOPAQ_TELEGRAM_BOT_TOKEN="your-token" \
   SKOPAQ_INDSTOCKS_TOKEN="your-token" \
-  SKOPAQ_GOOGLE_API_KEY="your-key" \
+  SKOPAQ_TELEGRAM_CHAT_ID="123456789" \
   -a skopaq-telegram
 ```
 
@@ -158,13 +155,12 @@ Telegram Cloud
       ▼
 skopaq/telegram_bot.py
       │
-      ├── Command Handlers (/quote, /portfolio, etc.)
-      ├── Natural Language Handler (AI chat brain)
+      ├── Command Handlers (/quote, /ideas, /analyze, etc.; allow-listed chats only)
       ├── Scheduled Jobs (token check, scan, EOD)
       │
       ├── skopaq/broker/client.py (INDstocks market data, positions, funds)
       ├── skopaq/notifications.py (centralized alerts)
-      └── skopaq/mcp_server.py (analysis tools)
+      └── skopaq/mcp_server.py (quotes, portfolio, status, swing ideas, indicators)
 ```
 
 ## Notification System
@@ -177,7 +173,7 @@ from skopaq.notifications import notify
 await notify("Order filled: BUY 10x RELIANCE @ Rs 2,485")
 ```
 
-Chat IDs are registered when users send `/start`. All registered chats receive notifications.
+`notify()` sends to `SKOPAQ_TELEGRAM_CHAT_ID` plus any chat registered in the same process (in the bot, with `/start`).
 
 !!! warning "Single bot per token"
     Telegram allows only one bot instance per token. If you run the bot locally and on Fly.io simultaneously, one will fail to receive messages.

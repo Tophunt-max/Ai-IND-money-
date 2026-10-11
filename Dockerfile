@@ -1,4 +1,4 @@
-# SkopaqTrader: one image for every service (api, telegram, scheduler, daemon, mcp, chat, ...).
+# SkopaqTrader: one image for every service (api, telegram, scheduler, daemon, mcp, ...).
 # Used by docker-compose.yml (Mac mini / any always-on host), Fly (fly.toml, fly-telegram.toml)
 # and Railway (railway.toml, railway-daemon.toml).
 #

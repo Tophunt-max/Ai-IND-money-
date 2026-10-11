@@ -132,8 +132,7 @@ async def test_halted_daemon_skips_scan_and_trades(halt_file):
     daemon = TradingDaemon(MagicMock(trading_mode="paper"))
     kill_switch.halt("stop")
     with patch.object(daemon, "_phase_pre_open", new_callable=AsyncMock), \
-         patch.object(daemon, "_phase_scan", new_callable=AsyncMock) as scan, \
-         patch.object(daemon, "_settle_due_decisions", new_callable=AsyncMock, return_value=0):
+         patch.object(daemon, "_phase_scan", new_callable=AsyncMock) as scan:
         report = await daemon.run_session()
 
     scan.assert_not_awaited()
@@ -145,14 +144,14 @@ async def test_halt_during_a_session_stops_further_analysis(halt_file):
     from skopaq.execution.daemon import DaemonSessionReport, TradingDaemon
 
     daemon = TradingDaemon(MagicMock(trading_mode="paper"))
-    daemon._graph = MagicMock()
+    daemon._swing = MagicMock()
     kill_switch.halt("stop")
     report = DaemonSessionReport()
     with patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)):
         await daemon._phase_analyze_and_trade([MagicMock(symbol="TCS")], report)
 
     assert report.candidates_analyzed == 0
-    daemon._graph.analyze_and_execute.assert_not_called()
+    daemon._swing.trade.assert_not_called()
 
 
 # ── Controls ─────────────────────────────────────────────────────────────────

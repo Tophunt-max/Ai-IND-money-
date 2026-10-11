@@ -12,7 +12,7 @@ Replaces Railway's cron on a single always-on host (the docker compose
 - At most once per day: a marker file is written *before* launch, so a restart
   (container recreate, host reboot) never starts a second session that day.
   The one exception: a session whose PRE_OPEN failed (exit code 3: token, broker
-  session or LLM setup; nothing was traded) is started again every 5 minutes
+  session; nothing was traded) is started again every 5 minutes
   until LAST_START, so setting a missing token at 09:30 still gives a session.
 - Pre-flight: at ``SKOPAQ_SCHEDULER_PREFLIGHT`` (08:45) an alert is sent if the
   INDstocks token is missing or expires before the session would end.
@@ -35,8 +35,6 @@ Replaces Railway's cron on a single always-on host (the docker compose
 - One scheduler per state dir: ``<state_dir>/scheduler.lock`` is flocked for the
   scheduler's lifetime; a second one exits 1, alerting once a day (``--check``
   takes no lock).
-- Settle backstop: ``skopaq settle`` once per trading day at
-  ``SKOPAQ_SCHEDULER_SETTLE_AT`` (18:30).
 - Alerts go to Telegram (``skopaq.notifications``); an optional dead-man's
   switch URL is pinged after each session. A heartbeat file is touched on
   every loop for the container health check.
@@ -130,7 +128,6 @@ class ScheduleSettings:
     last_start: time
     deadline: time
     eod_exit: time  # when `skopaq monitor` sells everything (and sells on a stop from then on)
-    settle_at: Optional[time]
     preflight: Optional[time]
     poll_seconds: int
     kill_after_seconds: int
@@ -182,9 +179,6 @@ class ScheduleSettings:
         start = hhmm("SKOPAQ_SCHEDULER_START", config.scheduler_start)
         last_start = hhmm("SKOPAQ_SCHEDULER_LAST_START", config.scheduler_last_start)
         deadline = hhmm("SKOPAQ_SCHEDULER_DEADLINE", config.scheduler_deadline)
-        settle_at = None
-        if (config.scheduler_settle_at or "").strip():
-            settle_at = hhmm("SKOPAQ_SCHEDULER_SETTLE_AT", config.scheduler_settle_at)
         preflight = None
         if (config.scheduler_preflight or "").strip():
             preflight = hhmm("SKOPAQ_SCHEDULER_PREFLIGHT", config.scheduler_preflight)
@@ -199,11 +193,6 @@ class ScheduleSettings:
             problems.append(
                 f"SKOPAQ_SCHEDULER_PREFLIGHT ({preflight:%H:%M}) must be earlier than "
                 f"SKOPAQ_SCHEDULER_START ({start:%H:%M}), or empty"
-            )
-        if settle_at and deadline and settle_at <= deadline:
-            problems.append(
-                f"SKOPAQ_SCHEDULER_SETTLE_AT ({settle_at:%H:%M}) must be later than "
-                f"SKOPAQ_SCHEDULER_DEADLINE ({deadline:%H:%M}), or empty"
             )
         poll_seconds = seconds("SKOPAQ_SCHEDULER_POLL_SECONDS", config.scheduler_poll_seconds)
         kill_after_seconds = seconds("SKOPAQ_SCHEDULER_KILL_AFTER_SECONDS",
@@ -227,7 +216,6 @@ class ScheduleSettings:
             last_start=last_start,
             deadline=deadline,
             eod_exit=eod_exit.time(),
-            settle_at=settle_at,
             preflight=preflight,
             poll_seconds=poll_seconds,
             kill_after_seconds=kill_after_seconds,
@@ -360,7 +348,7 @@ class SchedulerState:
 
 
 def due_job(now: datetime, settings: ScheduleSettings, state: SchedulerState) -> Optional[str]:
-    """The job due at *now*: ``"daemon"``, ``"settle"`` or ``None`` (reads markers only)."""
+    """The job due at *now*: ``"daemon"`` or ``None`` (reads markers only)."""
     now = now.astimezone(IST)
     if not settings.enabled:
         return None
@@ -369,9 +357,6 @@ def due_job(now: datetime, settings: ScheduleSettings, state: SchedulerState) ->
         return None
     if settings.start <= t < settings.last_start and _daemon_may_start(now, state):
         return "daemon"
-    settle_at = settings.settle_at
-    if settle_at is not None and t >= settle_at and not state.started("settle", day):
-        return "settle"
     return None
 
 
@@ -697,7 +682,7 @@ def alert_invalid_config(
 
 
 _RELOADED_FIELDS = ("enabled", "mode", "confirm_live", "start", "last_start", "deadline",
-                    "eod_exit", "settle_at", "preflight", "poll_seconds", "kill_after_seconds",
+                    "eod_exit", "preflight", "poll_seconds", "kill_after_seconds",
                     "ping_url", "extra_holidays")
 
 
@@ -809,13 +794,12 @@ def _loop(settings, *, clock, runner, alert, ping, sleep, stop, reload=None) -> 
 
     state = SchedulerState(settings.state_dir, settings.log_dir)
     logger.info(
-        "Scheduler started: mode=%s%s start=%s last_start=%s deadline=%s settle=%s "
+        "Scheduler started: mode=%s%s start=%s last_start=%s deadline=%s "
         "(IST), NSE holiday years known: %s",
         settings.mode,
         "" if settings.mode == "paper" or settings.confirm_live else " (NOT confirmed)",
         f"{settings.start:%H:%M}", f"{settings.last_start:%H:%M}",
         f"{settings.deadline:%H:%M}",
-        f"{settings.settle_at:%H:%M}" if settings.settle_at else "off",
         _known_years(settings.extra_holidays),
     )
 
@@ -929,20 +913,6 @@ def _tick(now, settings, state, *, runner, alert, ping, stop, clock) -> None:
     if job == "daemon":
         _run_daemon_session(day, now, settings, state, runner=runner, alert=alert, ping=ping,
                             stop=stop, clock=clock)
-    elif job == "settle":
-        state.mark_started("settle", day)
-        result = runner(
-            _cli("settle"),
-            deadline=now + timedelta(hours=1),
-            settings=settings,
-            log_path=settings.log_dir / f"settle-{day.isoformat()}.log",
-            stop=stop,
-            clock=clock,
-            alert=alert,
-        )
-        state.record_exit("settle", day, result.rc)
-        if result.rc != 0:
-            alert(f"settle exited rc={result.rc} on {day}")
 
 
 def _unconfirmed_live(settings) -> str:
@@ -1307,12 +1277,10 @@ def describe(settings: ScheduleSettings, now: datetime, state: SchedulerState) -
         f"Next session:   {_next_session(now, settings, state)}",
         f"Mode:           {mode}",
         f"Window (IST):   start {settings.start:%H:%M}, catch-up until "
-        f"{settings.last_start:%H:%M}, deadline {settings.deadline:%H:%M}, settle "
-        f"{settings.settle_at.strftime('%H:%M') if settings.settle_at else 'off'}, pre-flight "
+        f"{settings.last_start:%H:%M}, deadline {settings.deadline:%H:%M}, pre-flight "
         f"{settings.preflight.strftime('%H:%M') if settings.preflight else 'off'}",
         f"Today's daemon: {marker('daemon')}",
         *monitor,
-        f"Today's settle: {marker('settle')}",
         f"State dir:      {settings.state_dir}",
         f"Log dir:        {settings.log_dir}",
         f"Ping URL:       {'configured' if settings.ping_url else 'not configured'}",

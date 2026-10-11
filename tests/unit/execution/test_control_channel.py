@@ -201,7 +201,7 @@ def _paper_monitor(tmp_path, monkeypatch, *, ltp=100.0):
     async def on_exit(signal, execution):
         exits.append((signal.action, signal.symbol, signal.quantity, signal.reasoning))
 
-    monitor = PositionMonitor(executor, client, router, config, ai_enabled=False,
+    monitor = PositionMonitor(executor, client, router, config,
                               on_exit=on_exit, wall=lambda: BASE_WALL, control=channel)
     return monitor, executor, paper, channel, exits
 

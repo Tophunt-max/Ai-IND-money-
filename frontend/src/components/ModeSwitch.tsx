@@ -143,7 +143,7 @@ export default function ModeSwitch({ env, onChange, compact = false }: {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="grid grid-cols-2 gap-3 text-sm sm:max-w-md sm:flex-1">
             <div className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
-              <div className="text-xs text-gray-500">Manual trades & chat</div>
+              <div className="text-xs text-gray-500">Manual trades &amp; API orders</div>
               <div className={cx("mt-1 font-semibold", m.trading === "live" ? "text-rose-300" : "text-amber-300")}>{m.trading.toUpperCase()}</div>
             </div>
             <div className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">

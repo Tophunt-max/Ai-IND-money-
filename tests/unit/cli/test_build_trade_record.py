@@ -1,4 +1,4 @@
-"""Tests for _build_trade_record() — AnalysisResult → TradeRecord mapping.
+"""Tests for _build_trade_record() — TradeResult → TradeRecord mapping.
 
 Validates that the helper correctly converts execution results into
 Supabase-ready TradeRecord objects, handling edge cases like:
@@ -17,7 +17,7 @@ import pytest
 
 from skopaq.broker.models import Exchange, ExecutionResult, TradingSignal
 from skopaq.db.models import TradeRecord
-from skopaq.graph.skopaq_graph import AnalysisResult
+from skopaq.execution.trade_booking import TradeResult as AnalysisResult
 
 
 # Import the function under test — it's a module-level function in main.py
@@ -40,8 +40,7 @@ def _make_result(
     success: bool = True,
     quantity: Optional[int] = 10,
     reasoning: str = "AI detected bullish momentum",
-    cache_hits: int = 5,
-    cache_misses: int = 3,
+    evidence: Optional[dict] = None,
     duration: float = 4.2,
 ) -> AnalysisResult:
     """Build a test AnalysisResult."""
@@ -68,8 +67,7 @@ def _make_result(
         trade_date="2026-03-03",
         signal=signal if action != "_NONE_" else None,
         execution=execution,
-        cache_hits=cache_hits,
-        cache_misses=cache_misses,
+        evidence={"setup": "breakout", "prob": 0.64} if evidence is None else evidence,
         duration_seconds=duration,
     )
 
@@ -173,14 +171,15 @@ class TestBuildTradeRecord:
 
         assert len(record.entry_reason) == 2000
 
-    def test_model_signals_has_cache_stats(self):
-        """model_signals should contain cache hit/miss counts."""
-        result = _make_result(cache_hits=10, cache_misses=2, duration=3.5)
+    def test_model_signals_has_the_swing_evidence(self):
+        """model_signals carries the engine's evidence (setup, model probability)."""
+        result = _make_result(evidence={"setup": "trend_pullback", "prob": 0.61, "model": None},
+                              duration=3.5)
         record = self.build(result, self.config)
 
-        assert record.model_signals["cache_hits"] == 10
-        assert record.model_signals["cache_misses"] == 2
+        assert record.model_signals["swing"] == {"setup": "trend_pullback", "prob": 0.61}
         assert record.model_signals["duration_seconds"] == 3.5
+        assert "swing" not in self.build(_make_result(evidence={}), self.config).model_signals
 
     def test_agent_decision_has_action_and_confidence(self):
         """agent_decision should capture the action and confidence."""
@@ -237,7 +236,7 @@ class TestLiveTradeRecord:
         assert record.model_signals["broker"] == {
             "outcome": "partial", "requested_qty": 5, "fill_price_source": "trades",
             "remaining_open": False, "fill_unconfirmed": False, "order_ids": ["EQ-1"]}
-        assert record.model_signals["cache_hits"] == 5      # the rest is as before
+        assert record.model_signals["swing"]["setup"] == "breakout"   # the rest is as before
 
     def test_a_multi_order_exit_joins_its_order_ids(self):
         record = self.build(self._live(filled_quantity=Decimal(5), outcome="filled",

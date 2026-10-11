@@ -53,8 +53,8 @@ def _recorders(monitor, cfg):
     """Route a monitor's exits and late fills to the real recorders."""
     from skopaq.cli.main import _record_exit, _record_late_fill
 
-    monitor._on_exit = lambda s, e: _record_exit(cfg, None, None, s, e)
-    monitor._on_late_fill = lambda t, c: _record_late_fill(cfg, None, None, t, c)
+    monitor._on_exit = lambda s, e: _record_exit(cfg, s, e)
+    monitor._on_late_fill = lambda t, c: _record_late_fill(cfg, t, c)
 
 
 async def _cycle(monitor, positions, result, *, first=False):
@@ -355,7 +355,7 @@ async def test_an_unusable_lock_file_counts_as_no_lock(alerts, tmp_path):
 @pytest.mark.parametrize("paper_row", [False, True])
 async def test_a_refused_paper_sell_closes_no_row(memrepo, monkeypatch, paper_row):
     from skopaq.cli.main import _run_lifecycle
-    from skopaq.graph.skopaq_graph import AnalysisResult
+    from skopaq.execution.trade_booking import TradeResult as AnalysisResult
 
     monkeypatch.setattr("skopaq.notifications.notify", AsyncMock())
     row = memrepo.insert(TradeRecord(symbol="TCS", side="BUY", quantity=Decimal(10),
@@ -368,7 +368,7 @@ async def test_a_refused_paper_sell_closes_no_row(memrepo, monkeypatch, paper_ro
                            quantity=Decimal(10), confidence=80, stop_loss=95.0)
     result = await executor.execute_signal(signal)       # the paper engine holds no TCS
     assert not result.success
-    await _run_lifecycle(cfg, None, None, AnalysisResult(
+    await _run_lifecycle(cfg, AnalysisResult(
         symbol="TCS", trade_date="2026-09-25", signal=signal, execution=result))
 
     assert memrepo.rows[row.id].closed_at is None
@@ -377,7 +377,7 @@ async def test_a_refused_paper_sell_closes_no_row(memrepo, monkeypatch, paper_ro
 
 async def test_a_paper_sell_closes_the_paper_row_never_the_live_one(memrepo):
     from skopaq.cli.main import _run_lifecycle
-    from skopaq.graph.skopaq_graph import AnalysisResult
+    from skopaq.execution.trade_booking import TradeResult as AnalysisResult
 
     paper = memrepo.insert(TradeRecord(symbol="TCS", side="BUY", quantity=Decimal(10),
                                        fill_price=Decimal(100), is_paper=True,
@@ -388,7 +388,7 @@ async def test_a_paper_sell_closes_the_paper_row_never_the_live_one(memrepo):
     signal = TradingSignal(symbol="TCS", action="SELL", entry_price=90.0,
                            quantity=Decimal(10), confidence=80)
     execution = ExecutionResult(success=True, signal=signal, mode="paper", fill_price=90.0)
-    await _run_lifecycle(cli_config("paper"), None, None, AnalysisResult(
+    await _run_lifecycle(cli_config("paper"), AnalysisResult(
         symbol="TCS", trade_date="2026-09-25", signal=signal, execution=execution))
 
     assert memrepo.rows[live.id].closed_at is None
@@ -408,7 +408,7 @@ async def test_a_live_sell_spanning_more_than_five_rows_closes_them_all(memrepo)
     execution = ExecutionResult(success=True, signal=signal, mode="live", fill_price=90.0,
                                 filled_quantity=Decimal(14), requested_quantity=Decimal(14),
                                 outcome="filled", order_ids=["EQ-9"])
-    await _record_exit(cli_config(), None, None, signal, execution)
+    await _record_exit(cli_config(), signal, execution)
 
     assert memrepo.open_buy_qty("TCS") == 0
     assert memrepo.realized() == Decimal(-140)

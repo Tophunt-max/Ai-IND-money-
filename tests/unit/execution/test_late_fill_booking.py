@@ -662,7 +662,7 @@ async def test_an_exit_that_closes_no_row_is_not_booked(memrepo, rollback):
 
     memrepo.find_open_buy = unreadable
     signal, execution = _exit(3)
-    assert await _record_exit(cli_config(), None, None, signal, execution,
+    assert await _record_exit(cli_config(), signal, execution,
                               rollback_unbooked=rollback) is False
     # A late fill's SELL row goes (it is booked again); a normal exit keeps its row
     assert memrepo.sold("TCS") == (0 if rollback else 3)
@@ -682,7 +682,7 @@ async def test_an_exit_whose_row_fails_but_whose_rows_close_is_booked(memrepo):
 
     memrepo.insert = insert
     signal, execution = _exit(10)
-    assert await _record_exit(cli_config(), None, None, signal, execution) is True
+    assert await _record_exit(cli_config(), signal, execution) is True
     assert memrepo.open_buy_qty("TCS") == 0 and memrepo.realized() == Decimal(-100)
 
 
