@@ -114,6 +114,22 @@ def test_simulate_books_the_target_net_of_delivery_charges():
     assert out["charges"] > 0 and out["net"] == pytest.approx(out["gross"] - out["charges"])
 
 
+def test_a_same_day_exit_is_charged_as_intraday():
+    from skopaq.finance.charges import EQUITY_INTRADAY
+    from skopaq.swing.setups import charge_product, gate_charge_product
+
+    # Target hit on the day of the fill: a CNC squared off the same day
+    s = _series([(100, 111, 99, 110), (110, 110, 110, 110)])
+    out = simulate(s, WARMUP, SETUP, P)
+    assert out["held_days"] == 1
+    assert out["charges"] == pytest.approx(round_trip(EQUITY_INTRADAY, 100, 110, 100).total)
+    assert out["charges"] < round_trip(EQUITY_DELIVERY, 100, 110, 100).total
+    assert charge_product(1) == EQUITY_INTRADAY and charge_product(2) == EQUITY_DELIVERY
+    # The gate qualifies entries with the book's exit policy
+    assert gate_charge_product(SwingParams(max_hold_days=1)) == EQUITY_INTRADAY
+    assert gate_charge_product(SwingParams(max_hold_days=5)) == EQUITY_DELIVERY
+
+
 def test_simulate_takes_the_stop_first_and_a_gap_fills_at_the_open():
     both = _series([(100, 112, 94, 100)] + [(100, 101, 99, 100)] * 3)
     assert simulate(both, WARMUP, SETUP, P)["exit"] == "stop"   # same bar: stop first

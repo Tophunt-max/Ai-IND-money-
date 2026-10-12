@@ -7,9 +7,9 @@ take (``skopaq.swing.model``). Every value at bar ``i`` uses bars ``≤ i`` only
 
 ``simulate`` replays one setup the way the live swing book trades it: buy at the next
 open with slippage, then each day the stop first (a gap below fills at the open), then
-the target, and a time exit after ``max_hold_days``; the P&L is net of the delivery
-charges (``finance.charges``, product ``equity_delivery``; a CNC bought and sold the same
-day costs less, so this is conservative).
+the target, and a time exit after ``max_hold_days``; the P&L is net of the charges
+(``finance.charges``): intraday rates for a CNC sold the day it was bought, delivery rates
+for one carried overnight (``charge_product``).
 
 ``max_hold_days`` is 1: the live book does not carry positions overnight (the position
 monitor and the daemon's CLOSING sell everything from 15:20 IST), so the model learns the
@@ -25,7 +25,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 
-from skopaq.finance.charges import EQUITY_DELIVERY, round_trip
+from skopaq.finance.charges import EQUITY_DELIVERY, EQUITY_INTRADAY, round_trip
 
 SETUPS = ("trend_pullback", "breakout", "oversold_bounce")
 WARMUP = 200  # bars before the first decision (SMA 200)
@@ -38,6 +38,18 @@ class SwingParams:
     max_hold_days: int = 1  # = the live exit policy (sold the same day): see above
     slippage_pct: float = 0.001
     notional_inr: float = 100_000.0
+
+
+def charge_product(held_days: int) -> str:
+    """The charge schedule of a CNC round trip held ``held_days`` (1 = sold the day it was
+    bought). A delivery buy squared off the same day is charged as intraday (STT 0.025 % on
+    the sell only, intraday stamp duty, no DP charge); one carried overnight as delivery."""
+    return EQUITY_INTRADAY if held_days <= 1 else EQUITY_DELIVERY
+
+
+def gate_charge_product(p: "SwingParams") -> str:
+    """The schedule the SignalGate qualifies a swing entry with: the book's exit policy."""
+    return charge_product(p.max_hold_days)
 
 
 @dataclass(frozen=True)
@@ -191,7 +203,7 @@ def simulate(s: Series, i: int, setup: Setup, p: SwingParams = SwingParams()) ->
     if why == "time" and held < p.max_hold_days and i + 1 + p.max_hold_days > len(s):
         return None  # not finished in the data: unknown
     gross = (exit_px - fill) * qty
-    charges = round_trip(EQUITY_DELIVERY, fill, exit_px, qty).total
+    charges = round_trip(charge_product(held), fill, exit_px, qty).total
     return {
         "net": float(gross - charges),
         "gross": float(gross),

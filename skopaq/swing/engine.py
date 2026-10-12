@@ -22,8 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
-from skopaq.finance.charges import EQUITY_DELIVERY
-from skopaq.swing.setups import WARMUP, Series, Setup, SwingParams
+from skopaq.swing.setups import WARMUP, Series, Setup, SwingParams, gate_charge_product
 
 logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -214,7 +213,7 @@ class SwingEngine:
                 candidate, decision = self.gate.decide(
                     strategy_id=f"swing.{st.name}",
                     symbol=idea.symbol,
-                    product=EQUITY_DELIVERY,
+                    product=gate_charge_product(self.params),
                     direction=1,
                     decided_at=now,
                     timeframe_s=86400,

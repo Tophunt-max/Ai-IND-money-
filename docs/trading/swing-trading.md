@@ -2,8 +2,30 @@
 
 The swing book buys NSE stocks on daily setups that the **swing model** — part of the Adaptive AI — has learned to trust. How it works inside: [Trading Pipeline](../architecture/pipeline.md).
 
-!!! note "Out the same day"
-    The position monitor and the daemon's CLOSING sell every position from 15:20 IST, so the swing book does not hold overnight yet. The model is trained on exactly that: entry at the open, stop or target during the day, else out at the close.
+!!! warning "Out the same day: daily setups, intraday holding"
+    The position monitor and the daemon's CLOSING sell every position from 15:20 IST, so the swing book does not hold overnight yet. The model is trained on exactly that: entry at the open, stop or target during the day, else out at the close. Same-day exits are charged at intraday rates (a CNC squared off the day it was bought), both in training and in the SignalGate.
+
+    With a 2 ATR stop and a 2R target, the target is 4 ATR away: on the same day it is almost never reached, so nearly every trade ends at the close (see the results below).
+
+## Results on real data (October 2026)
+
+All three setups were tested on NIFTY 50 daily candles from Yahoo Finance, 2019-08 to 2026-10 (50 stocks, about 8,600 setups). Default stop and target, ₹1 lakh per trade, 0.1 % slippage, net of charges. The **test** column is the unseen period (Feb 2025 onwards) that the gates judge.
+
+| Hold (days) | Win | Avg net / trade | Profit factor 2019–26 | Profit factor, test | Gates |
+|---|---|---|---|---|---|
+| 1 (today's book) | 37 % | ₹-341 | 0.55 | 0.44 | rejected (no trade passes the threshold) |
+| 3 | 41 % | ₹-378 | 0.70 | 0.52 | rejected |
+| 5 | 45 % | ₹-235 | 0.85 | 0.58 | rejected |
+| 10 | 46 % | ₹+21 | 1.01 | 0.64 | rejected |
+| 15 | 44 % | ₹+78 | 1.03 | 0.68 | rejected |
+
+What this shows:
+
+- **Same-day exits lose even before charges.** The gross profit factor is about 0.6: buying the open after a daily setup and selling at the close has no edge. Tighter stops and targets (0.5–1 ATR, 1–2R) did not help either (profit factor 0.29–0.41).
+- **Longer holds are better, but not profitable.** Over 7 years a 10–15 day hold roughly breaks even after charges. In the unseen 2025–26 period it still loses.
+- **The gates work as intended.** No version becomes a shadow, so the swing book places no swing entries. Do not bypass this with `SKOPAQ_SWING_RULES_ONLY` on a live account (it is paper only anyway).
+
+Re-check on your own data with `skopaq swing-train` (it reports the test results and gate failures). New setups or features are needed before the swing book can trade.
 
 ## 1. Train a model (no orders)
 

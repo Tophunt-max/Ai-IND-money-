@@ -316,9 +316,9 @@ function BackendStatus() {
 
 export function AuthFrame({ children }: { children: ReactNode }) {
   const features = [
-    { icon: Brain, title: "15-agent AI analysis", text: "Analysts, bull/bear debate, trader and risk team on every stock." },
+    { icon: Brain, title: "Adaptive AI", text: "Models trained on your own market data and trades: tested on unseen dates, promoted by an admin. No LLM." },
     { icon: ShieldCheck, title: "Safety first", text: "Position limits, loss circuit breakers and a kill switch." },
-    { icon: BarChart3, title: "Honest track record", text: "Every AI call scored against NIFTY." },
+    { icon: BarChart3, title: "Honest track record", text: "Every signal journalled and scored net of charges." },
   ];
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
@@ -334,7 +334,7 @@ export function AuthFrame({ children }: { children: ReactNode }) {
           <h1 className="text-4xl font-semibold leading-tight tracking-tight text-white">
             AI trading for <span className="bg-linear-to-r from-brand-300 to-cyan-300 bg-clip-text text-transparent">Indian markets</span>
           </h1>
-          <p className="mt-4 text-gray-400">Multi-agent research, automated sessions and live broker integration, in one place.</p>
+          <p className="mt-4 text-gray-400">Adaptive models, automated sessions and live broker integration, in one place.</p>
           <div className="mt-10 space-y-5">
             {features.map((f) => (
               <div key={f.title} className="flex gap-4">

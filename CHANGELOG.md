@@ -6,6 +6,15 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Swing book
+
+- **Same-day exits are charged at intraday rates** in the simulator and the SignalGate (a
+  CNC squared off the day it was bought); exits after an overnight hold keep delivery rates.
+- **Results on real data** (NIFTY 50, 2019–2026) are in `docs/trading/swing-trading.md`.
+  Same-day holding loses even before charges, longer holds roughly break even, and the
+  gates reject every version.
+- Login page text describes the Adaptive AI (the LLM agents are gone).
+
 ### Security — hardening
 
 - **Broker endpoints locked from the dashboard.** `SKOPAQ_INDSTOCKS_BASE_URL`, the INDstocks
