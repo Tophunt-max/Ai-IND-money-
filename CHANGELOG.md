@@ -6,6 +6,28 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Changed — all market data from the INDstocks API
+
+- **No Yahoo Finance / Alpha Vantage for NSE/BSE data.** `skopaq/broker/yahoo_quotes.py`
+  is gone and `live_quotes` has no fallback. Without a valid INDstocks token, quotes come
+  back as errors, history raises `LookupError` and paper fills have no price.
+- **Moved to INDstocks:**
+  - the market regime: India VIX and NIFTY 50 SMA200, from daily index candles;
+  - ATR for position sizing: Wilder ATR computed from INDstocks daily candles;
+  - the executor's entry price: the INDstocks LTP;
+  - swing training history;
+  - backtests, `evolve` and the MCP price tools;
+  - the dashboard charts, which no longer merge a delayed chart with the live price.
+- **Multi-year daily history** is paged one year per request, the broker's per-call
+  maximum. A wider request silently returns only one year. This applies to
+  `live_quotes.daily_history` and to the vendored INDstocks vendor.
+- **MCP:** `gather_market_data` computes its indicators from INDstocks candles.
+  `gather_news_data`, `gather_fundamentals_data` and `gather_social_data` report that the
+  INDstocks API has no such data.
+- The vendored router defaults stock data to `indstocks` (`UPSTREAM_CHANGES.md` §5).
+  Crypto, an experimental asset class that INDstocks does not offer, still uses
+  yfinance.
+
 ### Swing book
 
 - **Same-day exits are charged at intraday rates** in the simulator and the SignalGate (a

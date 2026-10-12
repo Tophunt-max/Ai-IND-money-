@@ -82,7 +82,7 @@ At startup (`python -m skopaq.mcp_server`) the server applies the settings saved
 1. `SkopaqConfig` -- loads `.env` and validates all settings (`_get_config()`)
 2. `OrderRouter` + `PaperEngine` -- paper trading infrastructure (`_get_router()`)
 
-The data tools (`gather_*`, `backtest_strategy`, `run_monte_carlo_test`) also call `_setup_dataflow_config()`, which sets the vendored `tradingagents/dataflows` config for `route_to_vendor`: INDstocks then yfinance for prices (yfinance only for crypto), yfinance for indicators, fundamentals and news, with the `.NS` suffix for NSE symbols. The swing tools build a `SwingEngine` from the config on each call.
+The data tools (`gather_*`, `backtest_strategy`, `run_monte_carlo_test`) also call `_setup_dataflow_config()`, which sets the vendored `tradingagents/dataflows` config for `route_to_vendor`: INDstocks only for NSE/BSE prices (crypto, an experimental asset class, uses yfinance). `gather_market_data` computes the indicators from INDstocks daily candles; `gather_news_data`, `gather_fundamentals_data` and `gather_social_data` report that the INDstocks API has no such data. The swing tools build a `SwingEngine` from the config on each call.
 
 Subsequent calls reuse cached objects.
 

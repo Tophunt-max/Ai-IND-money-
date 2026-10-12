@@ -1,19 +1,23 @@
-"""ATR (Average True Range) data fetcher.
+"""ATR (Average True Range) for position sizing, from INDstocks daily candles.
 
-Wraps the upstream ``route_to_vendor("get_indicators", ...)`` call to extract
-a numeric ATR value for position sizing.  Falls back to a percentage-based
-estimate (2% of price) if the vendor call fails.
+``fetch_atr`` reads the symbol's daily candles from the INDstocks API
+(``skopaq.broker.live_quotes``) and computes Wilder's ATR locally
+(``skopaq.market.indicators.atr``). Without a token, or when INDstocks has too
+few candles, it returns None and the position sizer falls back to a percentage
+estimate (2% of price).
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from datetime import date
+from types import SimpleNamespace
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Default ATR as fraction of price when vendor data is unavailable
+# Default ATR as fraction of price when INDstocks data is unavailable
 _FALLBACK_ATR_PCT = 0.02
 
 
@@ -23,44 +27,51 @@ def fetch_atr(
     atr_period: int = 14,
     look_back_days: int = 30,
 ) -> Optional[float]:
-    """Fetch the latest ATR value for a symbol from upstream vendors.
-
-    Calls ``route_to_vendor("get_indicators", symbol, "atr", ...)`` which
-    routes to Alpha Vantage (primary) or yfinance (fallback).
+    """Wilder ATR of *symbol*'s daily candles closed before *trade_date*, from INDstocks.
 
     Args:
-        symbol: Stock symbol (e.g., "RELIANCE").
-        trade_date: Current trading date (YYYY-MM-DD).
+        symbol: NSE symbol (e.g., "RELIANCE").
+        trade_date: Current trading date (YYYY-MM-DD): its own (forming) bar is left out.
         atr_period: ATR lookback period (default 14).
-        look_back_days: Data window for the indicator call.
+        look_back_days: Unused (kept for the callers' signature); three months of daily
+            candles are read, enough for any period up to about 60.
 
     Returns:
         Latest ATR value as a float, or None if unavailable.
     """
     try:
-        from tradingagents.dataflows.router import route_to_vendor
+        from skopaq.broker import live_quotes
+        from skopaq.market.indicators import atr
 
-        result = route_to_vendor(
-            "get_indicators",
-            symbol,
-            "atr",
-            trade_date,
-            look_back_days,
-        )
-
-        if not result or not isinstance(result, str):
-            logger.warning("ATR fetch returned empty result for %s", symbol)
+        data = live_quotes.run_sync(live_quotes.get_history(symbol, "3mo"), timeout=30)
+        try:
+            cutoff = date.fromisoformat(trade_date)
+        except (TypeError, ValueError):
+            cutoff = None
+        candles = [
+            SimpleNamespace(open=float(c["o"]), high=float(c["h"]), low=float(c["l"]),
+                            close=float(c["c"]))
+            for c in data["candles"]
+            if c.get("c") and (cutoff is None or _ist_date(c["t"]) < cutoff)
+        ]
+        value = atr(candles, atr_period)
+        if value is None or value <= 0:
+            logger.warning("Not enough INDstocks daily candles for the ATR of %s", symbol)
             return None
-
-        return _parse_atr_value(result)
-
+        return float(value)
     except Exception:
         logger.warning(
-            "ATR fetch failed for %s — will use fallback estimate",
+            "ATR from INDstocks failed for %s — will use fallback estimate",
             symbol,
             exc_info=True,
         )
         return None
+
+
+def _ist_date(ts: int) -> date:
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.fromtimestamp(int(ts), timezone(timedelta(hours=5, minutes=30))).date()
 
 
 def estimate_atr(price: float, pct: float = _FALLBACK_ATR_PCT) -> float:

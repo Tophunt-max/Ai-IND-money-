@@ -232,7 +232,7 @@ More: [docs/claude-code](docs/claude-code/setup.md).
 ```
 Ai-IND-money-/
 ├── tradingagents/              # Vendored data layer (TradingAgents v0.5.2 dataflows only)
-│   └── dataflows/              # Data vendors (yfinance, Alpha Vantage, INDstocks routing, crypto)
+│   └── dataflows/              # Vendored data layer; NSE/BSE data comes from INDstocks only
 │
 ├── skopaq/
 │   ├── adaptive/               # Adaptive AI: feature pipeline, models, bundles, RL, hyperopt

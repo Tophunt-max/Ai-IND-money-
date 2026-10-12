@@ -37,7 +37,7 @@ SKOPAQ_TRADING_MODE=paper
 SKOPAQ_INDSTOCKS_TOKEN=...         # INDstocks API token (or: skopaq token set)
 ```
 
-Without a token the paper engine still runs; quotes and daily history fall back to yfinance where they can.
+All market data comes from the INDstocks API, paper mode included: without a token there are no quotes, candles or paper fills (`skopaq token set`, or TOTP auto-login).
 
 ### Full Setup (Live Trading)
 

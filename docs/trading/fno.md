@@ -77,7 +77,7 @@ Skopaq. It is a MARKET order with:
 
 The order path treats F&O differently from equity:
 
-- **Pricing and sizing.** The Executor never prices a contract from Yahoo and never
+- **Pricing and sizing.** The Executor never looks up a contract's price itself (the engine sends the premium) and never
   ATR-sizes it.
 - **Funds.** The safety checker counts lots, not shares. It checks the option-buying
   balance (`option_buy_available`) or the futures margin.

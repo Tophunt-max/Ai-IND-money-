@@ -9,7 +9,7 @@ The swing book buys NSE stocks on daily setups that the **swing model** — part
 
 ## Results on real data (October 2026)
 
-All three setups were tested on NIFTY 50 daily candles from Yahoo Finance, 2019-08 to 2026-10 (50 stocks, about 8,600 setups). Default stop and target, ₹1 lakh per trade, 0.1 % slippage, net of charges. The **test** column is the unseen period (Feb 2025 onwards) that the gates judge.
+All three setups were tested on NIFTY 50 daily candles, 2019-08 to 2026-10 (taken from Yahoo Finance for this one-off study, made without an INDstocks token; the app itself now reads only INDstocks — re-run `skopaq swing-train` with a token to confirm). 50 stocks, about 8,600 setups. Default stop and target, ₹1 lakh per trade, 0.1 % slippage, net of charges. The **test** column is the unseen period (Feb 2025 onwards) that the gates judge.
 
 | Hold (days) | Win | Avg net / trade | Profit factor 2019–26 | Profit factor, test | Gates |
 |---|---|---|---|---|---|

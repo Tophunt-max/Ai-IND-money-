@@ -69,7 +69,7 @@ export default function CandleChart({
     return () => ro.disconnect();
   }, []);
 
-  // Candles with a missing open/high/low use the close (Yahoo sometimes leaves them empty)
+  // Candles with a missing open/high/low use the close (defensive: a vendor may leave them empty)
   const all = useMemo(
     () => candles.map((k) => {
       const o = k.o ?? k.c;

@@ -614,218 +614,133 @@ def _setup_dataflow_config():
 
     config = _get_config()
     is_crypto = config.asset_class == "crypto"
-    upstream = {
-        "data_vendors": {
-            "core_stock_apis": "yfinance" if is_crypto else "indstocks,yfinance",
-            "technical_indicators": "yfinance",
-            "fundamental_data": "yfinance",
-            "news_data": "yfinance",
-        },
-        "yfinance_symbol_suffix": "" if is_crypto else ".NS",
-    }
+    if is_crypto:  # crypto is not on INDstocks (experimental asset class)
+        upstream = {"data_vendors": {"core_stock_apis": "yfinance"},
+                    "yfinance_symbol_suffix": ""}
+    else:  # NSE/BSE: the INDstocks API only
+        upstream = {"data_vendors": {"core_stock_apis": "indstocks"}}
     set_config(upstream)
     return upstream
 
 
+def _indicator_report(candles: list[dict]) -> dict:
+    """RSI, MACD, Bollinger Bands, SMA 50/200, EMA 10, ATR and VWMA 20 of the last daily
+    candle, computed from INDstocks candles (``skopaq.market.indicators``)."""
+    from types import SimpleNamespace
+
+    from skopaq.market import indicators as ind
+
+    bars = [SimpleNamespace(open=float(c["o"]), high=float(c["h"]), low=float(c["l"]),
+                            close=float(c["c"]), volume=float(c.get("v") or 0))
+            for c in candles if c.get("c")]
+    closes = [b.close for b in bars]
+
+    def r(x):
+        return None if x is None else round(float(x), 4)
+
+    macd = ind.macd(closes)
+    boll = ind.bollinger(closes)
+    tail = bars[-20:]
+    vol = sum(b.volume for b in tail)
+    return {
+        "rsi": r(ind.rsi(closes)),
+        "macd": r(macd.macd) if macd else None,
+        "macds": r(macd.signal) if macd else None,
+        "macdh": r(macd.histogram) if macd else None,
+        "boll": r(boll.middle) if boll else None,
+        "boll_ub": r(boll.upper) if boll else None,
+        "boll_lb": r(boll.lower) if boll else None,
+        "atr": r(ind.atr(bars)),
+        "close_50_sma": r(ind.sma(closes, 50)),
+        "close_200_sma": r(ind.sma(closes, 200)),
+        "close_10_ema": r(ind.ema(closes, 10)),
+        "vwma": r(sum(b.close * b.volume for b in tail) / vol) if len(tail) == 20 and vol
+        else None,
+    }
+
+
 @mcp.tool()
 async def gather_market_data(symbol: str, date: str = "") -> str:
-    """Gather OHLCV price data and all key technical indicators for a symbol.
+    """Daily OHLCV and the key technical indicators for a symbol, from the INDstocks API.
 
-    Returns stock data + RSI, MACD, Bollinger Bands, SMA, EMA, ATR, VWMA.
-    Price history and technical indicators, for your own review.
+    Returns the last 60 daily candles + RSI, MACD, Bollinger Bands, SMA, EMA, ATR, VWMA
+    (computed from INDstocks candles), for your own review.
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
-        date: Trading date YYYY-MM-DD (defaults to today).
+        date: Kept for compatibility; the data is always the latest INDstocks history.
     """
-    import asyncio
+    from skopaq.broker import live_quotes
 
-    from tradingagents.dataflows.router import route_to_vendor
-
-    _setup_dataflow_config()
-
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    start_date = (
-        datetime.now(timezone.utc) - __import__("datetime").timedelta(days=60)
-    ).strftime("%Y-%m-%d")
-
-    # Fetch OHLCV data
     try:
-        ohlcv = await asyncio.to_thread(
-            route_to_vendor, "get_stock_data", symbol, start_date, date
-        )
+        data = await live_quotes.get_history(symbol, "1y")
     except Exception as e:
-        ohlcv = f"Error fetching stock data: {e}"
-
-    # Fetch all standard indicators
-    indicators = {}
-    indicator_names = [
-        "rsi", "macd", "macds", "macdh",
-        "boll", "boll_ub", "boll_lb", "atr",
-        "close_50_sma", "close_200_sma", "close_10_ema", "vwma",
+        return json.dumps({"symbol": symbol, "error": str(e), "source": "indstocks"})
+    candles = data["candles"]
+    ist = timezone(__import__("datetime").timedelta(hours=5, minutes=30))
+    rows = ["Date,Open,High,Low,Close,Volume"] + [
+        f"{datetime.fromtimestamp(c['t'], ist):%Y-%m-%d},{c['o']},{c['h']},{c['l']},"
+        f"{c['c']},{c.get('v') or 0}"
+        for c in candles[-60:]
     ]
-    for ind in indicator_names:
-        try:
-            val = await asyncio.to_thread(
-                route_to_vendor, "get_indicators", symbol, ind, date, 30
-            )
-            indicators[ind] = val
-        except Exception as e:
-            indicators[ind] = f"Error: {e}"
-
     return json.dumps({
         "symbol": symbol,
-        "date": date,
-        "ohlcv": ohlcv[:3000] if isinstance(ohlcv, str) else str(ohlcv)[:3000],
-        "indicators": indicators,
+        "date": date or datetime.now(ist).strftime("%Y-%m-%d"),
+        "source": "indstocks",
+        "ohlcv": "\n".join(rows)[:3000],
+        "indicators": _indicator_report(candles),
     })
+
+
+_NOT_ON_INDSTOCKS = ("not available: all data comes from the INDstocks API, which "
+                     "provides no {what}")
 
 
 @mcp.tool()
 async def gather_news_data(symbol: str, date: str = "") -> str:
-    """Gather company-specific news and global macroeconomic news.
-
-    Returns news articles from the past 7 days, for your own review.
+    """News and insider transactions: not available (the INDstocks API has no news).
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
-        date: Trading date YYYY-MM-DD (defaults to today).
+        date: Unused.
     """
-    import asyncio
-
-    from tradingagents.dataflows.router import route_to_vendor
-
-    _setup_dataflow_config()
-
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    start_date = (
-        datetime.now(timezone.utc) - __import__("datetime").timedelta(days=7)
-    ).strftime("%Y-%m-%d")
-
-    try:
-        company_news = await asyncio.to_thread(
-            route_to_vendor, "get_news", symbol, start_date, date
-        )
-    except Exception as e:
-        company_news = f"Error: {e}"
-
-    try:
-        global_news = await asyncio.to_thread(
-            route_to_vendor, "get_global_news", date, 7, 5
-        )
-    except Exception as e:
-        global_news = f"Error: {e}"
-
-    try:
-        insider = await asyncio.to_thread(
-            route_to_vendor, "get_insider_transactions", symbol
-        )
-    except Exception as e:
-        insider = f"Error: {e}"
-
-    return json.dumps(
-        {
-            "symbol": symbol,
-            "company_news": company_news[:3000]
-            if isinstance(company_news, str)
-            else str(company_news)[:3000],
-            "global_news": global_news[:3000]
-            if isinstance(global_news, str)
-            else str(global_news)[:3000],
-            "insider_transactions": insider[:2000]
-            if isinstance(insider, str)
-            else str(insider)[:2000],
-        }
-    )
+    return json.dumps({
+        "symbol": symbol,
+        "company_news": _NOT_ON_INDSTOCKS.format(what="news"),
+        "global_news": _NOT_ON_INDSTOCKS.format(what="news"),
+        "insider_transactions": _NOT_ON_INDSTOCKS.format(what="insider data"),
+    })
 
 
 @mcp.tool()
 async def gather_fundamentals_data(symbol: str, date: str = "") -> str:
-    """Gather company profile, balance sheet, cash flow, and income statement.
-
-    Company financials, for your own review.
+    """Company financials: not available (the INDstocks API has no fundamentals).
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
-        date: Trading date YYYY-MM-DD (defaults to today).
+        date: Unused.
     """
-    import asyncio
-
-    from tradingagents.dataflows.router import route_to_vendor
-
-    _setup_dataflow_config()
-
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    results = {}
-    for method in ["get_fundamentals", "get_balance_sheet", "get_cashflow", "get_income_statement"]:
-        try:
-            if method == "get_fundamentals":
-                val = await asyncio.to_thread(route_to_vendor, method, symbol, date)
-            else:
-                val = await asyncio.to_thread(route_to_vendor, method, symbol, "annual", date)
-            results[method] = val[:3000] if isinstance(val, str) else str(val)[:3000]
-        except Exception as e:
-            results[method] = f"Error: {e}"
-
-    return json.dumps(
-        {
-            "symbol": symbol,
-            "fundamentals": results.get("get_fundamentals", ""),
-            "balance_sheet": results.get("get_balance_sheet", ""),
-            "cash_flow": results.get("get_cashflow", ""),
-            "income_statement": results.get("get_income_statement", ""),
-        }
-    )
+    na = _NOT_ON_INDSTOCKS.format(what="fundamentals")
+    return json.dumps({"symbol": symbol, "fundamentals": na, "balance_sheet": na,
+                       "cash_flow": na, "income_statement": na})
 
 
 @mcp.tool()
 async def gather_social_data(symbol: str, date: str = "") -> str:
-    """Gather social media sentiment and company news for sentiment analysis.
-
-    Social and news sentiment inputs, for your own review.
+    """Social sentiment: not available (the INDstocks API has no news or social data).
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).
-        date: Trading date YYYY-MM-DD (defaults to today).
+        date: Unused.
     """
-    import asyncio
-
-    from tradingagents.dataflows.router import route_to_vendor
-
-    _setup_dataflow_config()
-
-    if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=7)).strftime(
-        "%Y-%m-%d"
-    )
-
-    try:
-        social_news = await asyncio.to_thread(route_to_vendor, "get_news", symbol, start_date, date)
-    except Exception as e:
-        social_news = f"Error: {e}"
-
-    return json.dumps(
-        {
-            "symbol": symbol,
-            "social_sentiment_news": social_news[:4000]
-            if isinstance(social_news, str)
-            else str(social_news)[:4000],
-        }
-    )
+    return json.dumps({"symbol": symbol,
+                       "social_sentiment_news": _NOT_ON_INDSTOCKS.format(what="social data")})
 
 
 @mcp.tool()
 async def gather_all_analysis_data(symbol: str, date: str = "") -> str:
-    """One-shot data gathering: market data, news, fundamentals and social data in
-    parallel, as one bundle. Takes 10-30 seconds.
+    """One-shot data gathering as one bundle: INDstocks market data and indicators (news,
+    fundamentals and social data are not on the INDstocks API and say so).
 
     Args:
         symbol: Stock symbol (e.g. RELIANCE, TCS).

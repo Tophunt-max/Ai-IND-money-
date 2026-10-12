@@ -17,7 +17,7 @@ interface History {
   interval: string;
   candles: Candle[];
   live?: boolean;
-  source?: "indstocks" | "yahoo";
+  source?: "indstocks";
 }
 
 /** Price chart of one symbol: candles or line, range buttons, refreshed automatically. */
@@ -81,7 +81,7 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
             <span className={`h-1.5 w-1.5 rounded-full ${open ? "animate-pulse bg-emerald-400" : "bg-gray-600"}`} />
-            {open ? (data?.live ? "Live" : "Auto") : "Market closed"} · {live ? "INDstocks" : data ? "Yahoo (delayed)" : ""} · {ago}
+            {open ? (data?.live ? "Live" : "Auto") : "Market closed"} · {data ? "INDstocks" : ""} · {ago}
           </span>
           {!isIdx && (
             <button type="button" onClick={() => setStudies(!studies)} title="EMA 9/21, candle patterns, signal levels"

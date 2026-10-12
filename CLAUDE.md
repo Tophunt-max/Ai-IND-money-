@@ -8,7 +8,7 @@ Algorithmic trading platform for Indian equities with **one AI: the Adaptive AI*
 
 ## Architecture
 
-- **`tradingagents/dataflows`** — Vendored upstream market-data vendors (yfinance, Alpha Vantage, INDstocks routing). Only the data layer is kept; changes are tracked in `UPSTREAM_CHANGES.md`.
+- **`tradingagents/dataflows`** — Vendored upstream market-data layer. **All NSE/BSE market data comes from the INDstocks API** (`skopaq/broker/live_quotes.py`, `INDstocksClient`): no Yahoo/Alpha Vantage fallback. Only the data layer is kept; changes are tracked in `UPSTREAM_CHANGES.md`.
 - **`skopaq/`** — Everything else: broker client, Adaptive AI, execution pipeline, CLI, config, risk management, daemon.
 
 ### Key Flow (swing book)
@@ -164,7 +164,7 @@ skopaq/
 ## Common Gotchas
 
 - **INDstocks timestamps**: Historical API wants milliseconds, returns seconds. Off by 1000x is a common bug.
-- **yfinance suffixes**: Yahoo Finance uses `RELIANCE.NS`. The routing layer adds/strips suffixes automatically, but new data flows must handle this.
+- **INDstocks only**: new data flows must use `skopaq.broker.live_quotes` (quotes, `get_history`, `daily_history`, paged within the broker's per-call window: 7 days for minute candles, 1 year for daily) or `INDstocksClient`; never add another vendor for NSE/BSE data.
 - **Local imports in daemon.py**: Many imports are inside method bodies to avoid circular imports. This affects mock patch targets in tests (see Testing Patterns above).
 - **Stop event propagation**: The daemon's `stop_event` must be checked before every major operation, not just inside delay waits.
 

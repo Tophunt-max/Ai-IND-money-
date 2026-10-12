@@ -1,15 +1,16 @@
 """Daily candles for the swing book.
 
-* ``daily_candles(symbol, range_)``: live / recent bars (INDstocks with a token, else
-  Yahoo; ``skopaq.broker.live_quotes``), today's forming bar dropped — what the live swing
+* ``daily_candles(symbol, range_)``: recent bars from INDstocks
+  (``skopaq.broker.live_quotes``), today's forming bar dropped — what the live swing
   engine decides on.
-* ``history(symbol, days)``: years of daily bars for training (the data vendors of
-  ``tradingagents.dataflows``: INDstocks, then Yahoo).
+* ``history(symbol, days)``: years of daily bars for training, from INDstocks too (one
+  year per request, ``live_quotes.daily_history``).
+
+All candles come from the INDstocks API; without a token both raise ``LookupError``.
 """
 
 from __future__ import annotations
 
-import io
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -49,55 +50,34 @@ async def daily_candles(
     ]
 
 
-def _setup_vendors() -> None:
-    from tradingagents.dataflows.config import set_config
-
-    set_config(
-        {
-            "data_vendors": {
-                "core_stock_apis": "indstocks,yfinance",
-                "technical_indicators": "yfinance",
-                "fundamental_data": "yfinance",
-                "news_data": "yfinance",
-            },
-            "yfinance_symbol_suffix": ".NS",
-        }
+def _candle(row: dict) -> Candle:
+    close = float(row["c"])
+    return Candle(
+        datetime.fromtimestamp(int(row["t"]), IST),
+        float(row.get("o") or close),
+        float(row.get("h") or close),
+        float(row.get("l") or close),
+        close,
+        int(row.get("v") or 0),
     )
 
 
 def history(symbol: str, days: int = 1825) -> list[Candle]:
-    """About ``days`` calendar days of daily candles, oldest first (blocking)."""
-    import pandas as pd
+    """About ``days`` calendar days of INDstocks daily candles, oldest first (blocking).
+    Today's bar is left out until the 15:30 close, as in ``daily_candles``."""
+    from skopaq.broker import live_quotes
 
-    from tradingagents.dataflows.router import route_to_vendor
-
-    _setup_vendors()
-    now = datetime.now(timezone.utc)
-    text = route_to_vendor(
-        "get_stock_data",
-        symbol,
-        (now - timedelta(days=days)).strftime("%Y-%m-%d"),
-        now.strftime("%Y-%m-%d"),
-    )
-    lines = [ln for ln in str(text).strip().split("\n") if not ln.startswith("#")]
-    df = pd.read_csv(io.StringIO("\n".join(lines)))
-    if "Close" not in df or len(df) < 30:
-        raise ValueError(f"not enough daily history for {symbol} ({len(df)} bars)")
-    out = []
-    for r in df.itertuples(index=False):
-        d = pd.Timestamp(getattr(r, "Date"))
-        close = float(getattr(r, "Close"))
-        if not close == close:  # NaN row
-            continue
-        start = datetime(d.year, d.month, d.day, 9, 15, tzinfo=IST)
-        out.append(
-            Candle(
-                start,
-                float(getattr(r, "Open")),
-                float(getattr(r, "High")),
-                float(getattr(r, "Low")),
-                close,
-                int(getattr(r, "Volume") or 0),
-            )
-        )
+    rows = live_quotes.run_sync(live_quotes.daily_history(symbol, days), timeout=120)
+    now = datetime.now(IST)
+    out = [
+        _candle(r) for r in rows
+        if r.get("c") is not None
+    ]
+    out = [
+        c for c in out
+        if c.start.date() < now.date()
+        or (c.start.date() == now.date() and now.hour * 60 + now.minute >= 15 * 60 + 30)
+    ]
+    if len(out) < 30:
+        raise ValueError(f"not enough daily history for {symbol} ({len(out)} bars)")
     return out

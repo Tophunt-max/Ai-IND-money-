@@ -364,5 +364,5 @@ run `docker system prune -f && docker builder prune -f` monthly.
 | Supabase | kill switch across processes, trades, P&L history, dashboard login | apply migrations 001–003 |
 | Upstash Redis | optional: API shared state across replicas, account leases across hosts | `SKOPAQ_API_SHARED_STATE_ENABLED`, `SKOPAQ_ACCOUNT_LEASE_ENABLED` |
 | Telegram | bot, scheduler alerts | one poller per token |
-| Data vendors | yfinance, etc. | outbound HTTPS |
+| Market data | INDstocks API only (quotes, candles, indices, option chains) | outbound HTTPS |
 | Vercel | optional dashboard | set `SKOPAQ_CORS_ORIGINS` to its origin |

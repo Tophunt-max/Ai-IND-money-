@@ -25,8 +25,8 @@ Position scale::
     CRISIS   + any       = 0.0  (no new trades)
 
 Data sources:
-    - India VIX: ``^INDIAVIX`` via yfinance
-    - NIFTY 50: ``^NSEI`` via yfinance (for SMA calculation)
+    - India VIX: INDstocks index quote/candles (``^INDIAVIX``)
+    - NIFTY 50: INDstocks daily candles (``^NSEI``, for the SMA)
 """
 
 from __future__ import annotations
@@ -159,45 +159,38 @@ class RegimeDetector:
 
 
 def fetch_regime_data() -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Fetch India VIX, NIFTY price, and NIFTY 200 SMA from yfinance.
+    """India VIX, NIFTY 50 price and NIFTY 50 SMA200 from INDstocks daily candles.
 
     Returns:
-        (india_vix, nifty_price, nifty_sma200) — any may be None on failure.
+        (india_vix, nifty_price, nifty_sma200) — any may be None on failure (no token,
+        INDstocks unavailable); ``RegimeDetector.detect`` handles missing values.
     """
-    try:
-        import yfinance as yf
+    from skopaq.broker import live_quotes
 
-        # India VIX
-        india_vix = None
+    async def fetch() -> tuple[Optional[float], Optional[float], Optional[float]]:
+        india_vix = nifty_price = nifty_sma200 = None
         try:
-            vix_ticker = yf.Ticker("^INDIAVIX")
-            vix_hist = vix_ticker.history(period="5d")
-            if not vix_hist.empty:
-                india_vix = float(vix_hist["Close"].iloc[-1])
+            vix = await live_quotes.get_history("^INDIAVIX", "1mo")
+            if vix["candles"]:
+                india_vix = float(vix["candles"][-1]["c"])
         except Exception:
-            logger.warning("Failed to fetch India VIX", exc_info=True)
-
-        # NIFTY 50 price + SMA200
-        nifty_price = None
-        nifty_sma200 = None
+            logger.warning("Failed to fetch India VIX from INDstocks", exc_info=True)
         try:
-            nifty_ticker = yf.Ticker("^NSEI")
-            nifty_hist = nifty_ticker.history(period="1y")
-            if not nifty_hist.empty:
-                nifty_price = float(nifty_hist["Close"].iloc[-1])
-                if len(nifty_hist) >= 200:
-                    nifty_sma200 = float(nifty_hist["Close"].tail(200).mean())
+            nifty = await live_quotes.get_history("^NSEI", "1y")
+            closes = [float(c["c"]) for c in nifty["candles"] if c.get("c")]
+            if closes:
+                nifty_price = closes[-1]
+                if len(closes) >= 200:
+                    nifty_sma200 = sum(closes[-200:]) / 200
                 else:
-                    # Use available data for partial SMA
-                    nifty_sma200 = float(nifty_hist["Close"].mean())
-                    logger.info(
-                        "Using %d-day SMA (< 200 available)", len(nifty_hist)
-                    )
+                    nifty_sma200 = sum(closes) / len(closes)
+                    logger.info("Using %d-day SMA (< 200 available)", len(closes))
         except Exception:
-            logger.warning("Failed to fetch NIFTY data", exc_info=True)
-
+            logger.warning("Failed to fetch NIFTY 50 from INDstocks", exc_info=True)
         return india_vix, nifty_price, nifty_sma200
 
-    except ImportError:
-        logger.warning("yfinance not installed — regime detection unavailable")
+    try:
+        return live_quotes.run_sync(fetch(), timeout=60)
+    except Exception:
+        logger.warning("Regime data unavailable", exc_info=True)
         return None, None, None

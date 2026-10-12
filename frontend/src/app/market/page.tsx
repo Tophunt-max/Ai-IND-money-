@@ -24,7 +24,7 @@ interface Quote {
   change_pct: number | null;
   volume: number;
   as_of: string;
-  source?: "indstocks" | "yahoo";
+  source?: "indstocks";
 }
 
 const MINE_KEY = "aiind:watchlist";

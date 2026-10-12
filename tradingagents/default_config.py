@@ -23,7 +23,7 @@ def build_default_config() -> dict:
         ],
         # The exact vendor chain per category ("a,b" = ordered fallback)
         "data_vendors": {
-            "core_stock_apis": "yfinance",
+            "core_stock_apis": "indstocks",  # Skopaq: NSE/BSE data from INDstocks only
             "technical_indicators": "yfinance",
             "fundamental_data": "sec_edgar,yfinance",
             "news_data": "yfinance",

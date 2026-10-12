@@ -80,6 +80,21 @@ Only the data-layer keys remain (`data_cache_dir`, news limits, `data_vendors`,
 `tool_vendors`, `yfinance_symbol_suffix`); the LLM, debate and results keys went with
 the framework.
 
+### 5. INDstocks is the only stock-data vendor
+
+**Files:** `default_config.py` (`core_stock_apis` default `"indstocks"` instead of
+`"yfinance"`), `dataflows/vendors/indstocks.py` (`_fetch_historical` pages `1day`
+requests one year at a time: the broker returns at most one year per call, and a wider
+request silently comes back short).
+
+**Why:** all NSE/BSE market data in SkopaqTrader comes from the INDstocks API. Skopaq
+callers set `core_stock_apis="indstocks"` explicitly; the default makes a caller that
+forgets do the same, rather than reaching Yahoo Finance.
+
+**Backward compatible:** no for a caller relying on the yfinance default for stock data
+(set `core_stock_apis` explicitly). The other categories keep their upstream defaults;
+Skopaq no longer calls them.
+
 ## Syncing a newer upstream
 
 1. Extract the new tag and diff its `tradingagents/dataflows` against v0.5.2 to see

@@ -229,10 +229,10 @@ def _analysis(candles: list[dict], interval: str, source: str) -> dict:
 async def market_analysis(symbol: str = Query(..., min_length=1, max_length=40),
                           range: str = "3mo") -> dict:  # noqa: A002
     """Deterministic analysis of the chart's candles. Evidence only: no signal, no order."""
-    from skopaq.broker import live_quotes, yahoo_quotes
+    from skopaq.broker import live_quotes
 
-    if range not in yahoo_quotes.RANGES:
-        raise HTTPException(422, f"range must be one of {', '.join(yahoo_quotes.RANGES)}")
+    if range not in live_quotes.RANGES:
+        raise HTTPException(422, f"range must be one of {', '.join(live_quotes.RANGES)}")
     try:
         data = await live_quotes.get_history(symbol, range)
     except ValueError as exc:

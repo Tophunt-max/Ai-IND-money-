@@ -1,5 +1,6 @@
-"""Dashboard market data (skopaq/broker/live_quotes.py): INDstocks when a token is valid
-(stocks, indices, charts), Yahoo Finance for unresolved symbols, no token and failures."""
+"""Market data (skopaq/broker/live_quotes.py): the INDstocks API only — stocks, indices,
+charts and multi-year daily history. No token or a failure gives errors, never another
+vendor."""
 
 from __future__ import annotations
 
@@ -7,25 +8,14 @@ import asyncio
 
 import pytest
 
-from skopaq.broker import live_quotes, yahoo_quotes
+from skopaq.broker import live_quotes
 from skopaq.broker.models import Quote
 
 
-def _yahoo(symbol):
-    return {"symbol": symbol, "ltp": 100.0, "source": "yahoo"}
-
-
 @pytest.fixture(autouse=True)
-def _fresh(monkeypatch):
+def _fresh():
     live_quotes._cache.clear()
-    calls = {"yahoo": [], "live": []}
-
-    def fake_yahoo(symbols):
-        calls["yahoo"].append(list(symbols))
-        errors = {"NOPE": "no data"} if "NOPE" in symbols else {}
-        return {s: _yahoo(s) for s in symbols if s != "NOPE"}, errors
-
-    monkeypatch.setattr(yahoo_quotes, "get_quotes", fake_yahoo)
+    calls = {"live": []}
     yield calls
     live_quotes._cache.clear()
 
@@ -34,14 +24,15 @@ def _run(symbols):
     return asyncio.run(live_quotes.get_quotes(symbols))
 
 
-def test_no_token_uses_yahoo(monkeypatch, _fresh):
+def test_no_token_gives_errors_not_another_vendor(monkeypatch):
     monkeypatch.setattr(live_quotes, "_token_ok", lambda: False)
     quotes, errors = _run(["TCS"])
-    assert quotes["TCS"]["source"] == "yahoo" and errors == {}
-    assert live_quotes.source_label(quotes) == "Yahoo Finance (may be delayed)"
+    assert quotes == {}
+    assert "INDstocks token" in errors["TCS"]
+    assert live_quotes.source_label(quotes) == "INDstocks unavailable"
 
 
-def test_token_uses_indstocks_and_yahoo_for_the_rest(monkeypatch, _fresh):
+def test_token_uses_indstocks(monkeypatch, _fresh):
     monkeypatch.setattr(live_quotes, "_token_ok", lambda: True)
 
     async def fake_live(symbols):
@@ -57,12 +48,11 @@ def test_token_uses_indstocks_and_yahoo_for_the_rest(monkeypatch, _fresh):
     tcs = quotes["TCS"]
     assert tcs["source"] == "indstocks" and tcs["ltp"] == 2136.7
     assert tcs["prev_close"] == 2080.3 and tcs["change_pct"] == pytest.approx(0.0271)
-    assert quotes["WEIRD"]["source"] == "yahoo" and quotes["^NSEI"]["source"] == "yahoo"
-    assert errors == {}
-    assert live_quotes.source_label(quotes).startswith("INDstocks (live), Yahoo")
+    assert set(quotes) == {"TCS"} and errors == {"WEIRD": "INDstocks: unknown symbol"}
+    assert live_quotes.source_label(quotes) == "INDstocks (live)"
 
 
-def test_indstocks_failure_falls_back(monkeypatch, _fresh):
+def test_indstocks_failure_is_reported(monkeypatch):
     monkeypatch.setattr(live_quotes, "_token_ok", lambda: True)
 
     async def broken(symbols):
@@ -70,8 +60,25 @@ def test_indstocks_failure_falls_back(monkeypatch, _fresh):
 
     monkeypatch.setattr(live_quotes, "_indstocks", broken)
     quotes, errors = _run(["TCS", "NOPE"])
-    assert quotes["TCS"]["source"] == "yahoo"
-    assert "401" in errors["NOPE"] and "no data" in errors["NOPE"]
+    assert quotes == {} and "401" in errors["TCS"] and "401" in errors["NOPE"]
+
+
+@pytest.mark.parametrize("bad", ["", "rm -rf;", "A" * 25, "TCS.XX", "../x"])
+def test_rejects_bad_symbols(bad):
+    with pytest.raises(ValueError):
+        live_quotes.normalize(bad)
+
+
+def test_run_sync_works_inside_and_outside_an_event_loop():
+    async def answer():
+        return 42
+
+    assert live_quotes.run_sync(answer()) == 42
+
+    async def inside():
+        return live_quotes.run_sync(answer())
+
+    assert asyncio.run(inside()) == 42
 
 
 def test_live_quotes_are_cached_briefly(monkeypatch, _fresh):
@@ -166,11 +173,11 @@ def test_indices_are_priced_live_from_their_instrument_ids(monkeypatch, fake_cli
     assert live_quotes.source_label(quotes) == "INDstocks (live)"
 
 
-def test_an_unknown_index_falls_back_to_yahoo(monkeypatch, fake_client, _fresh):
+def test_an_unknown_index_is_an_error(monkeypatch, fake_client):
     fake_client()
     monkeypatch.setattr(live_quotes, "_token_ok", lambda: True)
-    quotes, _ = _run(["^XYZ"])
-    assert quotes["^XYZ"]["source"] == "yahoo"
+    quotes, errors = _run(["^XYZ"])
+    assert quotes == {} and "no INDstocks code" in errors["^XYZ"]
 
 
 def _candle(ts, price):
@@ -201,12 +208,56 @@ def test_charts_come_from_indstocks_paged_and_trimmed(monkeypatch, fake_client):
     assert len(client.history_calls) == 5 and client.history_calls[0][1] == "1week"
 
 
-def test_chart_falls_back_to_yahoo_without_a_token(monkeypatch, fake_client):
+def test_chart_without_a_token_raises(monkeypatch, fake_client):
     fake_client()
     monkeypatch.setattr(live_quotes, "_token_ok", lambda: False)
-    monkeypatch.setattr(yahoo_quotes, "get_history", lambda s, r: {
-        "symbol": s, "range": r, "interval": "5m", "candles": [{"t": 1, "c": 5.0}]})
-    data = asyncio.run(live_quotes.get_history("TCS", "1d"))
-    assert data["source"] == "yahoo" and data["candles"] == [{"t": 1, "c": 5.0}]
+    with pytest.raises(LookupError, match="INDstocks token"):
+        asyncio.run(live_quotes.get_history("TCS", "1d"))
     with pytest.raises(ValueError):
         asyncio.run(live_quotes.get_history("TCS", "9y"))
+
+
+def test_daily_history_pages_one_year_at_a_time_back_to_the_start(monkeypatch, fake_client):
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = datetime(2026, 10, 9, 16, 0, tzinfo=ist)
+    first = datetime(2024, 3, 1, 9, 15, tzinfo=ist)      # history starts here
+    candles = [_candle(first + timedelta(days=i), 100 + i)
+               for i in range((now - first).days)]
+    client = fake_client(candles)
+    monkeypatch.setattr(live_quotes, "_token_ok", lambda: True)
+
+    rows = asyncio.run(live_quotes.daily_history("^NSEI", 5 * 365, now=now))
+    assert len(rows) == len(candles) and rows[0]["c"] == 100      # oldest first, no gaps
+    assert all(call[1] == "1day" for call in client.history_calls)
+    spans = [(e - s) / 86_400_000 for _, _, s, e in client.history_calls]
+    assert max(spans) <= 365                                        # the broker's window
+    # 2026-10 → 2025-10 → 2024-10 → 2023-10 (empty: before the start) and stop
+    assert len(client.history_calls) == 4
+
+
+def test_daily_history_without_a_token_raises(monkeypatch, fake_client):
+    fake_client()
+    monkeypatch.setattr(live_quotes, "_token_ok", lambda: False)
+    with pytest.raises(LookupError):
+        asyncio.run(live_quotes.daily_history("TCS", 365))
+
+
+async def test_paper_fill_has_no_price_without_indstocks(monkeypatch):
+    from skopaq.broker import client as broker_client
+    from skopaq.cli import main as cli
+
+    class NoToken:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            raise RuntimeError("no token")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(broker_client, "INDstocksClient", NoToken)
+    got = []
+    paper = SimpleNamespace(update_quote=got.append)
+    await cli._inject_paper_quote(SimpleNamespace(), paper, "SBIN")
+    assert got == []  # no other vendor's price is used

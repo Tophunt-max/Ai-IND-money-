@@ -1219,22 +1219,9 @@ async def _inject_paper_quote(config, paper, symbol: str) -> None:
             )
             return
     except Exception as exc:
-        logger.warning("INDstocks quote for %s failed (%s): trying Yahoo Finance", symbol, exc)
-
-    # Paper only: without an INDstocks token, fill at Yahoo's (possibly delayed) price.
-    try:
-        from skopaq.broker.yahoo_quotes import paper_quote
-
-        quote = await asyncio.to_thread(paper_quote, symbol)
-        if quote.ltp > 0:
-            paper.update_quote(quote)
-            logger.warning(
-                "Paper fill price for %s from Yahoo Finance: LTP=%.2f", symbol, quote.ltp
-            )
-            return
-    except Exception as exc:
-        logger.warning("Yahoo quote for %s failed: %s", symbol, exc)
-    logger.warning("No quote for %s — paper fill may fail", symbol)
+        logger.warning("INDstocks quote for %s failed (%s): no paper fill price", symbol, exc)
+    # All prices come from INDstocks: without a quote the paper engine refuses the fill
+    logger.warning("No INDstocks quote for %s — paper fill may fail", symbol)
 
 
 # ── Scan ──────────────────────────────────────────────────────────────────────

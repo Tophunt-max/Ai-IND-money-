@@ -19,7 +19,7 @@ jobs and the kill switch need ``admin``.
   ``backtest`` or ``montecarlo`` job
 - ``GET  /api/dashboard/jobs``                recent jobs
 - ``GET  /api/dashboard/jobs/{id}``           one job (poll until done)
-- ``GET  /api/dashboard/market/{quotes,indices,history,watchlist}``  Yahoo Finance prices
+- ``GET  /api/dashboard/market/{quotes,indices,history,watchlist}``  INDstocks prices
 - ``GET  /api/dashboard/pnl-history``         realized P&L per day
 - ``GET  /api/dashboard/scheduler[/log]``     today's plan, session markers and logs
 
@@ -181,7 +181,7 @@ async def overview() -> dict:
 
 
 async def _mark_to_market(out: dict[str, Any]) -> None:
-    """Add prices (INDstocks live, else Yahoo) and unrealized P&L to overview positions."""
+    """Add prices (INDstocks live) and unrealized P&L to overview positions."""
     from skopaq.broker import live_quotes
 
     quotes, errors = await live_quotes.get_quotes(sorted({p["symbol"] for p in out["positions"]}))
@@ -209,13 +209,13 @@ async def _mark_to_market(out: dict[str, Any]) -> None:
         out["price_errors"] = errors
 
 
-# ── Market data (INDstocks live, Yahoo Finance fallback) ──────────────────────────
+# ── Market data (INDstocks API only) ─────────────────────────────────────────────
 
 
 @router.get("/market/quotes")
 async def market_quotes(symbols: str = Query(..., max_length=400)) -> dict:
-    """Quotes for up to 25 comma-separated symbols (NSE, or Yahoo indices like ^NSEI)."""
-    from skopaq.broker import yahoo_quotes
+    """INDstocks quotes for up to 25 comma-separated symbols (NSE, or indices like ^NSEI)."""
+    from skopaq.broker import live_quotes
 
     wanted = [s.strip() for s in symbols.split(",") if s.strip()][:25]
     if not wanted:
@@ -223,26 +223,24 @@ async def market_quotes(symbols: str = Query(..., max_length=400)) -> dict:
     bad = []
     for s in wanted:
         try:
-            yahoo_quotes.normalize(s)
+            live_quotes.normalize(s)
         except ValueError:
             bad.append(s)
     if bad:
         raise HTTPException(422, f"Not NSE symbols: {', '.join(bad)}")
-    from skopaq.broker import live_quotes
-
     quotes, errors = await live_quotes.get_quotes(wanted)
     return {"quotes": quotes, "errors": errors, "source": live_quotes.source_label(quotes)}
 
 
 @router.get("/market/indices")
 async def market_indices() -> dict:
-    """NIFTY 50, Bank NIFTY and India VIX: INDstocks live with a token, else Yahoo."""
-    from skopaq.broker import live_quotes, yahoo_quotes
+    """NIFTY 50, Bank NIFTY and India VIX, live from INDstocks."""
+    from skopaq.broker import live_quotes
 
-    quotes, errors = await live_quotes.get_quotes(list(yahoo_quotes.INDICES.values()))
+    quotes, errors = await live_quotes.get_quotes(list(live_quotes.INDICES.values()))
     return {
         "indices": [
-            {"name": name, **quotes[t]} for name, t in yahoo_quotes.INDICES.items() if t in quotes
+            {"name": name, **quotes[t]} for name, t in live_quotes.INDICES.items() if t in quotes
         ],
         "errors": errors,
         "source": live_quotes.source_label(quotes),
@@ -251,12 +249,11 @@ async def market_indices() -> dict:
 
 @router.get("/market/history")
 async def market_history(symbol: str, range: str = "3mo") -> dict:  # noqa: A002
-    """Chart candles: INDstocks with a token (live, the current candle included), else
-    Yahoo Finance with today's candle moved to the live price when one is known."""
-    from skopaq.broker import live_quotes, yahoo_quotes
+    """Chart candles from INDstocks (live: the current candle included)."""
+    from skopaq.broker import live_quotes
 
-    if range not in yahoo_quotes.RANGES:
-        raise HTTPException(422, f"range must be one of {', '.join(yahoo_quotes.RANGES)}")
+    if range not in live_quotes.RANGES:
+        raise HTTPException(422, f"range must be one of {', '.join(live_quotes.RANGES)}")
     try:
         data = await live_quotes.get_history(symbol, range)
     except ValueError as exc:
@@ -265,52 +262,7 @@ async def market_history(symbol: str, range: str = "3mo") -> dict:  # noqa: A002
         raise HTTPException(502, f"Price history unavailable: {exc}") from exc
     if not data["candles"]:
         raise HTTPException(404, f"No price history for {symbol}")
-    if data.get("source") == "indstocks":
-        return {**data, "live": True, "ltp": data["candles"][-1]["c"]}
-    return await _with_live_candle(data)
-
-
-async def _with_live_candle(data: dict[str, Any]) -> dict[str, Any]:
-    """Move today's last candle to the live INDstocks price (best effort), so the chart
-    follows the market between Yahoo refreshes. Yahoo-only quotes change nothing."""
-    from skopaq.broker import live_quotes
-
-    data = {**data, "candles": [dict(c) for c in data["candles"]], "live": False}
-    symbol = data.get("symbol", "")
-    if not symbol:
-        return data
-    try:
-        quotes, _ = await live_quotes.get_quotes([symbol])
-    except Exception:
-        return data
-    q = quotes.get(symbol)
-    if not q or q.get("source") != "indstocks" or not q.get("ltp"):
-        return data
-    ltp = float(q["ltp"])
-    last = data["candles"][-1]
-    today = datetime.now(_IST).date()
-    if datetime.fromtimestamp(last["t"], _IST).date() == today:
-        last["c"] = ltp
-        last["h"] = max(v for v in (last.get("h"), ltp) if v is not None)
-        last["l"] = min(v for v in (last.get("l"), ltp) if v is not None)
-    elif data.get("interval") == "1d" and q.get("open"):
-        # Yahoo has no bar for today yet: add one from the live quote
-        start = datetime.combine(today, datetime.min.time(), tzinfo=_IST)
-        data["candles"].append(
-            {
-                "t": int(start.timestamp()),
-                "o": q["open"],
-                "h": q.get("high") or ltp,
-                "l": q.get("low") or ltp,
-                "c": ltp,
-                "v": q.get("volume") or 0,
-            }
-        )
-    else:
-        return data
-    data["live"] = True
-    data["ltp"] = ltp
-    return data
+    return {**data, "live": True, "ltp": data["candles"][-1]["c"]}
 
 
 @router.get("/market/watchlist")

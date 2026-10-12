@@ -1441,7 +1441,7 @@ def _add_once(items: list[str], item: str) -> None:
 
 
 async def _daily_candles(symbol: str) -> list:
-    """Six months of daily candles (INDstocks, else Yahoo) as ``Candle`` objects."""
+    """Six months of daily candles (INDstocks) as ``Candle`` objects."""
     from skopaq.broker import live_quotes
     from skopaq.market.candles import Candle
 

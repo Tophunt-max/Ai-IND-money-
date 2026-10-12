@@ -9,7 +9,7 @@ A sidebar (desktop) or bottom tabs plus a "More" sheet (phone) groups the pages:
 | Dashboard | Total P&L with the 90-day chart, kill-switch and token banners, today's auto-trading session, open positions, system health | `/api/dashboard/overview`, `/pnl-history`, `/scheduler`, `/api/status` |
 | Portfolio | INDstocks equity positions, F&O positions, holdings, funds (incl. option-buy and futures balances) and today's order book. Read only | `/api/dashboard/portfolio` |
 | **Trade desk** (`/control`) | Run the engine: pause/resume new BUYs, auto sessions on/off, **start a session now** (or, live, a monitor), **stop** the running session, live positions (LTP, P&L, stop, target, high) with **Close** / **Close all** and stop/target edits, **manual orders** (live: type LIVE), today's order book with **Cancel**, exit & risk settings. Streams every 2 s (admin actions only; each is logged and sent to Telegram) | `/api/dashboard/control*` |
-| Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y), live from INDstocks (Yahoo only as a fallback) | `/api/dashboard/market/*` |
+| Market | NIFTY 50 / Bank NIFTY / India VIX, symbol search, quote, price chart (1D–5Y), live from INDstocks | `/api/dashboard/market/*` |
 | Swing scanner | One swing scan (`skopaq scan`, a `scan` job): today's setups scored by the swing model, with entry / stop / target and P(win), and the swing model's state. Places nothing | `/api/dashboard/jobs`, `/swing` |
 | Options | INDstocks expiries, option chain (with Delta) and a rule-based option-selling idea (short put / call / strangle). Needs the INDstocks token; places nothing | `/api/dashboard/options/expiries`, `/options/chain`, `/options/suggest` |
 | Signals & risk | Every journalled signal (QUALIFIED / REJECTED / EXPIRED) with its evidence and rejection reason, risk limits, and reconciliation blockers to resolve | `/api/dashboard/signals`, `/risk`, `/control/reconcile` |
@@ -54,13 +54,11 @@ Market data comes from INDstocks (INDmoney) whenever the server has a valid toke
   daily up to 1Y, and weekly for 5Y.
 - **Refresh:** while NSE is open, the Market page refreshes every 5 s and the 1D chart
   every 10 s.
-- **The badge** on each quote and chart says **LIVE · INDstocks** or **Delayed · Yahoo
-  Finance**.
+- **The badge** on each quote and chart says **LIVE · INDstocks**.
 
-Yahoo Finance (`skopaq/broker/yahoo_quotes.py`, which can lag NSE by several minutes) is
-used only without a token, for symbols INDstocks cannot resolve, and when INDstocks fails.
-Set the token, or turn on TOTP so it renews daily ([Go live](go-live.md) §2). Paper fills
-use Yahoo only when INDstocks has no token; live orders never do.
+INDstocks is the only data source (`skopaq/broker/live_quotes.py`). Without a valid token
+the Market page shows "INDstocks unavailable" and paper fills have no price. Set the token,
+or turn on TOTP so it renews daily ([Go live](go-live.md) §2).
 
 The dashboard is a PWA: on a phone, "Add to Home screen" / "Install app" opens it full screen.
 The service worker caches the app shell only, never API responses.

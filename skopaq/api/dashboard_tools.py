@@ -464,17 +464,13 @@ def _setup_dataflow() -> None:
     from tradingagents.dataflows.config import set_config
 
     is_crypto = SkopaqConfig().asset_class == "crypto"
-    set_config(
-        {
-            "data_vendors": {
-                "core_stock_apis": "yfinance" if is_crypto else "indstocks,yfinance",
-                "technical_indicators": "yfinance",
-                "fundamental_data": "yfinance",
-                "news_data": "yfinance",
-            },
-            "yfinance_symbol_suffix": "" if is_crypto else ".NS",
-        }
-    )
+    if is_crypto:
+        # Crypto is not on INDstocks (experimental asset class)
+        set_config({"data_vendors": {"core_stock_apis": "yfinance"},
+                    "yfinance_symbol_suffix": ""})
+    else:
+        # NSE/BSE: daily candles from the INDstocks API only
+        set_config({"data_vendors": {"core_stock_apis": "indstocks"}})
 
 
 def _rsi(prices, period: int = 14):

@@ -78,24 +78,43 @@ class TestParseATRValue:
 
 
 class TestFetchATR:
-    """Test fetch_atr which lazy-imports route_to_vendor inside a try/except."""
+    """fetch_atr computes Wilder's ATR from INDstocks daily candles."""
 
-    def test_vendor_failure_returns_none(self):
-        """When upstream vendor is unavailable, return None."""
-        with patch.dict("sys.modules", {"tradingagents.dataflows.router": None}):
-            result = fetch_atr("RELIANCE", "2026-03-01")
-        assert result is None
+    @staticmethod
+    def _history(candles):
+        async def fake(symbol, range_):
+            assert range_ == "3mo"
+            return {"symbol": symbol, "candles": candles, "source": "indstocks"}
+        return fake
 
-    def test_vendor_returns_empty(self):
-        mock_module = MagicMock()
-        mock_module.route_to_vendor.return_value = ""
-        with patch.dict("sys.modules", {"tradingagents.dataflows.router": mock_module}):
-            result = fetch_atr("RELIANCE", "2026-03-01")
-        assert result is None
+    def test_no_token_or_failure_returns_none(self, monkeypatch):
+        from skopaq.broker import live_quotes
 
-    def test_vendor_returns_valid_data(self):
-        mock_module = MagicMock()
-        mock_module.route_to_vendor.return_value = "ATR = 55.0"
-        with patch.dict("sys.modules", {"tradingagents.dataflows.router": mock_module}):
-            result = fetch_atr("RELIANCE", "2026-03-01")
-        assert result == 55.0
+        async def fail(symbol, range_):
+            raise LookupError(live_quotes.NO_TOKEN)
+
+        monkeypatch.setattr(live_quotes, "get_history", fail)
+        assert fetch_atr("RELIANCE", "2026-03-01") is None
+
+    def test_too_few_candles_returns_none(self, monkeypatch):
+        from skopaq.broker import live_quotes
+
+        monkeypatch.setattr(live_quotes, "get_history", self._history(
+            [{"t": 1767225600, "o": 100, "h": 101, "l": 99, "c": 100}]))
+        assert fetch_atr("RELIANCE", "2026-03-01") is None
+
+    def test_wilder_atr_of_the_closed_daily_candles(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        from skopaq.broker import live_quotes
+
+        ist = timezone(timedelta(hours=5, minutes=30))
+        day0 = datetime(2026, 1, 1, 9, 15, tzinfo=ist)
+        # Constant 10-point range, no gaps: every true range is 10, so the ATR is 10
+        candles = [{"t": int((day0 + timedelta(days=i)).timestamp()),
+                    "o": 100, "h": 105, "l": 95, "c": 100} for i in range(30)]
+        # The trade date's own (forming) bar is left out
+        candles.append({"t": int(datetime(2026, 3, 1, 9, 15, tzinfo=ist).timestamp()),
+                        "o": 100, "h": 200, "l": 50, "c": 100})
+        monkeypatch.setattr(live_quotes, "get_history", self._history(candles))
+        assert fetch_atr("RELIANCE", "2026-03-01") == 10.0

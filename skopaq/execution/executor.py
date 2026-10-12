@@ -122,7 +122,7 @@ class Executor:
             calendar_scale: Event calendar multiplier (0.0–1.0).
         """
         # Step 0a: Resolve entry_price if missing (upstream agents don't set it). An F&O
-        # contract has no Yahoo price: its caller (the options engine) sets the premium
+        # contract is priced by its caller (the options engine sets the premium)
         derivative = signal.is_derivative
         if signal.action == "BUY" and not signal.entry_price and not derivative:
             price = self._fetch_current_price(signal.symbol)
@@ -599,26 +599,15 @@ class Executor:
 
     @staticmethod
     def _fetch_current_price(symbol: str) -> Optional[float]:
-        """Fetch current market price via yfinance (best-effort).
-
-        Indian stocks use the ``.NS`` suffix on Yahoo Finance.
-        Returns None on any error — caller should handle gracefully.
-        """
+        """The INDstocks last price of *symbol* (best effort, None when unavailable)."""
         try:
-            import yfinance as yf
+            from skopaq.broker import live_quotes
 
-            # Indian stocks need .NS suffix for Yahoo Finance
-            yf_symbol = f"{symbol}.NS" if not any(
-                symbol.endswith(s) for s in (".NS", ".BO", "-USD", "USDT")
-            ) else symbol
-
-            ticker = yf.Ticker(yf_symbol)
-            info = ticker.fast_info
-            price = getattr(info, "last_price", None)
+            price = live_quotes.run_sync(live_quotes.get_ltp(symbol), timeout=15)
             if price and price > 0:
                 return round(float(price), 2)
         except Exception:
-            logger.debug("yfinance price fetch failed for %s", symbol, exc_info=True)
+            logger.debug("INDstocks price fetch failed for %s", symbol, exc_info=True)
         return None
 
 

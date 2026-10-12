@@ -116,6 +116,10 @@ async def _resolve_scrip_code(symbol: str, exchange: str = "NSE", client=None) -
     raise NoMarketDataError(symbol, detail=f"not in {exchange} instruments")
 
 
+# Maximum window of one 1day historical request (https://api-docs.indstocks.com/historicalData/)
+_DAILY_WINDOW_MS = 365 * 24 * 60 * 60 * 1000
+
+
 def _date_to_epoch_ms(date_str: str) -> int:
     """Convert ``YYYY-MM-DD`` to Unix epoch **milliseconds** (IST = UTC+5:30).
 
@@ -135,16 +139,28 @@ async def _fetch_historical(symbol: str, start_date: str, end_date: str) -> str:
     start_ms = _date_to_epoch_ms(start_date)
     end_ms = _date_to_epoch_ms(end_date) + 24 * 60 * 60 * 1000 - 1
 
-    # One client for resolving the scrip-code and fetching the candles
+    # One client for resolving the scrip-code and fetching the candles. The broker
+    # caps a 1day request at one year (a wider one silently returns only a year), so
+    # longer ranges are paged one year at a time, walking back from end_date.
     client = _get_client()
+    by_ts: dict = {}
     async with client:
         scrip_code = await _resolve_scrip_code(symbol, "NSE", client)
-        candles = await client.get_historical(
-            scrip_code=scrip_code,
-            interval="1day",
-            start_time=start_ms,
-            end_time=end_ms,
-        )
+        cursor = end_ms
+        while cursor > start_ms:
+            begin = max(start_ms, cursor - _DAILY_WINDOW_MS)
+            page = await client.get_historical(
+                scrip_code=scrip_code,
+                interval="1day",
+                start_time=begin,
+                end_time=cursor,
+            )
+            for c in page:
+                by_ts[c.timestamp] = c
+            if not page and by_ts:
+                break  # before the start of the instrument's history
+            cursor = begin
+    candles = [by_ts[k] for k in sorted(by_ts)]
 
     if not candles:
         # Lets the router try the next configured vendor (e.g. yfinance).
