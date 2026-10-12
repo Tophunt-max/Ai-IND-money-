@@ -1,16 +1,16 @@
 """Tests for DeFi/tokenomics data fetching (mocked HTTP)."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from tradingagents.dataflows.vendors.crypto_defi import (
-    get_token_fundamentals,
-    get_defi_tvl,
-    get_chain_tvl_overview,
     COINGECKO_ID_MAP,
     DEFILLAMA_PROTOCOL_MAP,
+    get_chain_tvl_overview,
+    get_defi_tvl,
+    get_token_fundamentals,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

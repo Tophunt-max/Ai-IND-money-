@@ -123,7 +123,7 @@ export default function ReportPage() {
               {Object.keys(r.signals.by_strategy).length === 0 ? <Empty>No signals in this period yet.</Empty> : (
                 <Table head={["Strategy", "Decided", "Qualified", "Executed", "Win rate", "Net"]}>
                   {Object.entries(r.signals.by_strategy).sort().map(([name, s]) => (
-                    <tr key={name} className="hover:bg-white/[0.02]">
+                    <tr key={name} className="hover:bg-white/2">
                       <td className="font-medium text-white">{name}</td><td>{s.decisions}</td><td>{s.qualified}</td><td>{s.executed}</td>
                       <td>{pct(s.win_rate)}</td>
                       <td className={pnlClass(s.net)}>{inr(s.net, 0)}</td>

@@ -3,10 +3,11 @@
 Each safety rule gets its own test to ensure it fires at the right threshold.
 """
 
-import pytest
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
-from datetime import datetime, time, timezone, timedelta
 from unittest.mock import patch
+
+import pytest
 
 from skopaq.broker.models import (
     Exchange,

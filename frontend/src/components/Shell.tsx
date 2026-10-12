@@ -145,7 +145,7 @@ function HaltPill() {
   const ks = useApi<{ halted: boolean; text?: string }>(user ? "/api/dashboard/kill-switch" : null, 60000);
   if (!ks.data?.halted) return null;
   return (
-    <Link href="/control" title={ks.data.text} className="inline-flex items-center gap-1 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-300 ring-1 ring-inset ring-rose-500/30">
+    <Link href="/control" title={ks.data.text} className="inline-flex items-center gap-1 rounded-sm bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-300 ring-1 ring-inset ring-rose-500/30">
       <OctagonX className="h-3 w-3" /> Halted
     </Link>
   );
@@ -168,8 +168,8 @@ function NavList({ path, isAdmin, onNavigate }: { path: string; isAdmin: boolean
                   onClick={onNavigate}
                   className={cx(
                     "group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition",
-                    active ? "bg-white/[0.06] text-white before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:rounded before:bg-brand-400"
-                      : "text-gray-400 hover:bg-white/[0.03] hover:text-gray-100",
+                    active ? "bg-white/6 text-white before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:rounded-sm before:bg-brand-400"
+                      : "text-gray-400 hover:bg-white/3 hover:text-gray-100",
                   )}
                 >
                   <Icon className={cx("h-4 w-4", active ? "text-brand-300" : "text-gray-500 group-hover:text-gray-300")} />
@@ -198,7 +198,7 @@ function AppGrid({ path, isAdmin, onNavigate }: { path: string; isAdmin: boolean
               return (
                 <Link key={item.href} href={item.href} onClick={onNavigate}
                   className={cx("flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-center text-[10px] font-medium leading-tight transition",
-                    active ? "bg-brand-500/15 text-white ring-1 ring-inset ring-brand-500/30" : "bg-white/[0.03] text-gray-300 active:bg-white/[0.08]")}>
+                    active ? "bg-brand-500/15 text-white ring-1 ring-inset ring-brand-500/30" : "bg-white/3 text-gray-300 active:bg-white/8")}>
                   <Icon className={cx("h-5 w-5", active ? "text-brand-300" : "text-gray-400")} />
                   {item.label}
                 </Link>
@@ -215,7 +215,7 @@ function UserBox() {
   const { user, signOut } = useAuth();
   if (!user) return null;
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+    <div className="flex items-center gap-2.5 rounded-lg border border-white/6 bg-white/2 p-2">
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink-700 text-xs font-semibold uppercase text-gray-200">
         {(user.name || user.email).slice(0, 1)}
       </div>
@@ -223,7 +223,7 @@ function UserBox() {
         <div className="truncate text-xs font-medium text-gray-200">{user.name || user.email}</div>
         <div className="text-[10px] uppercase tracking-wider text-gray-500">{user.role}</div>
       </div>
-      <button onClick={() => signOut(false)} title="Logout" className="rounded-md p-1.5 text-gray-500 hover:bg-white/[0.06] hover:text-gray-200">
+      <button onClick={() => signOut(false)} title="Logout" className="rounded-md p-1.5 text-gray-500 hover:bg-white/6 hover:text-gray-200">
         <LogOut className="h-4 w-4" />
       </button>
     </div>
@@ -257,14 +257,14 @@ export default function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-56 flex-col border-r border-white/[0.06] bg-ink-950 lg:flex">
-        <div className="flex h-12 items-center border-b border-white/[0.06] px-3">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-56 flex-col border-r border-white/6 bg-ink-950 lg:flex">
+        <div className="flex h-12 items-center border-b border-white/6 px-3">
           <Brand />
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-3">
           <NavList path={path} isAdmin={isAdmin} />
         </div>
-        <div className="space-y-2 border-t border-white/[0.06] p-2">
+        <div className="space-y-2 border-t border-white/6 p-2">
           <div className="flex items-center justify-between px-1 text-[11px] text-gray-500">
             <span>Trading mode</span>
             <ModeBadge mode={mode} />
@@ -274,7 +274,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Top bar: brand (phone), index ticker, mode */}
-      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/95 pt-[env(safe-area-inset-top)] backdrop-blur lg:pl-56">
+      <header className="sticky top-0 z-30 border-b border-white/6 bg-ink-950/95 pt-[env(safe-area-inset-top)] backdrop-blur-sm lg:pl-56">
         <div className="flex h-11 items-center gap-3 px-3 lg:h-12 lg:px-5">
           <div className="lg:hidden"><Brand compact /></div>
           <div className="min-w-0 flex-1"><Ticker compact /></div>
@@ -292,7 +292,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       </main>
 
       {/* Phone bottom tabs with a centre Trade button */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.06] bg-ink-950/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/6 bg-ink-950/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-sm lg:hidden">
         <div className="grid grid-cols-5 items-end">
           {TABS_LEFT.map((t) => <Tab key={t.href} item={t} path={path} />)}
           <Link href="/control" aria-label="Trade" className="flex flex-col items-center gap-0.5 pb-2 text-[10px] font-semibold">
@@ -320,7 +320,7 @@ export default function Shell({ children }: { children: ReactNode }) {
               <Brand />
               <div className="flex items-center gap-2">
                 <ModeBadge mode={mode} />
-                <button onClick={() => setDrawer(false)} aria-label="Close" className="rounded-md p-2 text-gray-400 hover:bg-white/[0.06]">
+                <button onClick={() => setDrawer(false)} aria-label="Close" className="rounded-md p-2 text-gray-400 hover:bg-white/6">
                   <X className="h-5 w-5" />
                 </button>
               </div>

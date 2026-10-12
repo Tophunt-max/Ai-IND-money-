@@ -5,9 +5,10 @@ Requires: SKOPAQ_INDSTOCKS_TOKEN in .env
 """
 
 import os
-import pytest
 
+import pytest
 from dotenv import load_dotenv
+
 load_dotenv(override=True)
 
 pytestmark = pytest.mark.integration

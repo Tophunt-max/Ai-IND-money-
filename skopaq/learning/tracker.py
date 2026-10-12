@@ -14,12 +14,9 @@ All data persisted to Postgres for long-term learning.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +67,7 @@ def _get_db():
         if url:
             return psycopg2.connect(url)
     except Exception:
-        pass
+        logger.debug("Could not connect to DATABASE_URL", exc_info=True)
     return None
 
 
@@ -134,7 +131,8 @@ def record_signal(record: SignalRecord) -> None:
         )
         conn.commit()
         conn.close()
-        logger.info("Signal recorded: %s %s %s pnl=%.2f", record.signal, record.symbol, "WIN" if record.won else "LOSS", record.pnl)
+        logger.info("Signal recorded: %s %s %s pnl=%.2f", record.signal, record.symbol,
+                    "WIN" if record.won else "LOSS", record.pnl)
     except Exception as exc:
         logger.warning("Failed to record signal: %s", exc)
 
@@ -392,12 +390,14 @@ def generate_learning_insights() -> str:
                 if c["calibration_gap"] > 0:
                     insights.append(
                         f"OVERCONFIDENT in {c['confidence_range']}% range: "
-                        f"stated {c['stated_confidence']:.0f}% but actual {c['actual_win_rate']:.0f}%"
+                        f"stated {c['stated_confidence']:.0f}% "
+                        f"but actual {c['actual_win_rate']:.0f}%"
                     )
                 else:
                     insights.append(
                         f"UNDERCONFIDENT in {c['confidence_range']}% range: "
-                        f"stated {c['stated_confidence']:.0f}% but actual {c['actual_win_rate']:.0f}%"
+                        f"stated {c['stated_confidence']:.0f}% "
+                        f"but actual {c['actual_win_rate']:.0f}%"
                     )
 
         # Sector insights

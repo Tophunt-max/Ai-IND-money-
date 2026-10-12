@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional
 
 from rich import box
 from rich.align import Align
-from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -34,12 +32,11 @@ from skopaq.cli.theme import (
 )
 
 if TYPE_CHECKING:
-    from skopaq.broker.models import ExecutionResult, TradingSignal
     from skopaq.broker.token_manager import TokenHealth
     from skopaq.config import SkopaqConfig
-    from skopaq.learning.report import Report
     from skopaq.execution.daemon import DaemonSessionReport
     from skopaq.execution.position_monitor import MonitorResult
+    from skopaq.learning.report import Report
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -187,22 +184,32 @@ def display_report(report: Report) -> None:
     summary.add_row("Signals", f"{sig.total} ({sig.qualified} qualified, {sig.rejected} rejected)")
     summary.add_row("Executed / closed", f"{sig.executed} / {sig.closed} "
                     f"({_fmt_pct(sig.win_rate, signed=False)} won, net {_fmt_inr(sig.net)})")
-    summary.add_row("Closed trades", f"{trades.closed} ({_fmt_pct(trades.win_rate, signed=False)} won)")
+    summary.add_row("Closed trades",
+                    f"{trades.closed} ({_fmt_pct(trades.win_rate, signed=False)} won)")
     summary.add_row("Realized P&L", _fmt_inr(trades.total_pnl))
     summary.add_row("Avg win / loss", f"{_fmt_inr(trades.avg_win)} / {_fmt_inr(trades.avg_loss)}")
-    summary.add_row("Profit factor",
-                    "—" if trades.profit_factor is None else f"{trades.profit_factor:.2f}")
+    summary.add_row(
+        "Profit factor", "—" if trades.profit_factor is None else f"{trades.profit_factor:.2f}"
+    )
     summary.add_row("Max drawdown", _fmt_inr(trades.max_drawdown))
-    summary.add_row("Per-trade return",
-                    f"{_fmt_pct(trades.avg_return)} avg, "
-                    f"{_fmt_pct(trades.return_std, signed=False)} std")
+    summary.add_row(
+        "Per-trade return",
+        f"{_fmt_pct(trades.avg_return)} avg, {_fmt_pct(trades.return_std, signed=False)} std",
+    )
 
     strategies = Table(box=box.ROUNDED, header_style="bold magenta", padding=(0, 1))
     for column in ("Strategy", "Decisions", "Qualified", "Executed", "Closed", "Won", "Net"):
         strategies.add_column(column, justify="left" if column == "Strategy" else "right")
     for name, st in sorted(sig.by_strategy.items()):
-        strategies.add_row(name, str(st.decisions), str(st.qualified), str(st.executed),
-                           str(st.closed), _fmt_pct(st.win_rate, signed=False), _fmt_inr(st.net))
+        strategies.add_row(
+            name,
+            str(st.decisions),
+            str(st.qualified),
+            str(st.executed),
+            str(st.closed),
+            _fmt_pct(st.win_rate, signed=False),
+            _fmt_inr(st.net),
+        )
 
     calib = Table(box=box.ROUNDED, header_style="bold magenta", padding=(0, 1))
     for column in ("Confidence", "Trades", "Won"):
@@ -213,8 +220,9 @@ def display_report(report: Report) -> None:
     title = f"[bold]Track record[/bold]  [{DIM}]last {report.days} days · {report.mode}[/{DIM}]"
     console.print(Panel(summary, title=title, border_style=HEADER_BORDER, padding=(1, 1)))
     console.print(Panel(strategies, title="[bold]By strategy[/bold]", border_style=HEADER_BORDER))
-    console.print(Panel(calib, title="[bold]Confidence calibration[/bold]",
-                        border_style=HEADER_BORDER))
+    console.print(
+        Panel(calib, title="[bold]Confidence calibration[/bold]", border_style=HEADER_BORDER)
+    )
     if not sig.enough_data:
         console.print(
             f"[{WARNING}]{WARN}  Only {sig.closed} closed signals; below "
@@ -268,9 +276,7 @@ def display_token_set(health: TokenHealth) -> None:
         content.append("Remaining: ", style="bold")
         content.append(f"{health.remaining}")
 
-    console.print(
-        Panel(content, border_style=STATUS_BORDER, padding=(1, 2))
-    )
+    console.print(Panel(content, border_style=STATUS_BORDER, padding=(1, 2)))
 
 
 # ── Serve Command ─────────────────────────────────────────────────────────────
@@ -280,9 +286,9 @@ def display_serve_banner(host: str, port: int) -> None:
     """Show server startup banner."""
     content = Text()
     content.append("SkopaqTrader API\n", style=BRAND)
-    content.append(f"Listening on ", style=DIM)
+    content.append("Listening on ", style=DIM)
     content.append(f"http://{host}:{port}", style="bold underline")
-    content.append(f"\n")
+    content.append("\n")
     content.append("Health:    ", style="bold")
     content.append(f"http://{host}:{port}/health", style=DIM)
 

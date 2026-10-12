@@ -85,6 +85,18 @@ Other changes in this area:
   trades.
 - **Fail-closed risk state.** In live mode, if Supabase is configured but cannot be read,
   new BUYs are refused.
+- **Fail-closed kill switch.** In live mode an unreadable `system_flags` row counts as a
+  halt for BUYs (source `supabase-unreadable`), so a halt set from another machine is never
+  missed. `SKOPAQ_KILL_SWITCH_FAIL_OPEN=true` (`.env` only) restores the old behaviour.
+  The Supabase read has a 3 s timeout and the executor refreshes it off the event loop.
+- **MARKET orders are value-checked.** A MARKET order carries no price, so the order value
+  cap, position size, sector concentration and funds checks use the signal's reference
+  price (the LTP or entry it was built from). A BUY with no price at all is refused.
+- **Weekends and NSE holidays.** The market-hours check also refuses orders on weekends and
+  on the calendar's NSE holidays plus `SKOPAQ_NSE_HOLIDAYS`.
+- **Broker endpoints are locked.** `SKOPAQ_INDSTOCKS_BASE_URL`, the WebSocket URLs,
+  `SKOPAQ_BINANCE_BASE_URL`, `SKOPAQ_SCHEDULER_PING_URL` and `SKOPAQ_UPSTASH_REDIS_URL`
+  cannot be changed from the dashboard: they receive the broker token, MPIN/TOTP or keys.
 - **Net P&L for loss limits.** The loss limits record P&L after estimated charges.
 
 ## Charges and net P&L

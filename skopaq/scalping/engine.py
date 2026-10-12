@@ -42,12 +42,12 @@ from skopaq.broker.models import (
     is_unconfirmed,
 )
 from skopaq.broker.order_status import is_non_cnc_product
+from skopaq.finance.charges import EQUITY_INTRADAY, leg_charges
 from skopaq.market.candles import Candle, LiveSeries
 from skopaq.scalping.costs import round_trip_cost
 from skopaq.scalping.rules import ScalpPosition, exit_reason, update_trail
 from skopaq.scalping.settings import ScalpSettings
 from skopaq.scalping.strategies import RL_STRATEGY, Setup, atr_last, evaluate
-from skopaq.finance.charges import EQUITY_INTRADAY, leg_charges
 from skopaq.strategy.gate import SignalGate, gate_from_config
 from skopaq.strategy.journal import SignalJournal
 

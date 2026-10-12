@@ -1,15 +1,15 @@
 """Tests for on-chain data fetching (mocked HTTP)."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from tradingagents.dataflows.vendors.crypto_onchain import (
-    get_blockchain_stats,
-    get_address_activity,
     CHAIN_MAP,
     _strip_coin,
+    get_address_activity,
+    get_blockchain_stats,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

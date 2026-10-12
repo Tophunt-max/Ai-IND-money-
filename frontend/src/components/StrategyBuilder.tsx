@@ -113,15 +113,15 @@ export default function StrategyBuilder() {
           </Table>
 
           {isAdmin && (
-            <div className="space-y-3 border-t border-white/[0.06] pt-4 text-xs">
+            <div className="space-y-3 border-t border-white/6 pt-4 text-xs">
               <div className="text-sm font-medium text-gray-200">{d.specs.some((s) => s.spec.name === spec.name) ? `Edit ${spec.name}` : "New strategy"}</div>
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="space-y-1"><span className="text-gray-400">Name</span>
-                  <input aria-label="name" className="w-full rounded bg-white/5 px-2 py-1 text-gray-100" value={spec.name} onChange={(e) => setSpec({ ...spec, name: e.target.value.toLowerCase() })} placeholder="my_momentum" /></label>
+                  <input aria-label="name" className="w-full rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={spec.name} onChange={(e) => setSpec({ ...spec, name: e.target.value.toLowerCase() })} placeholder="my_momentum" /></label>
                 <label className="space-y-1"><span className="text-gray-400">Periods</span>
-                  <input aria-label="periods" className="w-full rounded bg-white/5 px-2 py-1 text-gray-100" value={periods} onChange={(e) => setPeriods(e.target.value)} /></label>
+                  <input aria-label="periods" className="w-full rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={periods} onChange={(e) => setPeriods(e.target.value)} /></label>
                 <label className="space-y-1"><span className="text-gray-400">Correlated symbols</span>
-                  <input aria-label="correlated" className="w-full rounded bg-white/5 px-2 py-1 text-gray-100" value={corr} onChange={(e) => setCorr(e.target.value)} placeholder="HDFCBANK, ICICIBANK" /></label>
+                  <input aria-label="correlated" className="w-full rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={corr} onChange={(e) => setCorr(e.target.value)} placeholder="HDFCBANK, ICICIBANK" /></label>
               </div>
               <div className="flex flex-wrap items-center gap-2"><span className="text-gray-400">Timeframes</span>
                 {d.catalog.timeframes.map((t) => (
@@ -129,7 +129,7 @@ export default function StrategyBuilder() {
                     onChange={() => setSpec({ ...spec, timeframes: toggle(spec.timeframes, t).sort((a, b) => a - b) })} />{tf(t)}</label>
                 ))}
                 <span className="ml-3 text-gray-400">Shifted copies</span>
-                <input aria-label="shifted" type="number" min={0} max={5} className="w-14 rounded bg-white/5 px-2 py-1 text-gray-100" value={spec.shifted} onChange={(e) => setSpec({ ...spec, shifted: Number(e.target.value) })} />
+                <input aria-label="shifted" type="number" min={0} max={5} className="w-14 rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={spec.shifted} onChange={(e) => setSpec({ ...spec, shifted: Number(e.target.value) })} />
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-1">
                 {Object.entries(d.catalog.features).map(([f, info]) => (
@@ -139,13 +139,13 @@ export default function StrategyBuilder() {
               </div>
               {spec.targets.map((t, i) => (
                 <div key={i} className="flex flex-wrap items-center gap-2"><span className="text-gray-400">Target {i + 1}</span>
-                  <select aria-label={`target-${i}`} className="rounded bg-white/5 px-2 py-1 text-gray-100" value={t.type}
+                  <select aria-label={`target-${i}`} className="rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={t.type}
                     onChange={(e) => setSpec({ ...spec, targets: spec.targets.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)) })}>
                     {Object.keys(d.catalog.targets).map((k) => <option key={k} value={k}>{k}</option>)}
                   </select>
-                  <span>horizon</span><input type="number" min={1} max={120} className="w-16 rounded bg-white/5 px-2 py-1 text-gray-100" value={t.horizon}
+                  <span>horizon</span><input type="number" min={1} max={120} className="w-16 rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={t.horizon}
                     onChange={(e) => setSpec({ ...spec, targets: spec.targets.map((x, j) => (j === i ? { ...x, horizon: Number(e.target.value) } : x)) })} />
-                  {t.type === "win" && <><span>min move %</span><input type="number" step={0.01} min={0} className="w-20 rounded bg-white/5 px-2 py-1 text-gray-100" value={t.min_move_pct ?? 0.12}
+                  {t.type === "win" && <><span>min move %</span><input type="number" step={0.01} min={0} className="w-20 rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={t.min_move_pct ?? 0.12}
                     onChange={(e) => setSpec({ ...spec, targets: spec.targets.map((x, j) => (j === i ? { ...x, min_move_pct: Number(e.target.value) } : x)) })} /></>}
                   {spec.targets.length > 1 && <Button size="sm" variant="ghost" onClick={() => setSpec({ ...spec, targets: spec.targets.filter((_, j) => j !== i) })}>remove</Button>}
                   <span className="text-gray-600">{d.catalog.targets[t.type]?.about}</span>
@@ -153,11 +153,11 @@ export default function StrategyBuilder() {
               ))}
               {spec.targets.length < 4 && <Button size="sm" variant="ghost" onClick={() => setSpec({ ...spec, targets: [...spec.targets, { ...spec.targets[0], horizon: spec.targets[0].horizon + 5 }] })}>+ target</Button>}
               <div className="flex flex-wrap items-center gap-2"><span className="text-gray-400">Entry rule</span>
-                <select aria-label="entry" className="rounded bg-white/5 px-2 py-1 text-gray-100" value={spec.entry.type}
+                <select aria-label="entry" className="rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={spec.entry.type}
                   onChange={(e) => setSpec({ ...spec, entry: e.target.value === "auto" ? { type: "auto" } : { type: e.target.value, min: spec.entry.min ?? (e.target.value === "probability" ? 0.6 : 1) } })}>
                   {d.catalog.entry_types.map((k) => <option key={k} value={k}>{k}</option>)}
                 </select>
-                {spec.entry.type !== "auto" && <><span>min</span><input type="number" step={0.01} className="w-20 rounded bg-white/5 px-2 py-1 text-gray-100" value={spec.entry.min ?? 0}
+                {spec.entry.type !== "auto" && <><span>min</span><input type="number" step={0.01} className="w-20 rounded-sm bg-white/5 px-2 py-1 text-gray-100" value={spec.entry.min ?? 0}
                   onChange={(e) => setSpec({ ...spec, entry: { ...spec.entry, min: Number(e.target.value) } })} /></>}
                 <span className="text-gray-600">auto = the threshold validated during training</span>
               </div>

@@ -207,7 +207,7 @@ export default function EnvSettingsPage() {
               <div className="flex flex-wrap gap-2">
                 {overridden.map((s) => (
                   <button key={s.key} onClick={() => setFilter(s.key)}
-                    className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-1 font-mono text-xs text-amber-200 transition hover:bg-amber-500/10">
+                    className="rounded-lg border border-amber-500/25 bg-amber-500/6 px-2.5 py-1 font-mono text-xs text-amber-200 transition hover:bg-amber-500/10">
                     {s.key}
                   </button>
                 ))}
@@ -235,7 +235,7 @@ export default function EnvSettingsPage() {
 
           {groups.length === 0 ? <Empty>No setting matches “{filter}”.</Empty> : groups.map(([group, items]) => (
             <Card key={group} title={`${group} (${items.length})`}>
-              <div className="divide-y divide-white/[0.04]">
+              <div className="divide-y divide-white/4">
                 {items.map((s) => (
                   <Row key={s.key} s={s} busy={busy} editing={editing === s.key} setEditing={setEditing}
                     save={(key, value) => run({ set: { [key]: value } })} remove={remove} />
@@ -246,7 +246,7 @@ export default function EnvSettingsPage() {
 
           <Card title="Change history" icon={History}>
             {env.data.history.length === 0 ? <Empty>No changes yet.</Empty> : (
-              <div className="divide-y divide-white/[0.04]">
+              <div className="divide-y divide-white/4">
                 {env.data.history.map((h, i) => (
                   <div key={i} className="py-2 text-sm">
                     <div className="flex justify-between gap-3">

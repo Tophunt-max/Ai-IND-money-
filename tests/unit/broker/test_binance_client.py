@@ -1,12 +1,12 @@
 """Tests for the Binance public API client (mocked HTTP)."""
 
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
-from unittest.mock import AsyncMock, patch, MagicMock
+import pytest
 
 from skopaq.broker.binance_client import BinanceClient, BinanceError
 from skopaq.broker.models import Exchange, Quote
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

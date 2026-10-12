@@ -350,7 +350,7 @@ class LinearModel(BaseModel):
             if self.can_continue(init) is None and len(init.coef) == A.shape[1]:
                 beta, self.continued = np.array(init.coef, float), True
             for _ in range(100):
-                p = 1 / (1 + np.exp(-A @ beta))
+                p = 1 / (1 + np.exp(-np.clip(A @ beta, -500, 500)))
                 g = A.T @ (w * (p - y)) / w.sum() + reg @ beta
                 H = (A * (w * p * (1 - p))[:, None]).T @ A / w.sum() + reg + 1e-9 * np.eye(
                     A.shape[1])
@@ -364,7 +364,7 @@ class LinearModel(BaseModel):
 
     def predict(self, X):
         z = np.hstack([np.asarray(X, float), np.ones((len(X), 1))]) @ self.coef
-        return 1 / (1 + np.exp(-z)) if self.task == "classifier" else z
+        return 1 / (1 + np.exp(-np.clip(z, -500, 500))) if self.task == "classifier" else z
 
     def save(self, d):
         (d / "linear.json").write_text(json.dumps({"coef": self.coef.tolist()}))

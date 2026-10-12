@@ -8,9 +8,10 @@ which is a frozen dataclass — no runtime code can modify them.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Optional
 
 from skopaq.broker.models import (
@@ -42,6 +43,27 @@ _OPTION_RE = re.compile(r"\d+-?(?:CE|PE)$")
 # A future BUY's margin as a share of its notional (an estimate: NSE index futures need
 # about 12-20 %; the broker checks the exact SPAN + exposure margin)
 FUTURES_MARGIN_ESTIMATE = 0.20
+
+
+def reference_price(order: OrderRequest, signal: Optional[TradingSignal]) -> float:
+    """The price an order's value limits are checked at: the order's own price (a LIMIT),
+    else the signal's entry price (the LTP a MARKET order was built from); 0 when neither
+    is known."""
+    for candidate in (order.price, getattr(signal, "entry_price", None) if signal else None):
+        try:
+            value = float(candidate or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 0.0
+
+
+def _price(order: OrderRequest, price: Optional[float]) -> float:
+    """``price`` when given (validate's reference price), else the order's own price."""
+    if price is not None:
+        return float(price)
+    return float(order.price or 0)
 
 
 @dataclass
@@ -77,12 +99,16 @@ class SafetyChecker:
         rules: SafetyRules = SAFETY_RULES,
         ist_offset_hours: float = 5.5,
         max_sector_concentration_pct: float = 0.40,
+        extra_holidays: Optional[str] = None,
     ) -> None:
         self._rules = rules
         # Working quantity limits: the rules' ceilings until set_order_limits lowers them
         self._max_shares = rules.max_shares_per_position
         self._max_lots = rules.max_lots_per_position
         self._ist_offset_hours = ist_offset_hours
+        # Extra NSE closures (comma-separated YYYY-MM-DD), as the scheduler reads them
+        self._extra_holidays = (os.environ.get("SKOPAQ_NSE_HOLIDAYS", "")
+                                if extra_holidays is None else extra_holidays)
         self._concentration = ConcentrationChecker(max_sector_concentration_pct)
 
         # Intra-day tracking (reset daily)
@@ -203,6 +229,9 @@ class SafetyChecker:
         rejections: list[str] = []
         adds_risk = order.side == Side.BUY
         blocking: list[str] = []
+        # A MARKET order carries no price: value, size and funds are checked against
+        # the signal's reference price (the LTP or entry the order was built from)
+        ref_price = reference_price(order, signal)
 
         self._check_trading_halt(order, rejections)
         self._check_market_hours(rejections)
@@ -212,13 +241,19 @@ class SafetyChecker:
         )
         short_end = len(rejections)
         if adds_risk:
-            self._check_position_size(order, portfolio_value, rejections)
-            self._check_order_value(order, rejections)
+            if ref_price <= 0:
+                # Fail closed: without a price none of the value limits can be applied
+                rejections.append(
+                    "No price for this BUY (MARKET order without a reference price): "
+                    "order value, position size and funds cannot be checked")
+            self._check_position_size(order, portfolio_value, rejections, price=ref_price)
+            self._check_order_value(order, rejections, price=ref_price)
             self._check_max_lots(order, rejections)
         self._check_max_positions(order, positions, rejections)
         self._check_stop_loss(order, signal, rejections)
         self._check_min_stop_loss_pct(order, rejections)
-        self._check_sector_concentration(order, positions, portfolio_value, rejections)
+        self._check_sector_concentration(order, positions, portfolio_value, rejections,
+                                         price=ref_price)
         if adds_risk:
             # Open losses count toward today's limit (open gains do not offset it)
             self._check_daily_loss(portfolio_value, rejections,
@@ -232,7 +267,7 @@ class SafetyChecker:
             if self._risk_state_problem:
                 rejections.append(self._risk_state_problem)
         self._check_naked_options(order, rejections)
-        self._check_sufficient_funds(order, funds, rejections)
+        self._check_sufficient_funds(order, funds, rejections, price=ref_price)
         self._check_minimum_confidence(signal, rejections)
 
         codes = [short_code if short_start <= i < short_end else "safety"
@@ -255,14 +290,18 @@ class SafetyChecker:
         if not self._rules.market_hours_only:
             return
 
-        now_utc = datetime.now(timezone.utc)
-        # Convert to IST (UTC + 5:30)
-        ist_hour = (now_utc.hour + int(self._ist_offset_hours)) % 24
-        ist_minute = now_utc.minute + int((self._ist_offset_hours % 1) * 60)
-        if ist_minute >= 60:
-            ist_hour += 1
-            ist_minute -= 60
-        ist_time = time(ist_hour, ist_minute)
+        now_ist = datetime.now(timezone.utc) + timedelta(hours=self._ist_offset_hours)
+        ist_date = now_ist.date()
+        ist_time = time(now_ist.hour, now_ist.minute)
+
+        # Weekends and NSE trading holidays (the calendar's list plus SKOPAQ_NSE_HOLIDAYS)
+        if ist_date.weekday() >= 5:
+            rejections.append(f"Market closed: {ist_date:%A} (IST {ist_date.isoformat()})")
+            return
+        holiday = self._nse_holiday(ist_date)
+        if holiday:
+            rejections.append(f"Market closed: NSE holiday {holiday} ({ist_date.isoformat()})")
+            return
 
         if ist_time < NSE_MARKET_OPEN or ist_time > NSE_MARKET_CLOSE:
             rejections.append(
@@ -270,8 +309,23 @@ class SafetyChecker:
                 f"market {NSE_MARKET_OPEN.strftime('%H:%M')}-{NSE_MARKET_CLOSE.strftime('%H:%M')})"
             )
 
+    def _nse_holiday(self, d: date) -> Optional[str]:
+        """The NSE holiday's name on *d*, or ``None`` (also when *d*'s year has no list:
+        the scheduler refuses to start then; an order is not blocked on a missing list)."""
+        try:
+            from skopaq.risk.calendar import NSE_TRADING_HOLIDAYS, parse_extra_holidays
+
+            name = NSE_TRADING_HOLIDAYS.get(d.year, {}).get(d)
+            if not name and self._extra_holidays:
+                name = parse_extra_holidays(self._extra_holidays).get(d)
+            return name or None
+        except Exception:  # a bad SKOPAQ_NSE_HOLIDAYS value must not crash validate()
+            logger.warning("Could not read the NSE holiday calendar", exc_info=True)
+            return None
+
     def _check_position_size(
         self, order: OrderRequest, portfolio_value: float, rejections: list[str],
+        *, price: Optional[float] = None,
     ) -> None:
         """Reject if order exceeds max position % of capital.
 
@@ -283,9 +337,9 @@ class SafetyChecker:
         """
         if portfolio_value <= 0:
             return
-        price = order.price or 0
+        price = _price(order, price)
         if price <= 0:
-            return  # Can't check for market orders without a price estimate
+            return  # validate() rejects a BUY without a price estimate
         order_value = price * float(order.quantity)
         pct = order_value / portfolio_value
         if pct > self._rules.max_position_pct:
@@ -304,15 +358,17 @@ class SafetyChecker:
                 f"Position size {pct:.1%} exceeds max {self._rules.max_position_pct:.0%}"
             )
 
-    def _check_order_value(self, order: OrderRequest, rejections: list[str]) -> None:
+    def _check_order_value(self, order: OrderRequest, rejections: list[str],
+                           *, price: Optional[float] = None) -> None:
         """Reject if order value exceeds absolute cap."""
-        price = order.price or 0
+        price = _price(order, price)
         if price <= 0:
             return
         order_value = price * float(order.quantity)
         if order_value > self._rules.max_order_value_inr:
             rejections.append(
-                f"Order value INR {order_value:,.0f} exceeds max INR {self._rules.max_order_value_inr:,.0f}"
+                f"Order value INR {order_value:,.0f} exceeds max INR "
+                f"{self._rules.max_order_value_inr:,.0f}"
             )
 
     def _check_trading_halt(self, order: OrderRequest, rejections: list[str]) -> None:
@@ -369,8 +425,11 @@ class SafetyChecker:
             symbol = _base_symbol(order.symbol)
             rows = positions if derivative else [*holdings, *positions]
             held = sum(
-                (item.quantity for item in rows
-                 if _same_row(item, symbol, order.security_id if derivative else "")),
+                (
+                    item.quantity
+                    for item in rows
+                    if _same_row(item, symbol, order.security_id if derivative else "")
+                ),
                 start=type(order.quantity)(0),
             )
             if held < order.quantity:
@@ -391,24 +450,30 @@ class SafetyChecker:
             logger.critical(
                 "SELL %s %s checked WITHOUT the order book (override on: "
                 "SKOPAQ_ALLOW_SELL_WITHOUT_ORDER_BOOK) — open SELL orders are not counted",
-                order.quantity, order.symbol,
+                order.quantity,
+                order.symbol,
             )
 
         # Imported here: sellable imports _base_symbol from this module
         from skopaq.execution.sellable import sellable_quantity
 
         view = sellable_quantity(
-            symbol=order.symbol, security_id=order.security_id,
-            product=order.product.value, positions=positions, holdings=holdings,
-            context=sell_context, order_qty=order.quantity, exchange=order.exchange.value,
+            symbol=order.symbol,
+            security_id=order.security_id,
+            product=order.product.value,
+            positions=positions,
+            holdings=holdings,
+            context=sell_context,
+            order_qty=order.quantity,
+            exchange=order.exchange.value,
             segment=order.segment.value,
         )
-        if (sell_context.position_only
-                and view.sellable >= order.quantity > view.position_sellable):
+        if sell_context.position_only and view.sellable >= order.quantity > view.position_sellable:
             # A protective exit of the day's position: the account could cover it, but only
             # with older holdings — what the position had is already being sold
-            return self._refuse_position_exit(order, view, sell_context.own_order_ids,
-                                              rejections, blocking)
+            return self._refuse_position_exit(
+                order, view, sell_context.own_order_ids, rejections, blocking
+            )
         if view.sellable >= order.quantity:
             return ""
         if sell_context.holdings_error:
@@ -422,19 +487,28 @@ class SafetyChecker:
             if blocking is not None:
                 blocking.extend(o.order_id for o in view.pending)
             return "holdings-unreadable"
-        reason = (f"No short sales: SELL {order.quantity} {order.symbol} but only "
-                  f"{view.holding_qty + view.position_qty} held")
+        reason = (
+            f"No short sales: SELL {order.quantity} {order.symbol} but only "
+            f"{view.holding_qty + view.position_qty} held"
+        )
         if view.pending_qty:
-            reason += f", {view.pending_qty} in open SELL orders (" + ", ".join(
-                f"{o.order_id} {o.status_raw or o.status}" for o in view.pending) + ")"
+            reason += (
+                f", {view.pending_qty} in open SELL orders ("
+                + ", ".join(f"{o.order_id} {o.status_raw or o.status}" for o in view.pending)
+                + ")"
+            )
         if view.unshown_fill_qty:
             reason += f", {view.unshown_fill_qty} sold but not yet in positions"
         if view.uncertain_qty:
-            reason += (f", {view.uncertain_qty} in a SELL whose placement is uncertain (not in "
-                       "the order book yet)")
+            reason += (
+                f", {view.uncertain_qty} in a SELL whose placement is uncertain (not in "
+                "the order book yet)"
+            )
         if view.own_open_qty:
-            reason += (f", {view.own_open_qty} in Skopaq SELL orders not listed in the order "
-                       f"book yet ({', '.join(view.own_open_ids)})")
+            reason += (
+                f", {view.own_open_qty} in Skopaq SELL orders not listed in the order "
+                f"book yet ({', '.join(view.own_open_ids)})"
+            )
         if view.excluded:
             reason += f" (not counted: {', '.join(view.excluded)})"
         rejections.append(reason)
@@ -446,29 +520,41 @@ class SafetyChecker:
         return "unshown-fill" if view.unshown_fill_qty else "no-short-sale"
 
     @staticmethod
-    def _refuse_position_exit(order: OrderRequest, view, own_ids: frozenset[str],
-                              rejections: list[str], blocking: Optional[list[str]]) -> str:
+    def _refuse_position_exit(
+        order: OrderRequest,
+        view,
+        own_ids: frozenset[str],
+        rejections: list[str],
+        blocking: Optional[list[str]],
+    ) -> str:
         """Refuse a protective exit of the day's position that only older holdings could
         cover: Skopaq's own open, unconfirmed or not-yet-shown SELLs already take what the
         position had (another Skopaq process's exit, say)."""
         own = [o for o in view.pending if o.order_id in own_ids]
         left = max(view.position_sellable, 0)
-        reason = (f"No short sales: protective SELL {order.quantity} {order.symbol} exits the "
-                  f"day's position of {view.position_qty}, which has only {left} left")
+        reason = (
+            f"No short sales: protective SELL {order.quantity} {order.symbol} exits the "
+            f"day's position of {view.position_qty}, which has only {left} left"
+        )
         if view.own_pending_qty:
-            reason += (f", {view.own_pending_qty} in Skopaq's open SELL orders ("
-                       + ", ".join(f"{o.order_id} {o.status_raw or o.status}" for o in own)
-                       + ")")
+            reason += (
+                f", {view.own_pending_qty} in Skopaq's open SELL orders ("
+                + ", ".join(f"{o.order_id} {o.status_raw or o.status}" for o in own)
+                + ")"
+            )
         if view.unshown_fill_qty:
             reason += f", {view.unshown_fill_qty} sold but not yet in positions"
         if view.uncertain_qty:
-            reason += (f", {view.uncertain_qty} in a SELL whose placement is uncertain (not in "
-                       "the order book yet)")
+            reason += (
+                f", {view.uncertain_qty} in a SELL whose placement is uncertain (not in "
+                "the order book yet)"
+            )
         if view.own_open_qty:
-            reason += (f", {view.own_open_qty} in Skopaq SELL orders not listed in the order "
-                       f"book yet ({', '.join(view.own_open_ids)})")
-        reason += (f" — the {view.holding_qty} older delivery holdings are not sold by an "
-                   "exit")
+            reason += (
+                f", {view.own_open_qty} in Skopaq SELL orders not listed in the order "
+                f"book yet ({', '.join(view.own_open_ids)})"
+            )
+        reason += f" — the {view.holding_qty} older delivery holdings are not sold by an exit"
         rejections.append(reason)
         if blocking is not None:
             blocking.extend(o.order_id for o in own)
@@ -478,7 +564,10 @@ class SafetyChecker:
         return "unshown-fill" if view.unshown_fill_qty else "no-short-sale"
 
     def _check_max_positions(
-        self, order: OrderRequest, positions: list[Position], rejections: list[str],
+        self,
+        order: OrderRequest,
+        positions: list[Position],
+        rejections: list[str],
     ) -> None:
         """Reject if opening a new position would exceed max concurrent positions."""
         if order.side != Side.BUY:
@@ -486,9 +575,7 @@ class SafetyChecker:
         existing_symbols = {p.symbol for p in positions if p.quantity > 0}
         if order.symbol not in existing_symbols:
             if len(existing_symbols) >= self._rules.max_open_positions:
-                rejections.append(
-                    f"Max {self._rules.max_open_positions} open positions reached"
-                )
+                rejections.append(f"Max {self._rules.max_open_positions} open positions reached")
 
     def _check_stop_loss(
         self,
@@ -534,7 +621,8 @@ class SafetyChecker:
         sl_distance = abs(order.price - order.trigger_price) / order.price
         if sl_distance < self._rules.min_stop_loss_pct:
             rejections.append(
-                f"Stop loss too tight: {sl_distance:.1%} distance < {self._rules.min_stop_loss_pct:.0%} minimum"
+                f"Stop loss too tight: {sl_distance:.1%} distance < "
+                f"{self._rules.min_stop_loss_pct:.0%} minimum"
             )
 
     def _check_max_lots(self, order: OrderRequest, rejections: list[str]) -> None:
@@ -548,14 +636,12 @@ class SafetyChecker:
         if order.segment == Segment.DERIVATIVE:
             if order.lots > self._max_lots:
                 rejections.append(
-                    f"{order.lots} lots exceeds max {self._max_lots} "
-                    "lots per position"
+                    f"{order.lots} lots exceeds max {self._max_lots} lots per position"
                 )
             return
         if order.quantity > self._max_shares:
             rejections.append(
-                f"Quantity {order.quantity} exceeds max {self._max_shares} "
-                "shares per position"
+                f"Quantity {order.quantity} exceeds max {self._max_shares} shares per position"
             )
 
     def _check_sector_concentration(
@@ -564,6 +650,8 @@ class SafetyChecker:
         positions: list[Position],
         portfolio_value: float,
         rejections: list[str],
+        *,
+        price: Optional[float] = None,
     ) -> None:
         """Reject if adding this order would breach sector concentration limits.
 
@@ -572,7 +660,7 @@ class SafetyChecker:
         """
         if order.side != Side.BUY:
             return  # Only BUY orders increase exposure
-        price = order.price or 0
+        price = _price(order, price)
         if price <= 0 or portfolio_value <= 0:
             return
         order_value = price * float(order.quantity)
@@ -585,8 +673,9 @@ class SafetyChecker:
         if reason:
             rejections.append(reason)
 
-    def _check_daily_loss(self, portfolio_value: float, rejections: list[str],
-                          unrealized: float = 0.0) -> None:
+    def _check_daily_loss(
+        self, portfolio_value: float, rejections: list[str], unrealized: float = 0.0
+    ) -> None:
         """Reject if today's realized loss plus open (unrealized) losses exceed the
         circuit breaker threshold."""
         if portfolio_value <= 0:
@@ -607,7 +696,8 @@ class SafetyChecker:
         loss_pct = abs(self._week_pnl) / portfolio_value if self._week_pnl < 0 else 0
         if loss_pct >= self._rules.max_weekly_loss_pct:
             rejections.append(
-                f"Weekly loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_weekly_loss_pct:.0%})"
+                f"Weekly loss {loss_pct:.1%} hit circuit breaker "
+                f"({self._rules.max_weekly_loss_pct:.0%})"
             )
 
     def _check_monthly_loss(self, portfolio_value: float, rejections: list[str]) -> None:
@@ -617,7 +707,8 @@ class SafetyChecker:
         loss_pct = abs(self._month_pnl) / portfolio_value if self._month_pnl < 0 else 0
         if loss_pct >= self._rules.max_monthly_loss_pct:
             rejections.append(
-                f"Monthly loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_monthly_loss_pct:.0%})"
+                f"Monthly loss {loss_pct:.1%} hit circuit breaker "
+                f"({self._rules.max_monthly_loss_pct:.0%})"
             )
 
     def _check_order_rate(self, rejections: list[str]) -> None:
@@ -625,9 +716,7 @@ class SafetyChecker:
         now = datetime.now(timezone.utc)
         # Prune orders older than 60 seconds
         cutoff = now.timestamp() - 60
-        self._orders_this_minute = [
-            t for t in self._orders_this_minute if t.timestamp() > cutoff
-        ]
+        self._orders_this_minute = [t for t in self._orders_this_minute if t.timestamp() > cutoff]
         if len(self._orders_this_minute) >= self._rules.max_orders_per_minute:
             rejections.append(
                 f"Rate limit: {len(self._orders_this_minute)} orders in last minute "
@@ -638,8 +727,7 @@ class SafetyChecker:
         """Seconds until the orders-per-minute rule would let one more order through (0:
         it would now). CLOSING waits this long before retrying an exit it refused."""
         now = datetime.now(timezone.utc).timestamp()
-        recent = sorted(t.timestamp() for t in self._orders_this_minute
-                        if t.timestamp() > now - 60)
+        recent = sorted(t.timestamp() for t in self._orders_this_minute if t.timestamp() > now - 60)
         excess = len(recent) - self._rules.max_orders_per_minute
         if excess < 0:
             return 0.0
@@ -661,7 +749,8 @@ class SafetyChecker:
         if self._max_streak >= 1 and self._loss_streak >= self._max_streak:
             rejections.append(
                 f"{self._loss_streak} losing trades in a row (limit {self._max_streak}): "
-                "no new entries today")
+                "no new entries today"
+            )
 
     def _check_naked_options(self, order: OrderRequest, rejections: list[str]) -> None:
         """No option writing.
@@ -677,14 +766,22 @@ class SafetyChecker:
         """
         if not self._rules.no_naked_option_selling:
             return
-        if (order.side == Side.SELL and order.segment != Segment.DERIVATIVE
-                and _OPTION_RE.search(order.symbol)):
+        if (
+            order.side == Side.SELL
+            and order.segment != Segment.DERIVATIVE
+            and _OPTION_RE.search(order.symbol)
+        ):
             rejections.append(
                 "Naked option selling is forbidden. Ensure a protective position exists."
             )
 
     def _check_sufficient_funds(
-        self, order: OrderRequest, funds: Funds, rejections: list[str],
+        self,
+        order: OrderRequest,
+        funds: Funds,
+        rejections: list[str],
+        *,
+        price: Optional[float] = None,
     ) -> None:
         """Reject BUY if insufficient margin.
 
@@ -695,7 +792,7 @@ class SafetyChecker:
         ``available_margin`` when the broker gave no segment balance (paper)."""
         if order.side != Side.BUY:
             return
-        price = order.price or 0
+        price = _price(order, price)
         if price <= 0:
             return
         required = price * float(order.quantity)
@@ -710,15 +807,19 @@ class SafetyChecker:
             if required > available:
                 rejections.append(
                     f"Insufficient {label}: need INR {required:,.0f}, available INR "
-                    f"{available:,.0f}")
+                    f"{available:,.0f}"
+                )
             return
         if required > funds.available_margin:
             rejections.append(
-                f"Insufficient margin: need INR {required:,.0f}, available INR {funds.available_margin:,.0f}"
+                f"Insufficient margin: need INR {required:,.0f}, "
+                f"available INR {funds.available_margin:,.0f}"
             )
 
     def _check_minimum_confidence(
-        self, signal: Optional[TradingSignal], rejections: list[str],
+        self,
+        signal: Optional[TradingSignal],
+        rejections: list[str],
     ) -> None:
         """Reject signals below minimum confidence threshold."""
         if self._rules.min_confidence_pct <= 0:
@@ -727,8 +828,7 @@ class SafetyChecker:
             return
         if signal.confidence < self._rules.min_confidence_pct:
             rejections.append(
-                f"Confidence {signal.confidence}% below minimum "
-                f"{self._rules.min_confidence_pct}%"
+                f"Confidence {signal.confidence}% below minimum {self._rules.min_confidence_pct}%"
             )
 
     # ── P&L tracking (called externally after fills) ─────────────────────

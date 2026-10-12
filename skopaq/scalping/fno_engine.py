@@ -51,6 +51,7 @@ from skopaq.broker.models import (
     is_unconfirmed,
 )
 from skopaq.execution.safety_checker import FUTURES_MARGIN_ESTIMATE
+from skopaq.finance.charges import leg_charges
 from skopaq.market.candles import Candle, LiveSeries
 from skopaq.scalping.engine import ScalpReport, ScalpTrade, _kill_switch_on
 from skopaq.scalping.fno_rules import (
@@ -70,7 +71,6 @@ from skopaq.scalping.fno_rules import (
     update_trail,
 )
 from skopaq.scalping.strategies import evaluate
-from skopaq.finance.charges import leg_charges
 from skopaq.strategy.gate import gate_from_config
 
 logger = logging.getLogger(__name__)

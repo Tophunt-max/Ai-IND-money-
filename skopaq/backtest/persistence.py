@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ def _get_db_url() -> str:
             from skopaq.config import SkopaqConfig
             url = SkopaqConfig().database_url
         except Exception:
-            pass
+            logger.debug("Could not read database_url from the config", exc_info=True)
     if not url:
         # Fallback to local SQLite
         url = "sqlite:///skopaq_backtest.db"

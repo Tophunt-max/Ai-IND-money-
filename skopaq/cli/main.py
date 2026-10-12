@@ -15,23 +15,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from datetime import datetime, timezone
 from typing import Optional
 
 import typer
 
 from skopaq import __version__
-from skopaq.cli.theme import console
 from skopaq.cli.display import (
     display_daemon_report,
     display_daemon_start,
     display_error,
     display_info,
-    display_report,
     display_monitor_result,
     display_monitor_start,
-    display_monitor_tick,
+    display_report,
     display_serve_banner,
     display_status,
     display_success,
@@ -40,6 +37,7 @@ from skopaq.cli.display import (
     display_version,
     display_welcome,
 )
+from skopaq.cli.theme import console
 
 logger = logging.getLogger(__name__)
 
@@ -651,20 +649,26 @@ def adaptive_train(
     console.print(f"        model, no outliers {rep.get('model_di')} ({rep.get('outliers')})")
     roll = rep.get("rolling") or {}
     console.print(f"  rolling retrain: {roll.get('retrains', 0)}×; every row "
-                  f"{roll.get('baseline', {}).get('net')}, model {roll.get('model', {}).get('net')}")
+                  f"{roll.get('baseline', {}).get('net')}, "
+                  f"model {roll.get('model', {}).get('net')}")
     console.print(f"  top features: {[n for n, _ in rep.get('importance', [])[:5]]}")
     cont = rep.get("continual") or {}
     if cont.get("enabled"):
-        how = (f"continued from {cont['parent']} {cont.get('models', '')}"
-               if cont.get("parent") else f"fresh — {cont.get('fresh')}")
+        how = (
+            f"continued from {cont['parent']} {cont.get('models', '')}"
+            if cont.get("parent")
+            else f"fresh — {cont.get('fresh')}"
+        )
         console.print(f"  continual: {how}")
     for fail in entry.get("gate_failures") or []:
         console.print(f"  [yellow]gate:[/yellow] {fail}")
 
 
 @app.command("model-export")
-def model_export(version: str = typer.Argument(..., help="Registry version."),
-                 file: str = typer.Argument(..., help="Target .tar.gz.")) -> None:
+def model_export(
+    version: str = typer.Argument(..., help="Registry version."),
+    file: str = typer.Argument(..., help="Target .tar.gz."),
+) -> None:
     """Export a verified model bundle (to move it to another host)."""
     from pathlib import Path
 
@@ -684,8 +688,9 @@ def model_export(version: str = typer.Argument(..., help="Registry version."),
 
 
 @app.command("model-import")
-def model_import(file: str = typer.Argument(..., help="A bundle .tar.gz from model-export.")
-                 ) -> None:
+def model_import(
+    file: str = typer.Argument(..., help="A bundle .tar.gz from model-export."),
+) -> None:
     """Import a bundle as a new *candidate* (it is gated again here, never champion)."""
     import json
     from pathlib import Path
@@ -699,10 +704,18 @@ def model_import(file: str = typer.Argument(..., help="A bundle .tar.gz from mod
     manifest = artifacts.verify(dest)
     report = json.loads((dest / "report.json").read_text())
     entry = reg.register(
-        model={"kind": "adaptive-bundle-v1", "bundle": dest.name, "path": str(dest),
-               "manifest_sha": manifest["files"]["bundle.json"]["sha256"]},
-        report=report, params={}, dataset=manifest.get("dataset") or {},
-        strategy_id="adaptive.imported", notes=f"imported from {Path(file).name}")
+        model={
+            "kind": "adaptive-bundle-v1",
+            "bundle": dest.name,
+            "path": str(dest),
+            "manifest_sha": manifest["files"]["bundle.json"]["sha256"],
+        },
+        report=report,
+        params={},
+        dataset=manifest.get("dataset") or {},
+        strategy_id="adaptive.imported",
+        notes=f"imported from {Path(file).name}",
+    )
     fails = reg.evaluate_candidate(entry["version"])
     console.print(f"Imported {dest.name} as {entry['version']}; gates: {fails or 'passed'}")
 
@@ -746,14 +759,17 @@ def hyperopt_cmd(
     _setup_logging("WARNING")
     config = SkopaqConfig()
     names = [s.strip().upper() for s in symbols.split(",") if s.strip()] or symbols_from(config)
-    res = hyperopt(_fetch_history(config, names, days), ScalpSettings.from_config(config),
-                   trials=trials)
+    res = hyperopt(
+        _fetch_history(config, names, days), ScalpSettings.from_config(config), trials=trials
+    )
     entry = ParamsStore(model_dir(config)).save_candidate(res)
     console.print(f"Candidate {entry['version']}: {res['best_params']}")
     console.print(f"  holdout: current {res['holdout_current']} vs best {res['holdout_best']}")
-    console.print("  better on the holdout: approve it on the dashboard" if
-                  res["better_on_holdout"] else "  [yellow]not better on the holdout: "
-                  "it cannot be approved[/yellow]")
+    console.print(
+        "  better on the holdout: approve it on the dashboard"
+        if res["better_on_holdout"]
+        else "  [yellow]not better on the holdout: it cannot be approved[/yellow]"
+    )
 
 
 @app.command("rl-research")
@@ -775,15 +791,18 @@ def rl_research(
 
 @app.command("rl-train")
 def rl_train(
-    symbols: str = typer.Option("", help="Symbols (default SKOPAQ_RL_SYMBOLS, else the "
-                                         "adaptive / scalp symbols)."),
+    symbols: str = typer.Option(
+        "", help="Symbols (default SKOPAQ_RL_SYMBOLS, else the adaptive / scalp symbols)."
+    ),
     algo: str = typer.Option("", help="ppo | a2c | dqn (default SKOPAQ_RL_ALGO)."),
     days: int = typer.Option(0, help="Days of 1-minute history (default SKOPAQ_RL_DAYS)."),
     timesteps: int = typer.Option(0, help="Training steps (default SKOPAQ_RL_TIMESTEPS)."),
     seed: int = typer.Option(7, help="Random seed (reproducible runs)."),
-    continual: Optional[bool] = typer.Option(None, "--continual/--fresh",
-                                             help="Continue the previous policy (default "
-                                                  "SKOPAQ_RL_CONTINUAL_LEARNING)."),
+    continual: Optional[bool] = typer.Option(
+        None,
+        "--continual/--fresh",
+        help="Continue the previous policy (default SKOPAQ_RL_CONTINUAL_LEARNING).",
+    ),
 ) -> None:
     """Train a PPO / A2C / DQN trading policy in the scalper's own rules (net of charges),
     test it on later unseen days and register it as an RL candidate. Passing the gates
@@ -805,8 +824,9 @@ def rl_train(
     if not torch_available():
         console.print("RL agents need PyTorch: pip install 'skopaq[torch]'")
         raise typer.Exit(2)
-    cfg = config_from(config, algo=algo or None, timesteps=timesteps or None, seed=seed,
-                      continual=continual)
+    cfg = config_from(
+        config, algo=algo or None, timesteps=timesteps or None, seed=seed, continual=continual
+    )
     if cfg.algo not in ALGOS:
         console.print(f"Unknown algorithm {cfg.algo!r}: one of {', '.join(ALGOS)}")
         raise typer.Exit(2)
@@ -820,16 +840,24 @@ def rl_train(
         console.print(f"Not trained: {exc}")
         raise typer.Exit(2)
     rep = out["report"]
-    console.print(f"RL {cfg.algo.upper()} {out['version']} — state {out['state']} "
-                  f"({rep['train_sessions']} training / {rep['test_sessions']} test sessions, "
-                  f"{rep['seconds']} s)")
+    console.print(
+        f"RL {cfg.algo.upper()} {out['version']} — state {out['state']} "
+        f"({rep['train_sessions']} training / {rep['test_sessions']} test sessions, "
+        f"{rep['seconds']} s)"
+    )
     console.print(f"  test (unseen days): {rep['model']}")
     console.print(f"  baseline ({rep['baseline_name']}): {rep['baseline']}")
     console.print(f"  exits {rep['exits']}  actions {rep['actions']}")
     cont = rep.get("continual") or {}
     if cont.get("enabled"):
-        console.print("  continual: " + (f"continued from {cont['parent']}" if cont.get("parent")
-                                         else f"fresh — {cont.get('fresh')}"))
+        console.print(
+            "  continual: "
+            + (
+                f"continued from {cont['parent']}"
+                if cont.get("parent")
+                else f"fresh — {cont.get('fresh')}"
+            )
+        )
     for fail in out.get("gate_failures") or []:
         console.print(f"  [yellow]gate:[/yellow] {fail}")
 
@@ -844,14 +872,18 @@ def rl_status() -> None:
     config = SkopaqConfig()
     reg = rl_registry(model_dir(config))
     champ, shadow = reg.champion(), reg.shadow()
-    console.print(f"enabled={config.rl_enabled} allow_live={config.rl_allow_live} "
-                  f"paper_use_shadow={config.rl_paper_use_shadow}")
+    console.print(
+        f"enabled={config.rl_enabled} allow_live={config.rl_allow_live} "
+        f"paper_use_shadow={config.rl_paper_use_shadow}"
+    )
     console.print(f"champion: {champ['version'] if champ else None}")
     console.print(f"shadow:   {shadow['version'] if shadow else None}")
     for v in reg.versions()[-10:]:
         m = (v.get("report") or {}).get("model") or {}
-        console.print(f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
-                      f"{m.get('trades')} PF {m.get('profit_factor')}")
+        console.print(
+            f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
+            f"{m.get('trades')} PF {m.get('profit_factor')}"
+        )
 
 
 @app.command("rl-promote")
@@ -913,29 +945,45 @@ def scan(
     config = SkopaqConfig()
     engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
     ideas = asyncio.run(engine.scan(_swing_symbols(config, symbols), limit))
-    console.print(f"Swing model: {getattr(engine.model, 'version', None) or 'none'} "
-                  f"({engine.model_state}){' · rules only' if engine.rules_only else ''}")
+    console.print(
+        f"Swing model: {getattr(engine.model, 'version', None) or 'none'} "
+        f"({engine.model_state}){' · rules only' if engine.rules_only else ''}"
+    )
     if not ideas:
-        console.print("No qualifying setup today." if engine.model or engine.rules_only else
-                      "No swing model yet: run `skopaq swing-train` (paper: "
-                      "SKOPAQ_SWING_RULES_ONLY=true ranks the setups without one).")
+        console.print(
+            "No qualifying setup today."
+            if engine.model or engine.rules_only
+            else "No swing model yet: run `skopaq swing-train` (paper: "
+            "SKOPAQ_SWING_RULES_ONLY=true ranks the setups without one)."
+        )
         return
     table = Table(header_style="bold magenta")
     for col in ("Symbol", "Setup", "Entry", "Stop", "Target", "P(win)", "Why"):
         table.add_column(col)
     for i in ideas:
-        table.add_row(i.symbol, i.setup.name, f"{i.setup.entry:.2f}", f"{i.setup.stop:.2f}",
-                      f"{i.setup.target:.2f}", "—" if i.prob is None else f"{i.prob:.2f}",
-                      i.setup.reason)
+        table.add_row(
+            i.symbol,
+            i.setup.name,
+            f"{i.setup.entry:.2f}",
+            f"{i.setup.stop:.2f}",
+            f"{i.setup.target:.2f}",
+            "—" if i.prob is None else f"{i.prob:.2f}",
+            i.setup.reason,
+        )
     console.print(table)
 
 
 @app.command("swing-train")
 def swing_train(
     symbols: str = typer.Option("", help="Symbols (default SKOPAQ_SWING_SYMBOLS, else NIFTY 50)."),
-    days: int = typer.Option(0, help="Calendar days of daily history (default SKOPAQ_SWING_TRAIN_DAYS)."),
-    model: str = typer.Option("", help="lightgbm | xgboost | catboost | random_forest | "
-                                       "extra_trees | linear | mlp (default SKOPAQ_SWING_MODEL_KIND)."),
+    days: int = typer.Option(
+        0, help="Calendar days of daily history (default SKOPAQ_SWING_TRAIN_DAYS)."
+    ),
+    model: str = typer.Option(
+        "",
+        help="lightgbm | xgboost | catboost | random_forest | "
+        "extra_trees | linear | mlp (default SKOPAQ_SWING_MODEL_KIND).",
+    ),
 ) -> None:
     """Train the swing model on years of daily setups (net of delivery charges), test it
     on the latest unseen dates and register it as a candidate (gates passed: shadow)."""
@@ -963,8 +1011,10 @@ def swing_train(
         raise typer.Exit(2)
     rep = out["report"]
     console.print(f"Swing model {out['version']} ({cfg.model_kind}) — state {out['state']}")
-    console.print(f"  {rep['setups']} setups on {len(hist)} symbols · test {rep['first_test_date']}"
-                  f" → {rep['last_test_date']} · threshold P ≥ {rep['threshold']}")
+    console.print(
+        f"  {rep['setups']} setups on {len(hist)} symbols · test {rep['first_test_date']}"
+        f" → {rep['last_test_date']} · threshold P ≥ {rep['threshold']}"
+    )
     console.print(f"  test, every setup: {rep['baseline']}")
     console.print(f"  test, model's:     {rep['model']}")
     console.print(f"  Brier {rep['brier']:.4f} vs base rate {rep['brier_base_rate']:.4f}")
@@ -985,8 +1035,10 @@ def swing_status() -> None:
     console.print(f"shadow:   {shadow['version'] if shadow else None}")
     for v in reg.versions()[-10:]:
         m = (v.get("report") or {}).get("model") or {}
-        console.print(f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
-                      f"{m.get('trades')} PF {m.get('profit_factor')}")
+        console.print(
+            f"  {v['version']}  {v['state']:<9} net {m.get('net')} trades "
+            f"{m.get('trades')} PF {m.get('profit_factor')}"
+        )
 
 
 @app.command("swing-promote")
@@ -1002,7 +1054,8 @@ def swing_promote(
 
     try:
         swing_registry(model_dir(SkopaqConfig())).promote(
-            version, approved_by=approved_by, reason=reason, gates=SWING_GATES)
+            version, approved_by=approved_by, reason=reason, gates=SWING_GATES
+        )
     except (KeyError, ValueError) as exc:
         console.print(f"[red]Not promoted:[/red] {exc}")
         raise typer.Exit(2)
@@ -1050,11 +1103,14 @@ def charges_reconcile(
         raise typer.Exit(1)
     today = date.today()
     signals = SignalJournal.from_config(config).signals(
-        sorted(today - timedelta(days=i) for i in range(days)))
+        sorted(today - timedelta(days=i) for i in range(days))
+    )
     rep = reconcile(notes, estimates_from_signals(signals), tolerance=tolerance)
     d = rep.as_dict()
-    console.print(f"{len(notes)} contract-note row(s): broker ₹{d['broker_total']:,.2f}, "
-                  f"estimated ₹{d['estimated_total']:,.2f}, difference ₹{d['difference']:+,.2f}")
+    console.print(
+        f"{len(notes)} contract-note row(s): broker ₹{d['broker_total']:,.2f}, "
+        f"estimated ₹{d['estimated_total']:,.2f}, difference ₹{d['difference']:+,.2f}"
+    )
     for line in d["discrepancies"]:
         console.print(f"  [yellow]{line}[/yellow]")
     for key in d["unmatched_broker"]:
@@ -1156,7 +1212,10 @@ async def _inject_paper_quote(config, paper, symbol: str) -> None:
             paper.update_quote(quote)
             logger.info(
                 "Injected quote: %s LTP=%.2f bid=%.2f ask=%.2f",
-                symbol, quote.ltp, quote.bid, quote.ask,
+                symbol,
+                quote.ltp,
+                quote.bid,
+                quote.ask,
             )
             return
     except Exception as exc:
@@ -1169,7 +1228,9 @@ async def _inject_paper_quote(config, paper, symbol: str) -> None:
         quote = await asyncio.to_thread(paper_quote, symbol)
         if quote.ltp > 0:
             paper.update_quote(quote)
-            logger.warning("Paper fill price for %s from Yahoo Finance: LTP=%.2f", symbol, quote.ltp)
+            logger.warning(
+                "Paper fill price for %s from Yahoo Finance: LTP=%.2f", symbol, quote.ltp
+            )
             return
     except Exception as exc:
         logger.warning("Yahoo quote for %s failed: %s", symbol, exc)
@@ -1249,6 +1310,7 @@ async def _run_monitor(config):
         max_sector_concentration_pct=config.max_sector_concentration_pct,
     )
     from skopaq.execution.pnl_history import seed_safety_checker
+
     seed_safety_checker(safety, config)
     from skopaq.execution.exit_plan import planner_from_config
 
@@ -1285,8 +1347,7 @@ async def _run_monitor(config):
             stop_event=stop_event,
             # Record the exit and its P&L
             on_exit=lambda signal, execution: _record_exit(config, signal, execution),
-            on_late_fill=lambda tracked, conf: _record_late_fill(config, tracked,
-                                                                 conf),
+            on_late_fill=lambda tracked, conf: _record_late_fill(config, tracked, conf),
             exit_planner=exit_planner,
             price_feed=price_feed,
         )
@@ -1306,11 +1367,18 @@ def daemon(
     max_trades: int = typer.Option(0, help="Override max trades per session (0 = use config)."),
     paper: bool = typer.Option(False, "--paper", help="Force paper mode."),
     live: bool = typer.Option(False, "--live", help="Force live mode (real orders on INDstocks)."),
-    once: bool = typer.Option(False, "--once", help="Run immediately without waiting for market open."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Scanner only — print candidates, don't trade."),
-    confirm_live: bool = typer.Option(False, "--confirm-live", help="Skip interactive confirmation for live mode (for cron/CI)."),
+    once: bool = typer.Option(
+        False, "--once", help="Run immediately without waiting for market open."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Scanner only — print candidates, don't trade."
+    ),
+    confirm_live: bool = typer.Option(
+        False, "--confirm-live", help="Skip interactive confirmation for live mode (for cron/CI)."
+    ),
     ignore_calendar: bool = typer.Option(
-        False, "--ignore-calendar",
+        False,
+        "--ignore-calendar",
         help="Run even on a weekend, an NSE holiday or after 15:30 IST (testing only).",
     ),
 ) -> None:
@@ -1334,7 +1402,8 @@ def daemon(
 
         try:
             blocked = nse_calendar.daemon_block_reason(
-                nse_calendar.now_ist(), config.nse_holidays,
+                nse_calendar.now_ist(),
+                config.nse_holidays,
             )
         except ValueError as exc:  # a malformed SKOPAQ_NSE_HOLIDAYS
             display_error(str(exc))
@@ -1395,6 +1464,7 @@ async def _run_daemon(config, *, once: bool = False, dry_run: bool = False):
 
         if stop_event.is_set():
             from skopaq.execution.daemon import DaemonSessionReport
+
             return DaemonSessionReport(session_date="cancelled")
 
         return await daemon_instance.run_session(dry_run=dry_run)
@@ -1409,7 +1479,8 @@ def _watch_dashboard_stop(config, stop_event: asyncio.Event) -> asyncio.Task:
     from skopaq.execution.control import ControlChannel, watch_stop
 
     return asyncio.get_running_loop().create_task(
-        watch_stop(ControlChannel.from_config(config), stop_event, started_at=_time.time()))
+        watch_stop(ControlChannel.from_config(config), stop_event, started_at=_time.time())
+    )
 
 
 # ── Schedule ─────────────────────────────────────────────────────────────────
@@ -1418,7 +1489,8 @@ def _watch_dashboard_stop(config, stop_event: asyncio.Event) -> asyncio.Task:
 @app.command("schedule")
 def schedule(
     check: bool = typer.Option(
-        False, "--check",
+        False,
+        "--check",
         help="Print today's plan and the next session, then exit (1 if the configuration "
         "or this year's NSE holiday list is not usable).",
     ),
@@ -1517,7 +1589,8 @@ def _compute_risk_scales(config, trade_date: str) -> tuple[float, float]:
             if not regime.should_trade:
                 logger.warning(
                     "Regime detector says NO TRADE: %s VIX=%.1f",
-                    regime.label, regime.vix or 0,
+                    regime.label,
+                    regime.vix or 0,
                 )
         except Exception:
             logger.warning("Regime detection failed — using default scale", exc_info=True)
@@ -1542,8 +1615,7 @@ def _compute_risk_scales(config, trade_date: str) -> tuple[float, float]:
     return regime_scale, calendar_scale
 
 
-async def _record_exit(config, signal, execution, *,
-                       rollback_unbooked: bool = False) -> bool:
+async def _record_exit(config, signal, execution, *, rollback_unbooked: bool = False) -> bool:
     """Persist an exit (monitor, EOD close, dashboard close) as a trade row.
 
     It goes through the same booking as an entry, so the opening
@@ -1557,7 +1629,10 @@ async def _record_exit(config, signal, execution, *,
 
     ist_today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
     result = TradeResult(
-        symbol=signal.symbol, trade_date=ist_today, signal=signal, execution=execution,
+        symbol=signal.symbol,
+        trade_date=ist_today,
+        signal=signal,
+        execution=execution,
     )
     return await _run_lifecycle(config, result, rollback_unbooked=rollback_unbooked)
 
@@ -1567,11 +1642,12 @@ def _trade_repository(config):
     if not config.supabase_url or not config.supabase_service_key.get_secret_value():
         return None
     try:
-        from supabase import create_client
         from skopaq.db.repositories import TradeRepository
+        from supabase import create_client
 
-        return TradeRepository(create_client(
-            config.supabase_url, config.supabase_service_key.get_secret_value()))
+        return TradeRepository(
+            create_client(config.supabase_url, config.supabase_service_key.get_secret_value())
+        )
     except Exception:
         logger.warning("Supabase unavailable — trade rows not written", exc_info=True)
         return None
@@ -1616,8 +1692,9 @@ async def _record_late_fill(config, tracked, conf) -> bool:
     if filled is None or filled <= tracked.filled_reported:
         return True
     delta = filled - tracked.filled_reported
-    price = _delta_price(conf.avg_price, filled, tracked.avg_price_reported,
-                         tracked.filled_reported)
+    price = _delta_price(
+        conf.avg_price, filled, tracked.avg_price_reported, tracked.filled_reported
+    )
     # INDstocks' flat fee is per order that fills: charged now unless already reported
     fee = Decimal("0") if tracked.filled_reported else Decimal("20")
 
@@ -1631,35 +1708,48 @@ async def _record_late_fill(config, tracked, conf) -> bool:
             estimate = getattr(tracked.signal, "entry_price", None) or tracked.price
             if not estimate:
                 get_alerter().alert(
-                    "CRITICAL", f"exit-late-unpriced:{tracked.order_id}",
+                    "CRITICAL",
+                    f"exit-late-unpriced:{tracked.order_id}",
                     f"SELL {tracked.symbol}: order {tracked.order_id} filled {delta} more but "
                     "the broker gave no price and there is no estimate; the trade rows are "
                     "left open — close them by hand at the broker's fill price",
-                    order_ids=[tracked.order_id])
+                    order_ids=[tracked.order_id],
+                )
                 # Left to the user: counted as handled, so no process books them after
                 # the user has
                 return True
             price, source = Decimal(str(estimate)), "estimate"
             get_alerter().alert(
-                "WARNING", f"fill-price-unknown:{tracked.order_id}",
+                "WARNING",
+                f"fill-price-unknown:{tracked.order_id}",
                 f"SELL {tracked.symbol}: order {tracked.order_id} filled {delta} more but the "
                 f"broker gave no price; recorded at the estimate {price}",
-                order_ids=[tracked.order_id])
+                order_ids=[tracked.order_id],
+            )
         signal = TradingSignal(
-            symbol=tracked.symbol, action="SELL", confidence=100,
-            entry_price=float(price), order_type=OrderType.MARKET,
-            quantity=delta, reasoning=f"Late fill of exit order {tracked.order_id}",
+            symbol=tracked.symbol,
+            action="SELL",
+            confidence=100,
+            entry_price=float(price),
+            order_type=OrderType.MARKET,
+            quantity=delta,
+            reasoning=f"Late fill of exit order {tracked.order_id}",
         )
         execution = ExecutionResult(
-            success=True, signal=signal, mode="live",
-            fill_price=float(price), brokerage=float(fee),
-            filled_quantity=delta, requested_quantity=delta, outcome="late_fill",
-            order_ids=[tracked.order_id], fill_price_source=source,
+            success=True,
+            signal=signal,
+            mode="live",
+            fill_price=float(price),
+            brokerage=float(fee),
+            filled_quantity=delta,
+            requested_quantity=delta,
+            outcome="late_fill",
+            order_ids=[tracked.order_id],
+            fill_price_source=source,
             broker_message=f"late fill of {tracked.order_id}",
         )
         # Not booked: its SELL row is removed again, as the next booking writes its own
-        booked = await _record_exit(config, signal, execution,
-                                    rollback_unbooked=True)
+        booked = await _record_exit(config, signal, execution, rollback_unbooked=True)
         return booked is not False
 
     repo = _trade_repository(config)
@@ -1677,19 +1767,28 @@ async def _record_late_fill(config, tracked, conf) -> bool:
             avg, source = Decimal(str(estimate)), "estimate"
             price = price or avg
             get_alerter().alert(
-                "WARNING", f"fill-price-unknown:{tracked.order_id}",
+                "WARNING",
+                f"fill-price-unknown:{tracked.order_id}",
                 f"BUY {tracked.symbol}: order {tracked.order_id} filled {delta} more but the "
                 f"broker gave no price; recorded at the estimate {avg}",
-                order_ids=[tracked.order_id])
+                order_ids=[tracked.order_id],
+            )
         else:
             get_alerter().alert(
-                "CRITICAL", f"late-fill-unpriced:{tracked.order_id}",
+                "CRITICAL",
+                f"late-fill-unpriced:{tracked.order_id}",
                 f"BUY {tracked.symbol}: order {tracked.order_id} filled {delta} more but the "
                 "broker gave no price and there is no estimate; its trade row has no cost "
                 "basis — set it by hand from the broker's fill price, or its exit books a "
-                "P&L of 0", order_ids=[tracked.order_id])
-    broker = {"outcome": "late_fill", "order_ids": [tracked.order_id],
-              "late_fill_of": tracked.order_id, "fill_price_source": source}
+                "P&L of 0",
+                order_ids=[tracked.order_id],
+            )
+    broker = {
+        "outcome": "late_fill",
+        "order_ids": [tracked.order_id],
+        "late_fill_of": tracked.order_id,
+        "fill_price_source": source,
+    }
     try:
         row = repo.find_by_order_id(tracked.order_id)
         if row is not None and row.closed_at is None:
@@ -1698,27 +1797,45 @@ async def _record_late_fill(config, tracked, conf) -> bool:
                 updates["fill_price"] = str(avg)
             repo.update(row.id, updates)
         elif row is not None:
-            repo.insert(TradeRecord(
-                symbol=tracked.symbol, side="BUY", quantity=delta, order_id=None,
-                fill_price=price, price=price, status="COMPLETE", is_paper=False,
-                brokerage=Decimal("0"), signal_source="skopaq-ai",
-                entry_reason=f"Late fill of {tracked.order_id} after its row was closed",
-                model_signals={"broker": broker},
-            ))
+            repo.insert(
+                TradeRecord(
+                    symbol=tracked.symbol,
+                    side="BUY",
+                    quantity=delta,
+                    order_id=None,
+                    fill_price=price,
+                    price=price,
+                    status="COMPLETE",
+                    is_paper=False,
+                    brokerage=Decimal("0"),
+                    signal_source="skopaq-ai",
+                    entry_reason=f"Late fill of {tracked.order_id} after its row was closed",
+                    model_signals={"broker": broker},
+                )
+            )
         else:
-            repo.insert(TradeRecord(
-                symbol=tracked.symbol, side="BUY", quantity=filled,
-                order_id=tracked.order_id, fill_price=avg, price=avg,
-                status="COMPLETE", is_paper=False, brokerage=fee, signal_source="skopaq-ai",
-                entry_reason=f"Late fill of {tracked.order_id} adopted by the monitor",
-                model_signals={"broker": broker},
-            ))
-        logger.warning("Late fill of BUY %s (%s %s) recorded", tracked.order_id, delta,
-                       tracked.symbol)
+            repo.insert(
+                TradeRecord(
+                    symbol=tracked.symbol,
+                    side="BUY",
+                    quantity=filled,
+                    order_id=tracked.order_id,
+                    fill_price=avg,
+                    price=avg,
+                    status="COMPLETE",
+                    is_paper=False,
+                    brokerage=fee,
+                    signal_source="skopaq-ai",
+                    entry_reason=f"Late fill of {tracked.order_id} adopted by the monitor",
+                    model_signals={"broker": broker},
+                )
+            )
+        logger.warning(
+            "Late fill of BUY %s (%s %s) recorded", tracked.order_id, delta, tracked.symbol
+        )
         return True
     except Exception:
-        logger.warning("Recording the late fill of %s failed", tracked.order_id,
-                       exc_info=True)
+        logger.warning("Recording the late fill of %s failed", tracked.order_id, exc_info=True)
         return False
 
 
@@ -1742,9 +1859,9 @@ async def _run_lifecycle(config, result, *, rollback_unbooked: bool = False) -> 
 
     booked = True
     try:
-        from supabase import create_client
         from skopaq.db.repositories import TradeRepository
         from skopaq.execution.trade_booking import TradeLifecycleManager
+        from supabase import create_client
 
         client = create_client(
             config.supabase_url,
@@ -1763,12 +1880,14 @@ async def _run_lifecycle(config, result, *, rollback_unbooked: bool = False) -> 
                 result.trade_id = saved.id
                 logger.info(
                     "Trade persisted: %s %s id=%s (paper=%s)",
-                    trade_record.side, trade_record.symbol,
-                    saved.id, trade_record.is_paper,
+                    trade_record.side,
+                    trade_record.symbol,
+                    saved.id,
+                    trade_record.is_paper,
                 )
             except Exception:
                 if trade_record.side != "SELL":
-                    booked = False            # a BUY is booked by its row alone
+                    booked = False  # a BUY is booked by its row alone
                 logger.warning(
                     "Failed to persist trade to Supabase — lifecycle will "
                     "continue but BUY/SELL linkage may not work",
@@ -1778,14 +1897,15 @@ async def _run_lifecycle(config, result, *, rollback_unbooked: bool = False) -> 
         # Step 2: BUY/SELL linkage and the realized P&L
         lifecycle = TradeLifecycleManager(trade_repo)
         if await lifecycle.on_trade(result) is False:
-            booked = False                    # a SELL that closed no BUY row
+            booked = False  # a SELL that closed no BUY row
             if rollback_unbooked and saved is not None:
                 try:
                     trade_repo.delete(saved.id)
                     result.trade_id = None
                 except Exception:
-                    logger.warning("Removing the unbooked SELL row %s failed", saved.id,
-                                   exc_info=True)
+                    logger.warning(
+                        "Removing the unbooked SELL row %s failed", saved.id, exc_info=True
+                    )
     except Exception:
         logger.warning("Trade lifecycle processing failed", exc_info=True)
         return False
@@ -1793,8 +1913,7 @@ async def _run_lifecycle(config, result, *, rollback_unbooked: bool = False) -> 
 
 
 # The trades table's product vocabulary (CHECK: CNC, MIS, NRML)
-_ROW_PRODUCT = {"INTRADAY": "MIS", "MIS": "MIS", "MARGIN": "NRML", "NRML": "NRML",
-                "CNC": "CNC"}
+_ROW_PRODUCT = {"INTRADAY": "MIS", "MIS": "MIS", "MARGIN": "NRML", "NRML": "NRML", "CNC": "CNC"}
 
 
 def _product_of(signal) -> str:
@@ -1814,8 +1933,12 @@ def _fno_signals(signal) -> dict:
         return {}
     lot = int(getattr(signal, "lot_size", 1) or 1)
     qty = int(getattr(signal, "quantity", 0) or 0)
-    return {"segment": "DERIVATIVE", "security_id": str(signal.security_id or ""),
-            "lot_size": lot, "lots": qty // lot if lot else qty}
+    return {
+        "segment": "DERIVATIVE",
+        "security_id": str(signal.security_id or ""),
+        "lot_size": lot,
+        "lots": qty // lot if lot else qty,
+    }
 
 
 def _agent_decision(signal) -> dict:
@@ -1843,6 +1966,7 @@ def _build_trade_record(result, config):
         return None
 
     from decimal import Decimal
+
     from skopaq.broker.models import (
         filled_quantity_of,
         is_remaining_open,
@@ -1891,6 +2015,7 @@ def _build_trade_record(result, config):
     if is_crypto:
         # result.symbol may be the yfinance format (BTC-USD); restore Binance pair
         from skopaq.broker.crypto_symbols import to_binance_pair
+
         trade_symbol = to_binance_pair(result.symbol, config.crypto_quote_currency)
 
     return TradeRecord(
@@ -1900,27 +2025,19 @@ def _build_trade_record(result, config):
         side=result.signal.action,
         quantity=filled_quantity_of(execution, result.signal.quantity or Decimal("1")),
         order_id=order_id,
-        price=(
-            Decimal(str(result.signal.entry_price))
-            if result.signal.entry_price else None
-        ),
+        price=(Decimal(str(result.signal.entry_price)) if result.signal.entry_price else None),
         fill_price=(
-            Decimal(str(result.execution.fill_price))
-            if result.execution.fill_price else None
+            Decimal(str(result.execution.fill_price)) if result.execution.fill_price else None
         ),
         slippage=(
-            Decimal(str(result.execution.slippage))
-            if result.execution.slippage else Decimal("0")
+            Decimal(str(result.execution.slippage)) if result.execution.slippage else Decimal("0")
         ),
         brokerage=Decimal(str(result.execution.brokerage)),
         is_paper=(result.execution.mode == "paper"),
         status="COMPLETE",
         signal_source="skopaq-ai",
         consensus_score=result.signal.confidence,
-        entry_reason=(
-            result.signal.reasoning[:2000]
-            if result.signal.reasoning else None
-        ),
+        entry_reason=(result.signal.reasoning[:2000] if result.signal.reasoning else None),
         agent_decision=_agent_decision(result.signal),
         model_signals=model_signals,
     )

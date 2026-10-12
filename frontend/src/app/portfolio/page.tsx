@@ -61,7 +61,7 @@ const PALETTE = ["#5b8cff", "#0ecb81", "#fbbf24", "#a78bfa", "#f472b6", "#22d3ee
 function Rows({ rows, empty, holdings = false }: { rows: Row[]; empty: string; holdings?: boolean }) {
   if (rows.length === 0) return <Empty>{empty}</Empty>;
   return (
-    <ul className="-mx-3 divide-y divide-white/[0.04] sm:-mx-4">
+    <ul className="-mx-3 divide-y divide-white/4 sm:-mx-4">
       {rows.map((p, i) => {
         const pnl = num(p.pnl);
         const avg = num(p.average_price);
@@ -70,11 +70,11 @@ function Rows({ rows, empty, holdings = false }: { rows: Row[]; empty: string; h
         const ret = avg && ltp ? ltp / avg - 1 : null;
         return (
           <li key={i}>
-            <Link href={`/market?symbol=${encodeURIComponent(p.symbol)}`} className="flex items-center gap-3 px-3 py-2.5 hover:bg-white/[0.03] sm:px-4">
+            <Link href={`/market?symbol=${encodeURIComponent(p.symbol)}`} className="flex items-center gap-3 px-3 py-2.5 hover:bg-white/3 sm:px-4">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-[13px] font-semibold text-white">{p.symbol}</span>
-                  {!holdings && p.product && <span className="rounded bg-white/[0.06] px-1 text-[9px] font-semibold uppercase text-gray-400">{p.product}</span>}
+                  {!holdings && p.product && <span className="rounded-sm bg-white/6 px-1 text-[9px] font-semibold uppercase text-gray-400">{p.product}</span>}
                 </div>
                 <div className="num text-[11px] text-gray-500">{qty} × {inr(avg)}{holdings ? "" : ` · ${p.exchange || ""}`}</div>
               </div>
@@ -140,7 +140,7 @@ function Book({ book }: { book: BrokerBook }) {
 
       <div className="grid gap-3 lg:grid-cols-3">
         <section className="surface lg:col-span-2">
-          <div className="border-b border-white/[0.06] p-2">
+          <div className="border-b border-white/6 p-2">
             <Segmented size="sm" value={tab} onChange={setTab} options={[
               { value: "pos", label: `Positions ${positions.length}` }, { value: "fno", label: `F&O ${fno.length}` },
               { value: "hold", label: `Holdings ${holdings.length}` }, { value: "orders", label: `Orders ${orders.length}` },
@@ -151,7 +151,7 @@ function Book({ book }: { book: BrokerBook }) {
             {tab === "fno" && <Rows rows={fno} empty="No F&O positions today." />}
             {tab === "hold" && <Rows rows={holdings} empty="No holdings." holdings />}
             {tab === "orders" && (orders.length === 0 ? <Empty>No orders today.</Empty> : (
-              <ul className="-mx-3 divide-y divide-white/[0.04] sm:-mx-4">
+              <ul className="-mx-3 divide-y divide-white/4 sm:-mx-4">
                 {orders.map((o, i) => (
                   <li key={i} className="flex items-center gap-3 px-3 py-2.5 sm:px-4">
                     <Badge tone={o.side === "BUY" ? "ok" : o.side === "SELL" ? "error" : "neutral"}>{o.side || "—"}</Badge>

@@ -250,29 +250,51 @@ async def swing_status() -> dict:
         versions = []
         for v in reversed(reg.versions()[-15:]):
             rep = v.get("report") or {}
-            versions.append({k: v.get(k) for k in ("version", "state", "created_at",
-                                                   "gate_failures", "shadow_since",
-                                                   "approved_by")}
-                            | {"model_kind": rep.get("model_kind"), "model": rep.get("model"),
-                               "baseline": rep.get("baseline"), "threshold": rep.get("threshold"),
-                               "brier": rep.get("brier"), "brier_base_rate": rep.get("brier_base_rate"),
-                               "by_setup": rep.get("by_setup"), "setups": rep.get("setups"),
-                               "test_from": rep.get("first_test_date"),
-                               "test_to": rep.get("last_test_date")})
+            versions.append(
+                {
+                    k: v.get(k)
+                    for k in (
+                        "version",
+                        "state",
+                        "created_at",
+                        "gate_failures",
+                        "shadow_since",
+                        "approved_by",
+                    )
+                }
+                | {
+                    "model_kind": rep.get("model_kind"),
+                    "model": rep.get("model"),
+                    "baseline": rep.get("baseline"),
+                    "threshold": rep.get("threshold"),
+                    "brier": rep.get("brier"),
+                    "brier_base_rate": rep.get("brier_base_rate"),
+                    "by_setup": rep.get("by_setup"),
+                    "setups": rep.get("setups"),
+                    "test_from": rep.get("first_test_date"),
+                    "test_to": rep.get("last_test_date"),
+                }
+            )
         paper = config.trading_mode != "live"
         active = champ or (shadow if paper else None)
-        return {"mode": config.trading_mode, "champion": champ["version"] if champ else None,
-                "shadow": shadow["version"] if shadow else None,
-                "active": active["version"] if active else None,
-                "rules_only": paper and config.swing_rules_only,
-                "shadow_days": SWING_GATES.shadow_days, "versions": versions,
-                "history": list(reversed(reg.history(30))),
-                "config": {"symbols": config.swing_symbols or "NIFTY 50",
-                           "model_kind": config.swing_model_kind,
-                           "target_rr": config.swing_target_rr,
-                           "train_days": config.swing_train_days,
-                           "max_trades": config.daemon_max_trades_per_session,
-                           "min_net_rr": config.swing_min_net_rr}}
+        return {
+            "mode": config.trading_mode,
+            "champion": champ["version"] if champ else None,
+            "shadow": shadow["version"] if shadow else None,
+            "active": active["version"] if active else None,
+            "rules_only": paper and config.swing_rules_only,
+            "shadow_days": SWING_GATES.shadow_days,
+            "versions": versions,
+            "history": list(reversed(reg.history(30))),
+            "config": {
+                "symbols": config.swing_symbols or "NIFTY 50",
+                "model_kind": config.swing_model_kind,
+                "target_rr": config.swing_target_rr,
+                "train_days": config.swing_train_days,
+                "max_trades": config.daemon_max_trades_per_session,
+                "min_net_rr": config.swing_min_net_rr,
+            },
+        }
 
     return _jsonable(await asyncio.to_thread(read))
 
@@ -282,8 +304,9 @@ class SwingReason(BaseModel):
 
 
 @router.post("/swing/{version}/promote")
-async def swing_promote(version: str, body: SwingReason,
-                        user: DashboardUser = Depends(require_admin)) -> dict:
+async def swing_promote(
+    version: str, body: SwingReason, user: DashboardUser = Depends(require_admin)
+) -> dict:
     import re
 
     from skopaq.swing.model import SWING_GATES
@@ -291,8 +314,13 @@ async def swing_promote(version: str, body: SwingReason,
     if not re.match(r"^[A-Za-z0-9_\-]{3,80}$", version):
         raise HTTPException(422, "Not a model version")
     try:
-        await asyncio.to_thread(_swing_registry().promote, version, approved_by=user.email,
-                                reason=body.reason, gates=SWING_GATES)
+        await asyncio.to_thread(
+            _swing_registry().promote,
+            version,
+            approved_by=user.email,
+            reason=body.reason,
+            gates=SWING_GATES,
+        )
     except KeyError:
         raise HTTPException(404, "No such swing model") from None
     except ValueError as exc:
@@ -315,8 +343,10 @@ def _learning() -> dict[str, Any]:
     from skopaq.learning import tracker
 
     if not os.environ.get("DATABASE_URL"):
-        return {"available": False,
-                "error": "Learning data needs DATABASE_URL (the Postgres signal tracker)"}
+        return {
+            "available": False,
+            "error": "Learning data needs DATABASE_URL (the Postgres signal tracker)",
+        }
     return {
         "available": True,
         "insights": tracker.generate_learning_insights(),
@@ -342,8 +372,9 @@ async def learning_symbol(symbol: str = Query(..., min_length=1, max_length=25))
     from skopaq.learning import tracker
 
     try:
-        return _jsonable(await asyncio.to_thread(tracker.get_symbol_accuracy,
-                                                 symbol.strip().upper()))
+        return _jsonable(
+            await asyncio.to_thread(tracker.get_symbol_accuracy, symbol.strip().upper())
+        )
     except Exception as exc:
         raise HTTPException(502, f"Symbol stats unavailable: {exc}") from exc
 
@@ -366,7 +397,8 @@ async def _chain(symbol: str, expiry_index: int, strike_count: int = 15):
     await asyncio.to_thread(_require_token)
     try:
         return await asyncio.wait_for(
-            load_option_chain(symbol, expiry_index, strike_count=strike_count), 60)
+            load_option_chain(symbol, expiry_index, strike_count=strike_count), 60
+        )
     except asyncio.TimeoutError as exc:
         raise HTTPException(504, "INDstocks did not answer in time") from exc
     except ValueError as exc:
@@ -392,9 +424,11 @@ async def option_expiries(symbol: str = _UNDERLYING) -> dict:
 
 
 @router.get("/options/chain")
-async def option_chain(symbol: str = _UNDERLYING,
-                       expiry_index: int = Query(0, ge=0, le=12),
-                       strike_count: int = Query(15, ge=1, le=50)) -> dict:
+async def option_chain(
+    symbol: str = _UNDERLYING,
+    expiry_index: int = Query(0, ge=0, le=12),
+    strike_count: int = Query(15, ge=1, le=50),
+) -> dict:
     return _jsonable(await _chain(symbol, expiry_index, strike_count))
 
 
@@ -408,11 +442,19 @@ async def option_suggest(
     from skopaq.options.strategy import select_short_call, select_short_put, select_short_strangle
 
     chain = await _chain(symbol, expiry_index, 25)
-    pick = {"SHORT_PUT": select_short_put, "SHORT_CALL": select_short_call,
-            "SHORT_STRANGLE": select_short_strangle}[strategy]
+    pick = {
+        "SHORT_PUT": select_short_put,
+        "SHORT_CALL": select_short_call,
+        "SHORT_STRANGLE": select_short_strangle,
+    }[strategy]
     trade = pick(chain)
-    return {"symbol": chain.symbol, "strategy": strategy, "spot_price": chain.spot_price,
-            "expiry": _jsonable(chain.expiry), "trade": _jsonable(trade) if trade else None}
+    return {
+        "symbol": chain.symbol,
+        "strategy": strategy,
+        "spot_price": chain.spot_price,
+        "expiry": _jsonable(chain.expiry),
+        "trade": _jsonable(trade) if trade else None,
+    }
 
 
 # ── Job runners (backtest, Monte Carlo) ───────────────────────────────────────
@@ -422,15 +464,17 @@ def _setup_dataflow() -> None:
     from tradingagents.dataflows.config import set_config
 
     is_crypto = SkopaqConfig().asset_class == "crypto"
-    set_config({
-        "data_vendors": {
-            "core_stock_apis": "yfinance" if is_crypto else "indstocks,yfinance",
-            "technical_indicators": "yfinance",
-            "fundamental_data": "yfinance",
-            "news_data": "yfinance",
-        },
-        "yfinance_symbol_suffix": "" if is_crypto else ".NS",
-    })
+    set_config(
+        {
+            "data_vendors": {
+                "core_stock_apis": "yfinance" if is_crypto else "indstocks,yfinance",
+                "technical_indicators": "yfinance",
+                "fundamental_data": "yfinance",
+                "news_data": "yfinance",
+            },
+            "yfinance_symbol_suffix": "" if is_crypto else ".NS",
+        }
+    )
 
 
 def _rsi(prices, period: int = 14):
@@ -447,8 +491,12 @@ def _history(symbol: str, days: int):
 
     _setup_dataflow()
     now = datetime.now(timezone.utc)
-    text = route_to_vendor("get_stock_data", symbol, (now - timedelta(days=days)).strftime(
-        "%Y-%m-%d"), now.strftime("%Y-%m-%d"))
+    text = route_to_vendor(
+        "get_stock_data",
+        symbol,
+        (now - timedelta(days=days)).strftime("%Y-%m-%d"),
+        now.strftime("%Y-%m-%d"),
+    )
     lines = [ln for ln in str(text).strip().split("\n") if not ln.startswith("#")]
     df = pd.read_csv(io.StringIO("\n".join(lines)))
     if len(df) < 20 or "Close" not in df:
@@ -488,27 +536,55 @@ def _curve(series, points: int = 200) -> list[dict[str, Any]]:
     return out
 
 
-def run_backtest_job(symbol: str, days: int, stop_loss_pct: float,
-                     target_pct: float) -> dict[str, Any]:
+def run_backtest_job(
+    symbol: str, days: int, stop_loss_pct: float, target_pct: float
+) -> dict[str, Any]:
     """RSI mean-reversion backtest (same as the MCP ``backtest_strategy``). CPU only."""
     from skopaq.backtest.engine import BacktestConfig, run_backtest
 
     df, signals = _rsi_signals(_history(symbol, days))
-    result = run_backtest(signals, df, BacktestConfig(stop_loss_pct=stop_loss_pct / 100,
-                                                      target_pct=target_pct / 100), symbol)
-    metrics = {name: getattr(result, name) for name in (
-        "total_return_pct", "annual_return_pct", "sharpe_ratio", "sortino_ratio",
-        "calmar_ratio", "max_drawdown_pct", "max_drawdown_duration_days", "win_rate_pct",
-        "profit_factor", "avg_win", "avg_loss", "total_trades", "winning_trades",
-        "losing_trades", "var_95", "cvar_95", "total_bars")}
-    return _finite({
-        "symbol": symbol, "days": days, "strategy": "RSI(14) mean reversion: buy < 35, sell > 65",
-        "stop_loss_pct": stop_loss_pct, "target_pct": target_pct,
-        "start_date": str(result.start_date)[:10], "end_date": str(result.end_date)[:10],
-        "metrics": _jsonable(metrics),
-        "equity_curve": _curve(result.equity_curve),
-        "trades": [_jsonable(t) for t in result.trades[-100:]],
-    })
+    result = run_backtest(
+        signals,
+        df,
+        BacktestConfig(stop_loss_pct=stop_loss_pct / 100, target_pct=target_pct / 100),
+        symbol,
+    )
+    metrics = {
+        name: getattr(result, name)
+        for name in (
+            "total_return_pct",
+            "annual_return_pct",
+            "sharpe_ratio",
+            "sortino_ratio",
+            "calmar_ratio",
+            "max_drawdown_pct",
+            "max_drawdown_duration_days",
+            "win_rate_pct",
+            "profit_factor",
+            "avg_win",
+            "avg_loss",
+            "total_trades",
+            "winning_trades",
+            "losing_trades",
+            "var_95",
+            "cvar_95",
+            "total_bars",
+        )
+    }
+    return _finite(
+        {
+            "symbol": symbol,
+            "days": days,
+            "strategy": "RSI(14) mean reversion: buy < 35, sell > 65",
+            "stop_loss_pct": stop_loss_pct,
+            "target_pct": target_pct,
+            "start_date": str(result.start_date)[:10],
+            "end_date": str(result.end_date)[:10],
+            "metrics": _jsonable(metrics),
+            "equity_curve": _curve(result.equity_curve),
+            "trades": [_jsonable(t) for t in result.trades[-100:]],
+        }
+    )
 
 
 def run_montecarlo_job(symbol: str, days: int, simulations: int) -> dict[str, Any]:
@@ -535,7 +611,16 @@ def run_montecarlo_job(symbol: str, days: int, simulations: int) -> dict[str, An
             counts = [0] * 20
             for v in finals:
                 counts[min(19, int((v - lo) / width))] += 1
-            hist = [{"from": round(lo + i * width, 2), "to": round(lo + (i + 1) * width, 2),
-                     "count": c} for i, c in enumerate(counts)]
-    return _finite({"symbol": symbol, "days": days, "trades": len(bt.trades),
-                    "result": data, "histogram": hist})
+            hist = [
+                {"from": round(lo + i * width, 2), "to": round(lo + (i + 1) * width, 2), "count": c}
+                for i, c in enumerate(counts)
+            ]
+    return _finite(
+        {
+            "symbol": symbol,
+            "days": days,
+            "trades": len(bt.trades),
+            "result": data,
+            "histogram": hist,
+        }
+    )

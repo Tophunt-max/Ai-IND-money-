@@ -196,7 +196,7 @@ class OrderJournal:
 
                 self.mirror.put("order_events", order_row(line))
             except Exception:
-                pass
+                logger.debug("Order-event mirror write failed", exc_info=True)
         return True
 
     def _write_failed(self, exc: Exception) -> None:

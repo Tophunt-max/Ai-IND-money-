@@ -208,10 +208,10 @@ export default function OptionsPage() {
               {rows.map(([strike, { ce, pe }]) => {
                 const atm = Math.abs(strike - chain.spot_price) === Math.min(...rows.map(([k]) => Math.abs(k - chain.spot_price)));
                 return (
-                  <div key={strike} className={`grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded px-1 py-0.5 ${atm ? "bg-brand-500/10" : ""}`}>
+                  <div key={strike} className={`grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-sm px-1 py-0.5 ${atm ? "bg-brand-500/10" : ""}`}>
                     <div className="flex h-3.5 justify-end"><div className="h-full rounded-l bg-rose-500/70" style={{ width: `${((ce?.oi || 0) / oiMax) * 100}%` }} title={`Call OI ${n2(ce?.oi, 0)}`} /></div>
                     <div className="num w-16 text-center text-[11px] font-semibold text-gray-200">
-                      {n2(strike, 0)}{strike === stats.maxPain && <span className="ml-1 rounded bg-amber-400/20 px-0.5 text-[9px] text-amber-300" title="max pain">MP</span>}
+                      {n2(strike, 0)}{strike === stats.maxPain && <span className="ml-1 rounded-sm bg-amber-400/20 px-0.5 text-[9px] text-amber-300" title="max pain">MP</span>}
                     </div>
                     <div className="flex h-3.5"><div className="h-full rounded-r bg-emerald-500/70" style={{ width: `${((pe?.oi || 0) / oiMax) * 100}%` }} title={`Put OI ${n2(pe?.oi, 0)}`} /></div>
                   </div>
@@ -228,26 +228,26 @@ export default function OptionsPage() {
             <div className="-mx-3 sm:-mx-4 overflow-x-auto">
               <table className="num w-full min-w-[860px] text-xs">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-[10px] uppercase tracking-wider text-gray-500">
+                  <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-gray-500">
                     <th className="px-3 py-2 text-right">OI</th><th className="px-3 py-2 text-right">IV</th><th className="px-3 py-2 text-right">Delta</th><th className="px-3 py-2 text-right">Call LTP</th>
                     <th className="px-3 py-2 text-center text-gray-300">Strike</th>
                     <th className="px-3 py-2 text-left">Put LTP</th><th className="px-3 py-2 text-left">Delta</th><th className="px-3 py-2 text-left">IV</th><th className="px-3 py-2 text-left">OI</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.03]">
+                <tbody className="divide-y divide-white/3">
                   {rows.map(([strike, { ce, pe }]) => {
                     const itmCall = strike < chain.spot_price;
                     return (
-                      <tr key={strike} className="hover:bg-white/[0.02]">
-                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.oi, 0) : "—"}</td>
-                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.iv, 1) : "—"}</td>
-                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.delta, 2) : "—"}</td>
-                        <td className={`px-3 py-2 text-right font-medium text-emerald-300 ${itmCall ? "bg-emerald-500/[0.04]" : ""}`}>{ce ? n2(ce.ltp) : "—"}</td>
+                      <tr key={strike} className="hover:bg-white/2">
+                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/4" : ""}`}>{ce ? n2(ce.oi, 0) : "—"}</td>
+                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/4" : ""}`}>{ce ? n2(ce.iv, 1) : "—"}</td>
+                        <td className={`px-3 py-2 text-right ${itmCall ? "bg-emerald-500/4" : ""}`}>{ce ? n2(ce.delta, 2) : "—"}</td>
+                        <td className={`px-3 py-2 text-right font-medium text-emerald-300 ${itmCall ? "bg-emerald-500/4" : ""}`}>{ce ? n2(ce.ltp) : "—"}</td>
                         <td className="px-3 py-2 text-center font-semibold text-white">{n2(strike, 0)}</td>
-                        <td className={`px-3 py-2 font-medium text-rose-300 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.ltp) : "—"}</td>
-                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.delta, 2) : "—"}</td>
-                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.iv, 1) : "—"}</td>
-                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/[0.04]" : ""}`}>{pe ? n2(pe.oi, 0) : "—"}</td>
+                        <td className={`px-3 py-2 font-medium text-rose-300 ${!itmCall ? "bg-rose-500/4" : ""}`}>{pe ? n2(pe.ltp) : "—"}</td>
+                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/4" : ""}`}>{pe ? n2(pe.delta, 2) : "—"}</td>
+                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/4" : ""}`}>{pe ? n2(pe.iv, 1) : "—"}</td>
+                        <td className={`px-3 py-2 ${!itmCall ? "bg-rose-500/4" : ""}`}>{pe ? n2(pe.oi, 0) : "—"}</td>
                       </tr>
                     );
                   })}

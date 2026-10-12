@@ -33,7 +33,8 @@ def test_health_polls_near_expiry_send_no_token_warning(tmp_path, monkeypatch):
         # /api/status needs a dashboard login now (tests/unit/api/test_api_security.py)
         app.dependency_overrides[current_user] = lambda: DashboardUser(
             email="viewer@example.com", role="viewer", via="test")
-        client = TestClient(app)
+        # The compose probe and verify.sh call from this host: they get the token state
+        client = TestClient(app, client=("127.0.0.1", 50000))
         for _ in range(4):
             response = client.get("/health")
             assert response.status_code == 200
@@ -45,3 +46,13 @@ def test_health_polls_near_expiry_send_no_token_warning(tmp_path, monkeypatch):
         assert status["broker"]["token_warning"]  # still shown to the dashboard
 
     assert sent == []
+
+
+def test_remote_health_does_not_reveal_mode_or_token_state():
+    from skopaq.api.server import app
+
+    remote = TestClient(app, client=("203.0.113.7", 40000)).get("/health")
+    assert remote.status_code == 200
+    body = remote.json()
+    assert body["status"] == "ok" and "version" in body
+    assert "mode" not in body and "token_valid" not in body

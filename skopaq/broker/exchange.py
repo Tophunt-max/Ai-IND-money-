@@ -26,10 +26,10 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Optional
 
-from skopaq.broker.models import Exchange, Quote
-from skopaq.broker.binance_client import BinanceClient
 from skopaq.broker.binance_auth import BinanceAuthClient
-from skopaq.broker.binance_ws import BinanceWS, TickerData, TradeData, OrderBookData
+from skopaq.broker.binance_client import BinanceClient
+from skopaq.broker.binance_ws import BinanceWS, OrderBookData, TickerData, TradeData
+from skopaq.broker.models import Quote
 
 logger = logging.getLogger(__name__)
 

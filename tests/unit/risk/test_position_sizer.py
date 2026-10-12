@@ -12,7 +12,6 @@ import pytest
 
 from skopaq.risk.position_sizer import PositionSize, PositionSizer
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 

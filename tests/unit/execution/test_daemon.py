@@ -21,12 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from skopaq.execution.daemon import (
+    _IST,
     DaemonPhase,
     DaemonSessionReport,
     TradingDaemon,
-    _IST,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -409,7 +408,7 @@ async def test_analyze_handles_errors_gracefully(daemon):
 
     with patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)):
         with patch("skopaq.cli.main._inject_paper_quote", new_callable=AsyncMock):
-            buys = await daemon._phase_analyze_and_trade(candidates, report)
+            await daemon._phase_analyze_and_trade(candidates, report)
 
     assert report.candidates_analyzed == 2
     assert report.trades_opened == 1  # Second candidate succeeded
@@ -425,7 +424,7 @@ async def test_monitor_receives_positions(daemon):
     daemon._executor = MagicMock()
     daemon._client = MagicMock()
     daemon._router = MagicMock()
-    
+
     from skopaq.execution.position_monitor import MonitorResult
 
     mock_result = MonitorResult(

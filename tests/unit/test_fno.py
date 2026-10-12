@@ -106,10 +106,19 @@ async def test_executor_never_prices_a_contract_from_yahoo(monkeypatch):
     monkeypatch.setattr("skopaq.notifications.notify_trade_event", AsyncMock(),
                         raising=False)
     result = await executor.execute_signal(fno_signal(entry_price=None))
-    assert result.success
+    # Never priced from Yahoo, and a contract BUY with no premium at all is refused: its
+    # value and the option-buying balance cannot be checked (the engine always sends one)
+    assert not result.success
+    assert "No price for this BUY" in result.rejection_reason
     fetch.assert_not_called()
     executor._sizer.compute_size.assert_not_called()
     router.get_all_positions.assert_awaited()   # equity + F&O rows for the limits
+    router.execute.assert_not_awaited()
+
+    # With the option's premium (as the F&O engine sends it) the BUY goes through
+    result = await executor.execute_signal(fno_signal(entry_price=150.0))
+    assert result.success
+    fetch.assert_not_called()
 
 
 def test_cost_basis_of_a_contract_goes_by_security_id():

@@ -17,6 +17,7 @@ rule: learning can never relax them.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from skopaq.constants import SAFETY_RULES, SafetyRules
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_DIR = "~/.skopaq/models"
 _PROTECTED_CONFIG = {
@@ -136,7 +139,7 @@ class ModelRegistry:
                     "by_user": line.get("approved_by") or line.get("by"),
                     "payload": json.loads(json.dumps(line, default=str))})
             except Exception:
-                pass
+                logger.debug("Model-event mirror write failed", exc_info=True)
 
     def get(self, version: str) -> Optional[dict]:
         try:

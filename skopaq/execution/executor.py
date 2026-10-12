@@ -337,6 +337,10 @@ class Executor:
             positions, holdings = inputs.positions, inputs.holdings
         funds = await self._router.get_funds()
         portfolio_value = funds.total_collateral or funds.available_cash
+        if order.side == Side.BUY:
+            # Refresh the kill switch off the event loop (its Supabase read blocks), so
+            # validate()'s synchronous check reads the fresh cached value
+            await _refresh_kill_switch()
 
         safety_result = self._safety.validate(
             order=order,
@@ -676,6 +680,17 @@ def _estimated_charges(order: OrderRequest, entry: float, exit_price: float,
     except Exception:
         logger.debug("Charges of %s not estimated", order.symbol, exc_info=True)
         return 0.0
+
+
+async def _refresh_kill_switch() -> None:
+    """Warm the kill switch's cache in a worker thread; never fails the order path (the
+    SafetyChecker reads the switch again and decides)."""
+    try:
+        from skopaq.execution import kill_switch
+
+        await kill_switch.status_async()
+    except Exception:
+        logger.debug("Kill switch pre-read failed", exc_info=True)
 
 
 def _unrealized(positions) -> float:

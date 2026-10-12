@@ -26,7 +26,7 @@ export function Change({ value, abs, size = "sm", pill = true }: {
   return (
     <span className={cx("num inline-flex items-center gap-0.5 whitespace-nowrap font-semibold", s,
       up ? "text-emerald-400" : "text-rose-400",
-      pill && "rounded px-1.5 py-0.5", pill && (up ? "bg-emerald-500/10" : "bg-rose-500/10"))}>
+      pill && "rounded-sm px-1.5 py-0.5", pill && (up ? "bg-emerald-500/10" : "bg-rose-500/10"))}>
       <Icon className={size === "md" ? "h-4 w-4" : "h-3 w-3"} />
       {up ? "+" : "−"}{(Math.abs(value) * 100).toFixed(2)}%
       {abs != null && <span className="ml-1 font-medium opacity-75">({abs >= 0 ? "+" : "−"}{Math.abs(abs).toFixed(2)})</span>}
@@ -114,8 +114,8 @@ export function StatCard({
         <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-gray-500">{title}</span>
         {Icon && <Icon className={cx("h-3.5 w-3.5 shrink-0", STAT_ICON[tone])} />}
       </div>
-      <div className="num mt-1 break-words text-base font-semibold text-white sm:text-lg">{value}</div>
-      {detail && <div className="mt-0.5 break-words text-[11px] text-gray-500">{detail}</div>}
+      <div className="num mt-1 wrap-break-word text-base font-semibold text-white sm:text-lg">{value}</div>
+      {detail && <div className="mt-0.5 wrap-break-word text-[11px] text-gray-500">{detail}</div>}
     </div>
   );
 }
@@ -125,14 +125,14 @@ export function Badge({ children, tone = "neutral", dot = false }: { children: R
     ok: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/25",
     warning: "bg-amber-500/10 text-amber-300 ring-amber-500/25",
     error: "bg-rose-500/10 text-rose-300 ring-rose-500/25",
-    neutral: "bg-white/[0.05] text-gray-300 ring-white/10",
+    neutral: "bg-white/5 text-gray-300 ring-white/10",
     info: "bg-brand-500/10 text-brand-300 ring-brand-500/25",
   };
   const dots: Record<Tone, string> = {
     ok: "bg-emerald-400", warning: "bg-amber-400", error: "bg-rose-400", neutral: "bg-gray-400", info: "bg-brand-400",
   };
   return (
-    <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset", cls[tone])}>
+    <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset", cls[tone])}>
       {dot && <span className={cx("h-1.5 w-1.5 rounded-full", dots[tone])} />}
       {children}
     </span>
@@ -160,8 +160,8 @@ export function Button({
     primary: "bg-brand-500 text-white hover:bg-brand-400",
     danger: "bg-rose-500 text-white hover:brightness-110",
     success: "bg-emerald-500 text-ink-950 hover:brightness-110",
-    ghost: "border border-white/10 bg-white/[0.03] text-gray-200 hover:bg-white/[0.07]",
-    subtle: "text-gray-300 hover:bg-white/[0.06] hover:text-white",
+    ghost: "border border-white/10 bg-white/3 text-gray-200 hover:bg-white/[0.07]",
+    subtle: "text-gray-300 hover:bg-white/6 hover:text-white",
   }[variant];
   const s = { sm: "h-8 px-2.5 text-xs gap-1.5", md: "h-9 px-3.5 text-sm gap-2", lg: "h-11 px-4 text-sm gap-2" }[size];
   const Ico = loading ? Loader2 : Icon;
@@ -212,7 +212,7 @@ export function Segmented<T extends string | number>({
   size?: "sm" | "md";
 }) {
   return (
-    <div className="no-scrollbar inline-flex max-w-full overflow-x-auto rounded-lg border border-white/[0.06] bg-ink-850 p-0.5">
+    <div className="no-scrollbar inline-flex max-w-full overflow-x-auto rounded-lg border border-white/6 bg-ink-850 p-0.5">
       {options.map((o) => (
         <button
           key={String(o.value)}
@@ -221,7 +221,7 @@ export function Segmented<T extends string | number>({
           className={cx(
             "whitespace-nowrap rounded-md font-semibold transition",
             size === "sm" ? "px-2.5 py-1 text-[11px]" : "px-3 py-1.5 text-xs sm:text-[13px]",
-            value === o.value ? "bg-ink-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-200",
+            value === o.value ? "bg-ink-700 text-white shadow-xs" : "text-gray-500 hover:text-gray-200",
           )}
         >
           {o.label}
@@ -234,11 +234,11 @@ export function Segmented<T extends string | number>({
 // ── Feedback ──────────────────────────────────────────────────────────────────
 
 const NOTICE: Record<Tone, { cls: string; icon: LucideIcon }> = {
-  ok: { cls: "border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-200", icon: CheckCircle2 },
-  warning: { cls: "border-amber-500/25 bg-amber-500/[0.06] text-amber-100", icon: AlertTriangle },
+  ok: { cls: "border-emerald-500/25 bg-emerald-500/6 text-emerald-200", icon: CheckCircle2 },
+  warning: { cls: "border-amber-500/25 bg-amber-500/6 text-amber-100", icon: AlertTriangle },
   error: { cls: "border-rose-500/30 bg-rose-500/[0.07] text-rose-200", icon: XCircle },
-  neutral: { cls: "border-white/10 bg-white/[0.03] text-gray-300", icon: Info },
-  info: { cls: "border-brand-500/25 bg-brand-500/[0.06] text-brand-100", icon: Info },
+  neutral: { cls: "border-white/10 bg-white/3 text-gray-300", icon: Info },
+  info: { cls: "border-brand-500/25 bg-brand-500/6 text-brand-100", icon: Info },
 };
 
 export function Notice({ tone = "info", title, children, icon, className, action }: {
@@ -249,7 +249,7 @@ export function Notice({ tone = "info", title, children, icon, className, action
   return (
     <div className={cx("flex items-start gap-2.5 rounded-lg border p-3 text-[13px] animate-fade-in", n.cls, className)}>
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1 break-words">
+      <div className="min-w-0 flex-1 wrap-break-word">
         {title && <div className="font-semibold">{title}</div>}
         {children && <div className={cx(!!title && "mt-0.5", "opacity-90")}>{children}</div>}
       </div>
@@ -273,8 +273,8 @@ export function Loading({ text = "Loading..." }: { text?: string }) {
 
 export function Skeleton({ className = "h-4 w-full" }: { className?: string }) {
   return (
-    <div className={cx("relative overflow-hidden rounded-md bg-white/[0.04]", className)}>
-      <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
+    <div className={cx("relative overflow-hidden rounded-md bg-white/4", className)}>
+      <div className="absolute inset-0 -translate-x-full animate-shimmer bg-linear-to-r from-transparent via-white/5 to-transparent" />
     </div>
   );
 }
@@ -282,7 +282,7 @@ export function Skeleton({ className = "h-4 w-full" }: { className?: string }) {
 export function Empty({ children, icon: Icon = Inbox, title }: { children?: ReactNode; icon?: LucideIcon; title?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-6 text-center">
-      <div className="grid h-10 w-10 place-items-center rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06]">
+      <div className="grid h-10 w-10 place-items-center rounded-lg bg-white/4 ring-1 ring-white/6">
         <Icon className="h-5 w-5 text-gray-500" />
       </div>
       {title && <div className="text-sm font-medium text-gray-300">{title}</div>}
@@ -301,7 +301,7 @@ export function KV({ items, cols = 1 }: { items: [ReactNode, ReactNode][]; cols?
       {items.map(([k, v], i) => (
         <div key={i} className={cx(cols === 1 ? "flex items-center justify-between gap-3" : "min-w-0")}>
           <dt className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">{k}</dt>
-          <dd className={cx("num break-words font-medium text-gray-100", cols === 1 && "text-right")}>{v}</dd>
+          <dd className={cx("num wrap-break-word font-medium text-gray-100", cols === 1 && "text-right")}>{v}</dd>
         </div>
       ))}
     </dl>
@@ -314,14 +314,14 @@ export function Table({ head, children, className }: { head: ReactNode[]; childr
     <div className={cx("-mx-3 overflow-x-auto sm:-mx-4", className)}>
       <table className="w-full min-w-[540px] text-[13px]">
         <thead>
-          <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-gray-500">
+          <tr className="border-b border-white/6 text-left text-[10px] uppercase tracking-wider text-gray-500">
             {head.map((h, i) => (
               <th key={i} className={cx("whitespace-nowrap px-3 py-2 font-semibold sm:px-4", i > 0 && "text-right",
-                i === 0 && "sticky left-0 z-[1] bg-ink-900")}>{h}</th>
+                i === 0 && "sticky left-0 z-1 bg-ink-900")}>{h}</th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/[0.04] [&_td]:px-3 [&_td]:py-2 sm:[&_td]:px-4 [&_td:not(:first-child)]:text-right [&_td]:num [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:bg-ink-900">
+        <tbody className="divide-y divide-white/4 [&_td]:px-3 [&_td]:py-2 sm:[&_td]:px-4 [&_td:not(:first-child)]:text-right [&_td]:num [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:bg-ink-900">
           {children}
         </tbody>
       </table>
@@ -332,7 +332,7 @@ export function Table({ head, children, className }: { head: ReactNode[]; childr
 export function Progress({ value, tone = "info" }: { value: number; tone?: Tone }) {
   const bar = { ok: "bg-emerald-400", warning: "bg-amber-400", error: "bg-rose-400", neutral: "bg-gray-400", info: "bg-brand-400" }[tone];
   return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/6">
       <div className={cx("h-full rounded-full transition-all", bar)} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
     </div>
   );
@@ -348,7 +348,7 @@ export function actionTone(action?: string | null): Tone {
 /** Long agent text, collapsed by default. */
 export function Collapsible({ title, text }: { title: string; text: string }) {
   return (
-    <details className="group rounded-lg border border-white/[0.06] bg-white/[0.02] open:bg-white/[0.03]">
+    <details className="group rounded-lg border border-white/6 bg-white/2 open:bg-white/3">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-[13px] font-medium text-gray-200">
         {title}
         <ChevronDown className="h-4 w-4 text-gray-500 transition group-open:rotate-180" />

@@ -15,7 +15,6 @@ from typing import Optional
 from uuid import uuid4
 
 from skopaq.broker.models import (
-    Exchange,
     ExecutionResult,
     Funds,
     Holding,
@@ -23,8 +22,8 @@ from skopaq.broker.models import (
     OrderResponse,
     OrderStatus,
     OrderType,
-    Position,
     PortfolioSnapshot,
+    Position,
     Quote,
     Segment,
     Side,
@@ -224,7 +223,9 @@ class PaperEngine:
 
         return None
 
-    def _apply_fill(self, order: OrderRequest, fill_price: float, brokerage: Decimal | None = None) -> None:
+    def _apply_fill(
+        self, order: OrderRequest, fill_price: float, brokerage: Decimal | None = None,
+    ) -> None:
         """Update positions and cash after a fill (an F&O row keeps its segment and
         contract security id)."""
         self._apply_fill_rows(order, fill_price, brokerage)
@@ -235,8 +236,9 @@ class PaperEngine:
                 row.security_id = order.security_id
                 row.lot_size = order.lot_size
 
-    def _apply_fill_rows(self, order: OrderRequest, fill_price: float,
-                         brokerage: Decimal | None = None) -> None:
+    def _apply_fill_rows(
+        self, order: OrderRequest, fill_price: float, brokerage: Decimal | None = None
+    ) -> None:
         symbol = order.symbol
         qty = order.quantity
         price_d = Decimal(str(fill_price))  # Decimal-safe price for all arithmetic
@@ -250,9 +252,8 @@ class PaperEngine:
                 # Average up the position
                 total_qty = existing.quantity + qty
                 avg_price = (
-                    (Decimal(str(existing.average_price)) * existing.quantity + price_d * qty)
-                    / total_qty
-                )
+                    Decimal(str(existing.average_price)) * existing.quantity + price_d * qty
+                ) / total_qty
                 self._positions[symbol] = Position(
                     symbol=symbol,
                     exchange=order.exchange,
@@ -351,11 +352,8 @@ class PaperEngine:
 
     def get_snapshot(self) -> PortfolioSnapshot:
         """Return a complete portfolio snapshot."""
-        funds = self.get_funds()
         positions = self.get_positions()
-        positions_value = sum(
-            Decimal(str(p.last_price)) * p.quantity for p in positions
-        )
+        positions_value = sum(Decimal(str(p.last_price)) * p.quantity for p in positions)
         return PortfolioSnapshot(
             timestamp=datetime.now(timezone.utc),
             total_value=self._cash + positions_value,

@@ -63,6 +63,14 @@ LOCKED: dict[str, str] = {
     "indstocks_mpin": "broker login secret: .env / ENV_FILE only",
     "indstocks_totp_secret": "broker login secret: .env / ENV_FILE only",
     "indstocks_client_id": "broker login: .env / ENV_FILE only",
+    # Endpoints that receive the broker token, MPIN/TOTP or API keys: changing one
+    # from the dashboard would send those secrets to another host.
+    "indstocks_base_url": "receives the broker token and MPIN/TOTP: .env / ENV_FILE only",
+    "indstocks_ws_price_url": "receives the broker token: .env / ENV_FILE only",
+    "indstocks_ws_order_url": "receives the broker token: .env / ENV_FILE only",
+    "binance_base_url": "receives the exchange API key: .env / ENV_FILE only",
+    "scheduler_ping_url": "outbound request target: .env / ENV_FILE only",
+    "upstash_redis_url": "shared state (holds a credential): .env / ENV_FILE only",
     "database_url": "database",
     "order_lock_dir": "shared state directory",
     "order_journal_dir": "shared state directory",

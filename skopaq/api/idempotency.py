@@ -120,7 +120,7 @@ class IdempotencyStore:
             try:
                 await shared.forget(k)
             except Exception:
-                pass
+                logger.debug("Could not release the shared idempotency slot", exc_info=True)
             raise
         try:
             if key:

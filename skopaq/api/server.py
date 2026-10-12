@@ -6,10 +6,13 @@ Deployed on Railway via ``skopaq serve``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import AsyncIterator
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from skopaq import __version__
@@ -25,10 +28,28 @@ from skopaq import env_overrides  # noqa: E402
 
 env_overrides.apply()
 
+
+
+def _validate_startup() -> None:
+    """Fail closed: refuse to serve a live configuration without auth or with "*" CORS."""
+    problems = startup_problems(SkopaqConfig())
+    if problems:
+        for problem in problems:
+            logger.critical("API not started: %s", problem)
+        raise RuntimeError("Unsafe live API configuration: " + "; ".join(problems))
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    _validate_startup()
+    yield
+
+
 _docs = docs_enabled(SkopaqConfig())
 app = FastAPI(
     title="SkopaqTrader API",
     version=__version__,
+    lifespan=_lifespan,
     # Off in live mode unless SKOPAQ_API_DOCS_ENABLED=true: the schema maps every route
     docs_url="/docs" if _docs else None,
     redoc_url="/redoc" if _docs else None,
@@ -36,14 +57,6 @@ app = FastAPI(
 )
 
 
-@app.on_event("startup")
-async def _validate_startup() -> None:
-    """Fail closed: refuse to serve a live configuration without auth or with "*" CORS."""
-    problems = startup_problems(SkopaqConfig())
-    if problems:
-        for problem in problems:
-            logger.critical("API not started: %s", problem)
-        raise RuntimeError("Unsafe live API configuration: " + "; ".join(problems))
 
 # CORS — browser origins allowed to call the API (SKOPAQ_CORS_ORIGINS; default "*"
 # keeps the Vercel frontend working). The API uses no cookies, so credentials are
@@ -58,7 +71,7 @@ app.add_middleware(
 )
 
 # ── Web dashboard (frontend/): Supabase login or SKOPAQ_API_TOKEN ─────────────
-from skopaq.api.dashboard import router as dashboard_router
+from skopaq.api.dashboard import router as dashboard_router  # noqa: E402
 
 app.include_router(dashboard_router)
 
@@ -75,20 +88,31 @@ from skopaq.api.dashboard_trading import router as dashboard_trading_router  # n
 app.include_router(dashboard_trading_router)
 
 
-@app.get("/health")
-async def health() -> dict:
-    """Health check endpoint (used by Railway). Unauthenticated: no account data."""
-    config = SkopaqConfig()
-    # notify=False: the compose health check polls this every 30 s; a probe sends no Telegram.
-    health = TokenManager().get_health(notify=False)
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
-    return {
+
+@app.get("/health")
+async def health(request: Request) -> dict:
+    """Health check endpoint (used by Railway and the compose health check).
+
+    Unauthenticated, so it carries no account data. The trading mode and broker-token
+    state (which tell a stranger whether real money is behind this API) are only given
+    to callers on this host (``scripts/macmini/verify.sh``); others get the status and
+    version, and the dashboard reads the rest from ``/api/status`` after login.
+    """
+    body = {
         "status": "ok",
         "version": __version__,
-        "mode": config.trading_mode,
-        "token_valid": health.valid,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    host = request.client.host if request.client else ""
+    if host in _LOOPBACK:
+        config = SkopaqConfig()
+        # notify=False: the compose health check polls this every 30 s; a probe sends no
+        # Telegram.
+        token = await asyncio.to_thread(TokenManager().get_health, notify=False)
+        body.update(mode=config.trading_mode, token_valid=token.valid)
+    return body
 
 
 @app.get("/api/status", dependencies=[Depends(current_user)])
@@ -104,7 +128,9 @@ async def system_status() -> dict:
             "name": "INDstocks",
             "base_url": config.indstocks_base_url,
             "token_valid": token_health.valid,
-            "token_expires_at": token_health.expires_at.isoformat() if token_health.expires_at else None,
+            "token_expires_at": token_health.expires_at.isoformat()
+            if token_health.expires_at
+            else None,
             "token_remaining": str(token_health.remaining) if token_health.remaining else None,
             "token_warning": token_health.warning or None,
         },

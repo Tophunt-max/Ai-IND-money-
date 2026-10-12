@@ -82,9 +82,8 @@ def _jsonable(value: Any) -> Any:
 def _trade_repository(config: SkopaqConfig):
     if not config.supabase_url or not config.supabase_service_key.get_secret_value():
         raise HTTPException(503, "Supabase is not configured on the server")
-    from supabase import create_client
-
     from skopaq.db.repositories import TradeRepository
+    from supabase import create_client
 
     try:
         client = create_client(config.supabase_url, config.supabase_service_key.get_secret_value())
@@ -210,7 +209,7 @@ async def _mark_to_market(out: dict[str, Any]) -> None:
         out["price_errors"] = errors
 
 
-# ── Market data (INDstocks live, Yahoo Finance fallback) ───────────────────────────────────────────────
+# ── Market data (INDstocks live, Yahoo Finance fallback) ──────────────────────────
 
 
 @router.get("/market/quotes")
@@ -241,9 +240,13 @@ async def market_indices() -> dict:
     from skopaq.broker import live_quotes, yahoo_quotes
 
     quotes, errors = await live_quotes.get_quotes(list(yahoo_quotes.INDICES.values()))
-    return {"indices": [{"name": name, **quotes[t]} for name, t in yahoo_quotes.INDICES.items()
-                        if t in quotes], "errors": errors,
-            "source": live_quotes.source_label(quotes)}
+    return {
+        "indices": [
+            {"name": name, **quotes[t]} for name, t in yahoo_quotes.INDICES.items() if t in quotes
+        ],
+        "errors": errors,
+        "source": live_quotes.source_label(quotes),
+    }
 
 
 @router.get("/market/history")
@@ -293,9 +296,16 @@ async def _with_live_candle(data: dict[str, Any]) -> dict[str, Any]:
     elif data.get("interval") == "1d" and q.get("open"):
         # Yahoo has no bar for today yet: add one from the live quote
         start = datetime.combine(today, datetime.min.time(), tzinfo=_IST)
-        data["candles"].append({
-            "t": int(start.timestamp()), "o": q["open"], "h": q.get("high") or ltp,
-            "l": q.get("low") or ltp, "c": ltp, "v": q.get("volume") or 0})
+        data["candles"].append(
+            {
+                "t": int(start.timestamp()),
+                "o": q["open"],
+                "h": q.get("high") or ltp,
+                "l": q.get("low") or ltp,
+                "c": ltp,
+                "v": q.get("volume") or 0,
+            }
+        )
     else:
         return data
     data["live"] = True
@@ -366,11 +376,13 @@ async def scheduler_status() -> dict:
         jobs = {}
         for job in ("daemon", "monitor"):
             if state.started(job, day):
-                jobs[job] = {"started": state.started_note(job, day),
-                             "rc": state.last_exit(job, day)}
+                jobs[job] = {
+                    "started": state.started_note(job, day),
+                    "rc": state.last_exit(job, day),
+                }
         has_log = settings.log_dir is not None and any(
-            (settings.log_dir / f"{j}-{day.isoformat()}.log").exists()
-            for j in ("daemon",))
+            (settings.log_dir / f"{j}-{day.isoformat()}.log").exists() for j in ("daemon",)
+        )
         if jobs or has_log:
             days.append({"date": day.isoformat(), "jobs": jobs, "has_log": has_log})
     return {
@@ -383,8 +395,9 @@ async def scheduler_status() -> dict:
 
 
 @router.get("/scheduler/log")
-async def scheduler_log(day: str, job: Literal["daemon"] = "daemon",
-                        lines: int = Query(300, ge=10, le=2000)) -> dict:
+async def scheduler_log(
+    day: str, job: Literal["daemon"] = "daemon", lines: int = Query(300, ge=10, le=2000)
+) -> dict:
     """The last *lines* of one session log (logs/daemon/<job>-<day>.log)."""
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         raise HTTPException(422, "day must be YYYY-MM-DD")
@@ -403,8 +416,10 @@ async def scheduler_log(day: str, job: Literal["daemon"] = "daemon",
 
 
 @router.get("/trades")
-async def trades(limit: int = Query(100, ge=1, le=500),
-                 mode: Literal["current", "paper", "live", "all"] = "current") -> dict:
+async def trades(
+    limit: int = Query(100, ge=1, le=500),
+    mode: Literal["current", "paper", "live", "all"] = "current",
+) -> dict:
     config = SkopaqConfig()
     is_paper: Optional[bool]
     if mode == "current":
@@ -451,12 +466,12 @@ async def kill_switch_status() -> dict:
 
 
 @router.post("/kill-switch/halt")
-async def kill_switch_halt(body: HaltRequest,
-                           user: DashboardUser = Depends(require_admin)) -> dict:
+async def kill_switch_halt(body: HaltRequest, user: DashboardUser = Depends(require_admin)) -> dict:
     from skopaq.execution import kill_switch
 
-    where = kill_switch.halt(body.reason or "halted from the dashboard",
-                             by=f"dashboard:{user.email}")
+    where = kill_switch.halt(
+        body.reason or "halted from the dashboard", by=f"dashboard:{user.email}"
+    )
     if not where:
         raise HTTPException(500, "Could not write the halt anywhere")
     return {"written": where, **_halt_dict()}
@@ -469,8 +484,10 @@ async def kill_switch_resume(user: DashboardUser = Depends(require_admin)) -> di
     cleared = kill_switch.resume(by=f"dashboard:{user.email}")
     after = _halt_dict()
     if after["halted"]:
-        after["warning"] = ("Still halted: SKOPAQ_TRADING_HALTED is set on the server "
-                            "(remove it from ENV_FILE and redeploy)")
+        after["warning"] = (
+            "Still halted: SKOPAQ_TRADING_HALTED is set on the server "
+            "(remove it from ENV_FILE and redeploy)"
+        )
     return {"cleared": cleared, **after}
 
 
@@ -501,23 +518,28 @@ async def env_settings(user: DashboardUser = Depends(require_admin)) -> dict:
 
 
 @router.post("/settings/env")
-async def env_settings_change(body: EnvChangeRequest,
-                              user: DashboardUser = Depends(require_admin)) -> dict:
+async def env_settings_change(
+    body: EnvChangeRequest, user: DashboardUser = Depends(require_admin)
+) -> dict:
     """Add, change or remove dashboard overrides (admin). Turning live trading on needs
     ``confirm_live``; every change is logged and sent to Telegram."""
     from skopaq import env_overrides
 
     by = f"dashboard:{user.email}"
     try:
-        result = await asyncio.to_thread(env_overrides.change, body.set, body.remove,
-                                         by=by, confirm_live=body.confirm_live)
+        result = await asyncio.to_thread(
+            env_overrides.change, body.set, body.remove, by=by, confirm_live=body.confirm_live
+        )
     except PermissionError as exc:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except OSError as exc:
         logger.exception("Could not save the dashboard settings")
-        raise HTTPException(500, f"Could not save the settings: {exc}") from exc
+        raise HTTPException(
+            500,
+            f"Could not save the settings ({exc.strerror or type(exc).__name__}); see the API log",
+        ) from exc
 
     if result.set or result.removed:
         parts = []
@@ -527,8 +549,10 @@ async def env_settings_change(body: EnvChangeRequest,
             parts.append("removed " + ", ".join(result.removed))
         text = f"⚙️ Settings changed from the dashboard by {user.email}: {'; '.join(parts)}"
         if result.live:
-            text = ("🔴 LIVE TRADING (real money) turned on from the dashboard by "
-                    f"{user.email}: {', '.join(result.live)}\n" + text)
+            text = (
+                "🔴 LIVE TRADING (real money) turned on from the dashboard by "
+                f"{user.email}: {', '.join(result.live)}\n" + text
+            )
         try:
             from skopaq.notifications import notify
 
@@ -569,9 +593,13 @@ def _swing_scan_job(limit: int) -> dict[str, Any]:
     config = SkopaqConfig()
     engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
     ideas = asyncio.run(engine.scan(_swing_symbols(config, ""), limit))
-    return {"model": getattr(engine.model, "version", None), "model_state": engine.model_state,
-            "threshold": getattr(engine.model, "threshold", None),
-            "rules_only": engine.rules_only, "ideas": [i.as_dict() for i in ideas]}
+    return {
+        "model": getattr(engine.model, "version", None),
+        "model_state": engine.model_state,
+        "threshold": getattr(engine.model, "threshold", None),
+        "rules_only": engine.rules_only,
+        "ideas": [i.as_dict() for i in ideas],
+    }
 
 
 def _swing_train_job() -> dict[str, Any]:
@@ -588,16 +616,36 @@ def _swing_train_job() -> dict[str, Any]:
             hist[sym] = history(sym, int(config.swing_train_days))
         except Exception:
             missing.append(sym)
-    out = train_and_register(hist, SwingTrainConfig(model_kind=config.swing_model_kind,
-                                                    params=params_from(config)),
-                             registry=swing_registry(model_dir(config)))
+    out = train_and_register(
+        hist,
+        SwingTrainConfig(model_kind=config.swing_model_kind, params=params_from(config)),
+        registry=swing_registry(model_dir(config)),
+    )
     rep = out["report"]
-    return {"version": out["version"], "state": out["state"],
-            "gate_failures": out["gate_failures"], "missing": missing,
-            "report": {k: rep.get(k) for k in ("setups", "train", "validation", "test",
-                                               "threshold", "baseline", "model", "brier",
-                                               "brier_base_rate", "by_setup", "first_test_date",
-                                               "last_test_date", "model_kind")}}
+    return {
+        "version": out["version"],
+        "state": out["state"],
+        "gate_failures": out["gate_failures"],
+        "missing": missing,
+        "report": {
+            k: rep.get(k)
+            for k in (
+                "setups",
+                "train",
+                "validation",
+                "test",
+                "threshold",
+                "baseline",
+                "model",
+                "brier",
+                "brier_base_rate",
+                "by_setup",
+                "first_test_date",
+                "last_test_date",
+                "model_kind",
+            )
+        },
+    }
 
 
 async def _run_job(job: dict[str, Any]) -> None:
@@ -611,11 +659,16 @@ async def _run_job(job: dict[str, Any]) -> None:
             p = job["params"]
             if job["kind"] == "backtest":
                 result = await asyncio.to_thread(
-                    tools.run_backtest_job, job["symbol"], p["days"],
-                    p["stop_loss_pct"], p["target_pct"])
+                    tools.run_backtest_job,
+                    job["symbol"],
+                    p["days"],
+                    p["stop_loss_pct"],
+                    p["target_pct"],
+                )
             elif job["kind"] == "montecarlo":
                 result = await asyncio.to_thread(
-                    tools.run_montecarlo_job, job["symbol"], p["days"], p["simulations"])
+                    tools.run_montecarlo_job, job["symbol"], p["days"], p["simulations"]
+                )
             elif job["kind"] == "swing_train":
                 result = await asyncio.to_thread(_swing_train_job)
             else:
@@ -637,20 +690,30 @@ def _public(job: dict[str, Any]) -> dict[str, Any]:
 @router.post("/jobs", status_code=202)
 async def start_job(body: JobRequest, user: DashboardUser = Depends(require_admin)) -> dict:
     if any(j["status"] in ("queued", "running") for j in _jobs.values()):
-        raise HTTPException(409, "Another job (scan, training, backtest) is still "
-                                 "running: wait for it")
+        raise HTTPException(
+            409, "Another job (scan, training, backtest) is still running: wait for it"
+        )
     symbol = body.symbol.strip().upper()
     if body.kind in _SYMBOL_KINDS and not _SYMBOL.match(symbol):
         raise HTTPException(422, "Give an NSE symbol, e.g. RELIANCE or TCS")
     job = {
-        "id": uuid.uuid4().hex[:12], "kind": body.kind,
+        "id": uuid.uuid4().hex[:12],
+        "kind": body.kind,
         "symbol": symbol if body.kind in _SYMBOL_KINDS else "",
-        "max_candidates": body.max_candidates, "status": "queued",
-        "params": {"days": body.days, "stop_loss_pct": body.stop_loss_pct,
-                   "target_pct": body.target_pct, "simulations": body.simulations},
+        "max_candidates": body.max_candidates,
+        "status": "queued",
+        "params": {
+            "days": body.days,
+            "stop_loss_pct": body.stop_loss_pct,
+            "target_pct": body.target_pct,
+            "simulations": body.simulations,
+        },
         "by": user.email,
-        "created_at": time.time(), "started_at": None, "finished_at": None,
-        "result": None, "error": None,
+        "created_at": time.time(),
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+        "error": None,
     }
     _jobs[job["id"]] = job
     for old in sorted(_jobs.values(), key=lambda j: j["created_at"])[:-_MAX_JOBS]:
@@ -677,9 +740,11 @@ async def get_job(job_id: str) -> dict:
 
 
 @router.get("/auth/logins")
-async def logins(limit: int = Query(30, ge=1, le=200),
-                 scope: Literal["mine", "all"] = "mine",
-                 user: DashboardUser = Depends(current_user)) -> dict:
+async def logins(
+    limit: int = Query(30, ge=1, le=200),
+    scope: Literal["mine", "all"] = "mine",
+    user: DashboardUser = Depends(current_user),
+) -> dict:
     """Recent dashboard sign-ins (``dashboard_logins``): your own, or everyone's for admins."""
     if scope == "all" and not user.is_admin:
         raise HTTPException(403, "View-only account: this needs an admin")
@@ -691,9 +756,12 @@ async def logins(limit: int = Query(30, ge=1, le=200),
         from supabase import create_client
 
         client = create_client(config.supabase_url, config.supabase_service_key.get_secret_value())
-        q = (client.table("dashboard_logins")
-             .select("email,role,status,provider,ip,user_agent,created_at")
-             .order("created_at", desc=True).limit(limit))
+        q = (
+            client.table("dashboard_logins")
+            .select("email,role,status,provider,ip,user_agent,created_at")
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
         if scope == "mine":
             q = q.eq("email", user.email)
         return q.execute().data or []
@@ -702,6 +770,7 @@ async def logins(limit: int = Query(30, ge=1, le=200),
         rows = await asyncio.to_thread(read)
     except Exception as exc:
         raise HTTPException(
-            502, f"Login history unavailable (run supabase/migrations/004_dashboard_logins.sql): "
-                 f"{exc}") from exc
+            502,
+            f"Login history unavailable (run supabase/migrations/004_dashboard_logins.sql): {exc}",
+        ) from exc
     return {"logins": rows}

@@ -88,3 +88,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest fixtures imported from other test modules are "unused" / "redefined" by design
+"tests/**" = ["F401", "F811"]

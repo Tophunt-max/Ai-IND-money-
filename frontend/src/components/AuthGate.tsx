@@ -246,7 +246,7 @@ function LoginScreen({ serverError }: { serverError: string | null }) {
             <div className="flex items-center justify-between pt-1 text-sm">
               <label className="flex items-center gap-2 text-gray-400">
                 <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)}
-                  className="h-4 w-4 rounded border-white/20 bg-ink-850 accent-indigo-500" />
+                  className="h-4 w-4 rounded-sm border-white/20 bg-ink-850 accent-indigo-500" />
                 Remember me
               </label>
               <button type="button" className="link"
@@ -259,7 +259,7 @@ function LoginScreen({ serverError }: { serverError: string | null }) {
             </Button>
           </form>
           <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-wider text-gray-600">
-            <div className="flex-1 border-t border-white/[0.06]" />or<div className="flex-1 border-t border-white/[0.06]" />
+            <div className="flex-1 border-t border-white/6" />or<div className="flex-1 border-t border-white/6" />
           </div>
           <Button variant="ghost" size="lg" onClick={google} className="w-full">
             <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden><path fill="#EA4335" d="M12 10.2v3.9h5.4c-.2 1.3-1.6 3.8-5.4 3.8-3.2 0-5.9-2.7-5.9-6s2.7-6 5.9-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.3 14.6 2.4 12 2.4 6.7 2.4 2.4 6.7 2.4 12s4.3 9.6 9.6 9.6c5.5 0 9.2-3.9 9.2-9.4 0-.6-.1-1.1-.2-1.6H12z"/></svg>
@@ -290,7 +290,8 @@ function LoginScreen({ serverError }: { serverError: string | null }) {
 }
 
 /** Split screen: brand panel (desktop) + form card. */
-/** The backend's public health (no login needed): version, mode, broker token. */
+/** The backend's public health (no login needed): version; mode and broker token only
+ * when the API reports them (requests from its own host). */
 function BackendStatus() {
   const [h, setH] = useState<{ version?: string; mode?: string; token_valid?: boolean } | null | false>(null);
   useEffect(() => {
@@ -301,7 +302,14 @@ function BackendStatus() {
   return (
     <div className="mt-3 flex items-center justify-center gap-2 text-[11px] text-gray-500">
       <span className={`h-1.5 w-1.5 rounded-full ${h ? "bg-emerald-400" : "bg-rose-400"}`} />
-      {h ? <>Backend v{h.version} · {(h.mode || "").toUpperCase()} · broker token {h.token_valid ? "valid" : "missing"}</> : "Backend unreachable"}
+      {h ? (
+        <>
+          Backend v{h.version}
+          {/* Mode and token state are only public to callers on the API host */}
+          {h.mode ? <> · {h.mode.toUpperCase()}</> : null}
+          {typeof h.token_valid === "boolean" ? <> · broker token {h.token_valid ? "valid" : "missing"}</> : null}
+        </>
+      ) : "Backend unreachable"}
     </div>
   );
 }
@@ -314,7 +322,7 @@ export function AuthFrame({ children }: { children: ReactNode }) {
   ];
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
-      <div className="relative hidden overflow-hidden border-r border-white/[0.05] lg:flex lg:flex-col lg:justify-between p-12">
+      <div className="relative hidden overflow-hidden border-r border-white/5 lg:flex lg:flex-col lg:justify-between p-12">
         <div className="absolute inset-0 bg-[radial-gradient(40rem_25rem_at_20%_20%,rgba(47,107,255,0.22),transparent_60%),radial-gradient(30rem_20rem_at_80%_90%,rgba(14,203,129,0.10),transparent_60%)]" />
         <div className="relative flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-500">
@@ -324,13 +332,13 @@ export function AuthFrame({ children }: { children: ReactNode }) {
         </div>
         <div className="relative max-w-md">
           <h1 className="text-4xl font-semibold leading-tight tracking-tight text-white">
-            AI trading for <span className="bg-gradient-to-r from-brand-300 to-cyan-300 bg-clip-text text-transparent">Indian markets</span>
+            AI trading for <span className="bg-linear-to-r from-brand-300 to-cyan-300 bg-clip-text text-transparent">Indian markets</span>
           </h1>
           <p className="mt-4 text-gray-400">Multi-agent research, automated sessions and live broker integration, in one place.</p>
           <div className="mt-10 space-y-5">
             {features.map((f) => (
               <div key={f.title} className="flex gap-4">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.04] ring-1 ring-white/10">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/4 ring-1 ring-white/10">
                   <f.icon className="h-5 w-5 text-brand-300" />
                 </div>
                 <div>

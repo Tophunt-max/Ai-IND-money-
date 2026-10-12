@@ -194,7 +194,7 @@ export default function SignalsPage() {
                 {reasons.map(([k, v]) => (
                   <li key={k}>
                     <div className="flex justify-between gap-2"><span className="truncate text-gray-300">{k}</span><span className="num text-gray-400">{v}</span></div>
-                    <div className="mt-0.5 h-1 rounded-full bg-white/[0.05]"><div className="h-full rounded-full bg-rose-400/70" style={{ width: `${(v / reasons[0][1]) * 100}%` }} /></div>
+                    <div className="mt-0.5 h-1 rounded-full bg-white/5"><div className="h-full rounded-full bg-rose-400/70" style={{ width: `${(v / reasons[0][1]) * 100}%` }} /></div>
                   </li>
                 ))}
               </ul>

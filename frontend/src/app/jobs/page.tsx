@@ -38,13 +38,13 @@ export default function JobsPage() {
         ) : jobs.length === 0 ? (
           <Empty icon={ListChecks} title="No jobs yet">Jobs are kept in memory and cleared when the API restarts.</Empty>
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-white/4">
             {jobs.map((j) => {
               const k = KINDS[j.kind] || KINDS.scan;
               const Icon = k.icon;
               return (
-                <Link key={j.id} href={k.href(j)} className="flex items-center gap-4 px-3 sm:px-4 py-4 transition hover:bg-white/[0.02]">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.04] ring-1 ring-white/[0.06]">
+                <Link key={j.id} href={k.href(j)} className="flex items-center gap-4 px-3 sm:px-4 py-4 transition hover:bg-white/2">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/4 ring-1 ring-white/6">
                     <Icon className="h-5 w-5 text-brand-300" />
                   </div>
                   <div className="min-w-0 flex-1">

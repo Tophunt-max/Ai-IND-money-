@@ -177,14 +177,14 @@ export default function CandleChart({
           {rsiNow != null && <span>RSI <b className="font-medium text-violet-300">{rsiNow.toFixed(1)}</b></span>}
         </div>
         {all.length > 20 && (
-          <div className="flex items-center gap-0.5 rounded-md border border-white/[0.06] bg-ink-850 p-0.5 text-gray-400">
-            <button type="button" aria-label="Zoom out" onClick={() => zoom(1.5)} className="rounded p-1 hover:bg-white/[0.06] hover:text-white"><Minus className="h-3.5 w-3.5" /></button>
-            <button type="button" aria-label="Zoom in" onClick={() => zoom(1 / 1.5)} className="rounded p-1 hover:bg-white/[0.06] hover:text-white"><Plus className="h-3.5 w-3.5" /></button>
+          <div className="flex items-center gap-0.5 rounded-md border border-white/6 bg-ink-850 p-0.5 text-gray-400">
+            <button type="button" aria-label="Zoom out" onClick={() => zoom(1.5)} className="rounded-sm p-1 hover:bg-white/6 hover:text-white"><Minus className="h-3.5 w-3.5" /></button>
+            <button type="button" aria-label="Zoom in" onClick={() => zoom(1 / 1.5)} className="rounded-sm p-1 hover:bg-white/6 hover:text-white"><Plus className="h-3.5 w-3.5" /></button>
             {zoomed && <>
-              <button type="button" aria-label="Earlier" onClick={() => pan(-1)} className="rounded p-1 hover:bg-white/[0.06] hover:text-white"><ChevronLeft className="h-3.5 w-3.5" /></button>
-              <button type="button" aria-label="Later" onClick={() => pan(1)} disabled={lastVisible} className="rounded p-1 hover:bg-white/[0.06] hover:text-white disabled:opacity-30"><ChevronRight className="h-3.5 w-3.5" /></button>
+              <button type="button" aria-label="Earlier" onClick={() => pan(-1)} className="rounded-sm p-1 hover:bg-white/6 hover:text-white"><ChevronLeft className="h-3.5 w-3.5" /></button>
+              <button type="button" aria-label="Later" onClick={() => pan(1)} disabled={lastVisible} className="rounded-sm p-1 hover:bg-white/6 hover:text-white disabled:opacity-30"><ChevronRight className="h-3.5 w-3.5" /></button>
             </>}
-            {(count !== null || end !== null) && <button type="button" aria-label="Reset" onClick={reset} className="rounded p-1 hover:bg-white/[0.06] hover:text-white"><RotateCcw className="h-3.5 w-3.5" /></button>}
+            {(count !== null || end !== null) && <button type="button" aria-label="Reset" onClick={reset} className="rounded-sm p-1 hover:bg-white/6 hover:text-white"><RotateCcw className="h-3.5 w-3.5" /></button>}
             <span className="num px-1 text-[10px] text-gray-500">{n}/{all.length}</span>
           </div>
         )}
@@ -285,18 +285,18 @@ export default function CandleChart({
             style={{ top: geo.y(v) }}>{format(v)}</span>
         ))}
         {lastVisible && (
-          <span className={`num pointer-events-none absolute right-0 -translate-y-1/2 rounded px-1 py-0.5 text-[10px] font-semibold text-ink-950 ${lastUp ? "bg-emerald-400" : "bg-rose-400"}`}
+          <span className={`num pointer-events-none absolute right-0 -translate-y-1/2 rounded-sm px-1 py-0.5 text-[10px] font-semibold text-ink-950 ${lastUp ? "bg-emerald-400" : "bg-rose-400"}`}
             style={{ top: geo.y(last.c) }}>
             {live && <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-ink-950 align-middle" />}
             {format(last.c)}
           </span>
         )}
         {h && (
-          <span className="num pointer-events-none absolute right-0 -translate-y-1/2 rounded bg-gray-200 px-1 py-0.5 text-[10px] font-semibold text-ink-950"
+          <span className="num pointer-events-none absolute right-0 -translate-y-1/2 rounded-sm bg-gray-200 px-1 py-0.5 text-[10px] font-semibold text-ink-950"
             style={{ top: geo.y(h.c) }}>{format(h.c)}</span>
         )}
         {h && hover !== null && (
-          <span className="num pointer-events-none absolute -translate-x-1/2 rounded bg-ink-700 px-1.5 py-0.5 text-[10px] text-gray-200"
+          <span className="num pointer-events-none absolute -translate-x-1/2 rounded-sm bg-ink-700 px-1.5 py-0.5 text-[10px] text-gray-200"
             style={{ left: geo.x(hover), top: geo.volBase - 14 }}>{timeLabel(h.t)}</span>
         )}
       </div>

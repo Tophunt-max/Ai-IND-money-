@@ -543,7 +543,7 @@ def _alert_unclaimed(tracked: TrackedOrder, conf: Confirmation) -> None:
         f"{conf.filled_qty - tracked.filled_reported} more (now {conf.filled_qty} of "
         f"{tracked.requested}"
         + (f" at {conf.avg_price}" if conf.avg_price else "")
-        + f"), not booked: journal unwritable — book by hand (with no journal to claim it "
+        + "), not booked: journal unwritable — book by hand (with no journal to claim it "
         "in, another Skopaq process could book it too)",
         order_ids=[tracked.order_id])
 
@@ -2112,7 +2112,7 @@ class PositionMonitor:
                         notify_position_alert(pos.symbol, ltp, pos.entry_price, pnl, alert_type)
                     )
                 except Exception:
-                    pass
+                    logger.debug("Position alert notification failed", exc_info=True)
                 before = pos.quantity
                 pos.quantity = max(0, pos.quantity - filled)
                 pos.sells_seen += filled   # already out of the quantity: proves no drop

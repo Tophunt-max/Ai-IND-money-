@@ -96,7 +96,6 @@ def select_short_put(
 
     premium = best.ltp
     max_profit = premium * chain.lot_size
-    max_loss = best.strike * chain.lot_size  # Theoretical (stock goes to 0)
     breakeven = best.strike - premium
 
     # Win probability estimate based on distance
@@ -246,14 +245,17 @@ def format_trade_for_telegram(trade: OptionTrade) -> str:
 
     if trade.sell_contract:
         lines.append(f"Sell: {trade.sell_contract.tradingsymbol}")
-        lines.append(f"  Strike: {trade.sell_contract.strike:.0f} ({trade.sell_contract.option_type})")
+        lines.append(f"  Strike: {trade.sell_contract.strike:.0f} "
+                     f"({trade.sell_contract.option_type})")
         lines.append(f"  Premium: Rs {trade.sell_contract.ltp:.2f}")
         lines.append(f"  OTM Distance: {trade.sell_contract.distance_pct:.1f}%")
 
     if trade.sell_contract_2:
         lines.append("")
         lines.append(f"Sell: {trade.sell_contract_2.tradingsymbol}")
-        lines.append(f"  Strike: {trade.sell_contract_2.strike:.0f} ({trade.sell_contract_2.option_type})")
+        lines.append(
+            f"  Strike: {trade.sell_contract_2.strike:.0f} ({trade.sell_contract_2.option_type})"
+        )
         lines.append(f"  Premium: Rs {trade.sell_contract_2.ltp:.2f}")
         lines.append(f"  OTM Distance: {trade.sell_contract_2.distance_pct:.1f}%")
 

@@ -106,8 +106,8 @@ export default function PriceChart({ symbol, initial = "1d" }: { symbol: string;
             levels={studies ? levels : undefined} />
           {studies && !isIdx && (
             <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-gray-500">
-              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded bg-amber-400" /> EMA 9</span>
-              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded bg-violet-400" /> EMA 21 · RSI</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded-sm bg-amber-400" /> EMA 9</span>
+              <span className="inline-flex items-center gap-1"><span className="inline-block h-0.5 w-4 rounded-sm bg-violet-400" /> EMA 21 · RSI</span>
               <span>pinch / wheel to zoom</span>
               <span>triangles: candle patterns (green bullish, red bearish)</span>
               {latest ? <span>levels: today&apos;s latest signal ({latest.status})</span> : <span>no signal today</span>}

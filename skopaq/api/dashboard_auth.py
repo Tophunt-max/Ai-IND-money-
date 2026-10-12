@@ -27,6 +27,7 @@ import logging
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
@@ -46,8 +47,12 @@ _LOCK_SECONDS = 600.0
 _verified: dict[str, tuple[float, dict[str, Any]]] = {}
 _failures: dict[str, deque] = {}
 _locked_until: dict[str, float] = {}
-_seen_sessions: set[str] = set()
+# Insertion-ordered (a dict as an ordered set) and capped: the oldest sessions are dropped
+_seen_sessions: dict[str, None] = {}
+_SEEN_LIMIT = 5000
 _lock = threading.Lock()
+# Login rows are written by a small shared pool, not a new thread per login
+_login_pool: Optional[ThreadPoolExecutor] = None
 
 
 @dataclass
@@ -187,7 +192,9 @@ def _record_login(config, user: DashboardUser, status: str, request: Request) ->
     with _lock:
         if key in _seen_sessions:
             return
-        _seen_sessions.add(key)
+        _seen_sessions[key] = None
+        while len(_seen_sessions) > _SEEN_LIMIT:
+            _seen_sessions.pop(next(iter(_seen_sessions)))
     row = {
         "session_id": user.session_id, "user_id": user.user_id, "email": user.email,
         "role": user.role if status == "ok" else None, "status": status,
@@ -208,7 +215,12 @@ def _record_login(config, user: DashboardUser, status: str, request: Request) ->
             logger.warning("Could not record the dashboard login (run migration 004?)",
                            exc_info=True)
 
-    threading.Thread(target=write, daemon=True).start()
+    global _login_pool
+    with _lock:
+        if _login_pool is None:
+            _login_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="login-record")
+        pool = _login_pool
+    pool.submit(write)
 
 
 # ── FastAPI dependencies ──────────────────────────────────────────────────────

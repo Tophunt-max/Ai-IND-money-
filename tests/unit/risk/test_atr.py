@@ -4,11 +4,11 @@ Validates the fallback estimate and the regex-based parser that extracts
 ATR values from vendor text responses.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from skopaq.risk.atr import estimate_atr, _parse_atr_value, fetch_atr
+import pytest
 
+from skopaq.risk.atr import _parse_atr_value, estimate_atr, fetch_atr
 
 # ── Estimate ATR ──────────────────────────────────────────────────────────────
 

@@ -81,7 +81,6 @@ SECTOR_MAP: dict[str, str] = {
     "TITAN": "CONSUMER_DURABLES",
     "ASIANPAINT": "CONSUMER_DURABLES",
     "LTIM": "IT",
-    "WIPRO": "IT",
 }
 
 

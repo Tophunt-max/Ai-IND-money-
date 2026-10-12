@@ -26,7 +26,6 @@ import logging
 from datetime import datetime, timezone
 
 import pandas as pd
-
 from mcp.server import FastMCP
 
 logger = logging.getLogger(__name__)
@@ -578,10 +577,10 @@ async def suggest_option_trade(
     try:
         from skopaq.options.chain import load_option_chain
         from skopaq.options.strategy import (
-            select_short_put,
-            select_short_call,
-            select_short_strangle,
             format_trade_for_telegram,
+            select_short_call,
+            select_short_put,
+            select_short_strangle,
         )
 
         chain = await load_option_chain(symbol, expiry_index, config=_get_config())
@@ -611,7 +610,7 @@ async def suggest_option_trade(
 
 def _setup_dataflow_config():
     """Ensure the upstream dataflow config is set for route_to_vendor."""
-    from tradingagents.dataflows.config import get_config, set_config
+    from tradingagents.dataflows.config import set_config
 
     config = _get_config()
     is_crypto = config.asset_class == "crypto"
@@ -728,12 +727,20 @@ async def gather_news_data(symbol: str, date: str = "") -> str:
     except Exception as e:
         insider = f"Error: {e}"
 
-    return json.dumps({
-        "symbol": symbol,
-        "company_news": company_news[:3000] if isinstance(company_news, str) else str(company_news)[:3000],
-        "global_news": global_news[:3000] if isinstance(global_news, str) else str(global_news)[:3000],
-        "insider_transactions": insider[:2000] if isinstance(insider, str) else str(insider)[:2000],
-    })
+    return json.dumps(
+        {
+            "symbol": symbol,
+            "company_news": company_news[:3000]
+            if isinstance(company_news, str)
+            else str(company_news)[:3000],
+            "global_news": global_news[:3000]
+            if isinstance(global_news, str)
+            else str(global_news)[:3000],
+            "insider_transactions": insider[:2000]
+            if isinstance(insider, str)
+            else str(insider)[:2000],
+        }
+    )
 
 
 @mcp.tool()
@@ -766,13 +773,15 @@ async def gather_fundamentals_data(symbol: str, date: str = "") -> str:
         except Exception as e:
             results[method] = f"Error: {e}"
 
-    return json.dumps({
-        "symbol": symbol,
-        "fundamentals": results.get("get_fundamentals", ""),
-        "balance_sheet": results.get("get_balance_sheet", ""),
-        "cash_flow": results.get("get_cashflow", ""),
-        "income_statement": results.get("get_income_statement", ""),
-    })
+    return json.dumps(
+        {
+            "symbol": symbol,
+            "fundamentals": results.get("get_fundamentals", ""),
+            "balance_sheet": results.get("get_balance_sheet", ""),
+            "cash_flow": results.get("get_cashflow", ""),
+            "income_statement": results.get("get_income_statement", ""),
+        }
+    )
 
 
 @mcp.tool()
@@ -794,21 +803,23 @@ async def gather_social_data(symbol: str, date: str = "") -> str:
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    start_date = (
-        datetime.now(timezone.utc) - __import__("datetime").timedelta(days=7)
-    ).strftime("%Y-%m-%d")
+    start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=7)).strftime(
+        "%Y-%m-%d"
+    )
 
     try:
-        social_news = await asyncio.to_thread(
-            route_to_vendor, "get_news", symbol, start_date, date
-        )
+        social_news = await asyncio.to_thread(route_to_vendor, "get_news", symbol, start_date, date)
     except Exception as e:
         social_news = f"Error: {e}"
 
-    return json.dumps({
-        "symbol": symbol,
-        "social_sentiment_news": social_news[:4000] if isinstance(social_news, str) else str(social_news)[:4000],
-    })
+    return json.dumps(
+        {
+            "symbol": symbol,
+            "social_sentiment_news": social_news[:4000]
+            if isinstance(social_news, str)
+            else str(social_news)[:4000],
+        }
+    )
 
 
 @mcp.tool()
@@ -832,23 +843,39 @@ async def gather_all_analysis_data(symbol: str, date: str = "") -> str:
     social_task = gather_social_data(symbol, date)
 
     market, news, fundamentals, social = await asyncio.gather(
-        market_task, news_task, fundamentals_task, social_task,
+        market_task,
+        news_task,
+        fundamentals_task,
+        social_task,
         return_exceptions=True,
     )
 
     # Convert exceptions to error strings
-    for name, val in [("market", market), ("news", news), ("fundamentals", fundamentals), ("social", social)]:
+    for name, val in [
+        ("market", market),
+        ("news", news),
+        ("fundamentals", fundamentals),
+        ("social", social),
+    ]:
         if isinstance(val, Exception):
             locals()[name] = json.dumps({"error": str(val)})
 
-    return json.dumps({
-        "symbol": symbol,
-        "date": date,
-        "market_data": json.loads(market) if isinstance(market, str) else {"error": str(market)},
-        "news_data": json.loads(news) if isinstance(news, str) else {"error": str(news)},
-        "fundamentals_data": json.loads(fundamentals) if isinstance(fundamentals, str) else {"error": str(fundamentals)},
-        "social_data": json.loads(social) if isinstance(social, str) else {"error": str(social)},
-    })
+    return json.dumps(
+        {
+            "symbol": symbol,
+            "date": date,
+            "market_data": json.loads(market)
+            if isinstance(market, str)
+            else {"error": str(market)},
+            "news_data": json.loads(news) if isinstance(news, str) else {"error": str(news)},
+            "fundamentals_data": json.loads(fundamentals)
+            if isinstance(fundamentals, str)
+            else {"error": str(fundamentals)},
+            "social_data": json.loads(social)
+            if isinstance(social, str)
+            else {"error": str(social)},
+        }
+    )
 
 
 # ── Swing book (Adaptive AI) ─────────────────────────────────────────────────
@@ -868,10 +895,15 @@ async def swing_ideas(limit: int = 10, symbols: str = "") -> str:
     config = _get_config()
     engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
     ideas = await engine.scan(_swing_symbols(config, symbols), max(1, min(limit, 50)))
-    return json.dumps({"model": getattr(engine.model, "version", None),
-                       "model_state": engine.model_state,
-                       "threshold": getattr(engine.model, "threshold", None),
-                       "ideas": [i.as_dict() for i in ideas]}, default=str)
+    return json.dumps(
+        {
+            "model": getattr(engine.model, "version", None),
+            "model_state": engine.model_state,
+            "threshold": getattr(engine.model, "threshold", None),
+            "ideas": [i.as_dict() for i in ideas],
+        },
+        default=str,
+    )
 
 
 @mcp.tool()
@@ -887,9 +919,15 @@ async def swing_idea(symbol: str) -> str:
     config = _get_config()
     engine = SwingEngine.from_config(config, paper=config.trading_mode != "live")
     idea = await engine.idea(symbol.strip().upper())
-    return json.dumps({"symbol": symbol.upper(), "model": getattr(engine.model, "version", None),
-                       "threshold": getattr(engine.model, "threshold", None),
-                       "idea": idea.as_dict() if idea else None}, default=str)
+    return json.dumps(
+        {
+            "symbol": symbol.upper(),
+            "model": getattr(engine.model, "version", None),
+            "threshold": getattr(engine.model, "threshold", None),
+            "idea": idea.as_dict() if idea else None,
+        },
+        default=str,
+    )
 
 
 # ── Strategy Refinement ──────────────────────────────────────────────────────
@@ -916,14 +954,16 @@ async def backtest_strategy(
     import asyncio
 
     try:
+        from skopaq.backtest.engine import BacktestConfig, format_backtest_report, run_backtest
         from tradingagents.dataflows.router import route_to_vendor
-        from skopaq.backtest.engine import BacktestConfig, run_backtest, format_backtest_report
 
         _setup_dataflow_config()
 
         # Fetch historical data
         end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+        start_date = (
+            datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)
+        ).strftime("%Y-%m-%d")
 
         ohlcv_text = await asyncio.to_thread(
             route_to_vendor, "get_stock_data", symbol, start_date, end_date
@@ -931,7 +971,8 @@ async def backtest_strategy(
 
         # Parse CSV to DataFrame
         import io
-        lines = [l for l in ohlcv_text.strip().split("\n") if not l.startswith("#")]
+
+        lines = [ln for ln in ohlcv_text.strip().split("\n") if not ln.startswith("#")]
         df = pd.read_csv(io.StringIO("\n".join(lines)))
 
         if len(df) < 20:
@@ -942,11 +983,13 @@ async def backtest_strategy(
         df["RSI"] = _compute_rsi(df["Close"], 14)
         df["SMA_20"] = df["Close"].rolling(20).mean()
 
-        signals = pd.DataFrame({
-            "date": df["Date"],
-            "signal": 0,
-            "confidence": 50,
-        })
+        signals = pd.DataFrame(
+            {
+                "date": df["Date"],
+                "signal": 0,
+                "confidence": 50,
+            }
+        )
 
         for i in range(20, len(df)):
             rsi = df.iloc[i]["RSI"]
@@ -989,21 +1032,25 @@ async def run_monte_carlo_test(
     """
     try:
         # First run backtest to get trades
-        import asyncio, io
-        from tradingagents.dataflows.router import route_to_vendor
+        import asyncio
+        import io
+
         from skopaq.backtest.engine import BacktestConfig, run_backtest
-        from skopaq.backtest.monte_carlo import run_monte_carlo, format_monte_carlo_report
+        from skopaq.backtest.monte_carlo import format_monte_carlo_report, run_monte_carlo
+        from tradingagents.dataflows.router import route_to_vendor
 
         _setup_dataflow_config()
 
         end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+        start_date = (
+            datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)
+        ).strftime("%Y-%m-%d")
 
         ohlcv_text = await asyncio.to_thread(
             route_to_vendor, "get_stock_data", symbol, start_date, end_date
         )
 
-        lines = [l for l in ohlcv_text.strip().split("\n") if not l.startswith("#")]
+        lines = [ln for ln in ohlcv_text.strip().split("\n") if not ln.startswith("#")]
         df = pd.read_csv(io.StringIO("\n".join(lines)))
 
         if len(df) < 20:
@@ -1054,8 +1101,8 @@ async def get_learning_insights() -> str:
             generate_learning_insights,
             get_confidence_calibration,
             get_sector_performance,
-            get_timing_patterns,
             get_stop_loss_analysis,
+            get_timing_patterns,
         )
 
         insights = generate_learning_insights()
@@ -1085,9 +1132,7 @@ async def get_learning_insights() -> str:
         if timing:
             sections.append("\nTiming Patterns:")
             for t in timing:
-                sections.append(
-                    f"  {t['hour']}: {t['win_rate']:.0f}% win ({t['trades']} trades)"
-                )
+                sections.append(f"  {t['hour']}: {t['win_rate']:.0f}% win ({t['trades']} trades)")
 
         sl = get_stop_loss_analysis()
         if sl:
@@ -1143,7 +1188,7 @@ async def evolve_strategy(symbol: str, days: int = 180) -> str:
         days: Days of history for backtesting.
     """
     try:
-        from skopaq.backtest.evolve import run_evolution_cycle, format_evolution_report
+        from skopaq.backtest.evolve import format_evolution_report, run_evolution_cycle
 
         report = await run_evolution_cycle(symbol, days)
         return format_evolution_report(report)

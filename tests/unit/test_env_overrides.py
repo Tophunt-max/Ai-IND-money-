@@ -83,25 +83,36 @@ def test_bad_values_save_nothing(store, key, value, match):
 
 
 def test_values_are_normalized(store):
-    eo.change({"SKOPAQ_SCHEDULER_ENABLED": " Yes ", "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": " 7 "},
-              [], by=BY)
-    assert _saved(store) == {"SKOPAQ_SCHEDULER_ENABLED": "true",
-                             "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}
+    eo.change(
+        {"SKOPAQ_SCHEDULER_ENABLED": " Yes ", "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": " 7 "},
+        [],
+        by=BY,
+    )
+    assert _saved(store) == {
+        "SKOPAQ_SCHEDULER_ENABLED": "true",
+        "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7",
+    }
     assert SkopaqConfig().daemon_max_candidates_to_analyze == 7
 
 
 def test_one_bad_value_keeps_the_good_ones_out_too(store):
     with pytest.raises(ValueError):
-        eo.change({"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7",
-                   "SKOPAQ_SCHEDULER_MODE": "nope"}, [], by=BY)
+        eo.change(
+            {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7", "SKOPAQ_SCHEDULER_MODE": "nope"},
+            [],
+            by=BY,
+        )
     assert not store.exists()
     assert "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE" not in os.environ
 
 
 def test_set_and_remove_the_same_key_is_refused(store):
     with pytest.raises(ValueError, match="Both set and removed"):
-        eo.change({"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}, ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"],
-                  by=BY)
+        eo.change(
+            {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"},
+            ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"],
+            by=BY,
+        )
 
 
 def test_nothing_to_change(store):
@@ -115,11 +126,14 @@ def test_nothing_to_change(store):
 # ── Live trading needs confirmation ───────────────────────────────────────────
 
 
-@pytest.mark.parametrize("values", [
-    {"SKOPAQ_TRADING_MODE": "live"},
-    {"SKOPAQ_SCHEDULER_MODE": "LIVE"},
-    {"SKOPAQ_SCHEDULER_CONFIRM_LIVE": "true"},
-])
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"SKOPAQ_TRADING_MODE": "live"},
+        {"SKOPAQ_SCHEDULER_MODE": "LIVE"},
+        {"SKOPAQ_SCHEDULER_CONFIRM_LIVE": "true"},
+    ],
+)
 def test_turning_live_on_needs_confirmation(store, values):
     with pytest.raises(PermissionError, match="needs confirmation"):
         eo.change(values, [], by=BY)
@@ -128,10 +142,21 @@ def test_turning_live_on_needs_confirmation(store, values):
 
 
 def test_confirmed_live_is_saved_applied_and_logged(store):
-    result = eo.change({"SKOPAQ_TRADING_MODE": "live", "SKOPAQ_SCHEDULER_MODE": "live",
-                        "SKOPAQ_SCHEDULER_CONFIRM_LIVE": "on"}, [], by=BY, confirm_live=True)
-    assert result.live == ["SKOPAQ_TRADING_MODE=live", "SKOPAQ_SCHEDULER_MODE=live",
-                           "SKOPAQ_SCHEDULER_CONFIRM_LIVE=true"]
+    result = eo.change(
+        {
+            "SKOPAQ_TRADING_MODE": "live",
+            "SKOPAQ_SCHEDULER_MODE": "live",
+            "SKOPAQ_SCHEDULER_CONFIRM_LIVE": "on",
+        },
+        [],
+        by=BY,
+        confirm_live=True,
+    )
+    assert result.live == [
+        "SKOPAQ_TRADING_MODE=live",
+        "SKOPAQ_SCHEDULER_MODE=live",
+        "SKOPAQ_SCHEDULER_CONFIRM_LIVE=true",
+    ]
     config = SkopaqConfig()
     assert config.trading_mode == "live" and config.scheduler_confirm_live == "true"
     entry = eo.history()[0]
@@ -140,7 +165,9 @@ def test_confirmed_live_is_saved_applied_and_logged(store):
 
 def test_already_live_needs_no_confirmation(store):
     eo.change({"SKOPAQ_TRADING_MODE": "live"}, [], by=BY, confirm_live=True)
-    eo.change({"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "4"}, [], by=BY)  # unrelated change: no 409
+    eo.change(
+        {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "4"}, [], by=BY
+    )  # unrelated change: no 409
     eo.change({"SKOPAQ_TRADING_MODE": "paper"}, [], by=BY)  # back to paper: no confirmation
 
 
@@ -187,8 +214,17 @@ def test_apply_reads_the_file_and_reports_changes(store):
 def test_a_tampered_file_cannot_set_locked_or_foreign_keys(store, monkeypatch):
     monkeypatch.setenv("SKOPAQ_API_TOKEN", "real")
     store.parent.mkdir(parents=True)
-    store.write_text(json.dumps({"values": {"SKOPAQ_API_TOKEN": "evil", "PATH": "/evil",
-                                            "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "6"}}))
+    store.write_text(
+        json.dumps(
+            {
+                "values": {
+                    "SKOPAQ_API_TOKEN": "evil",
+                    "PATH": "/evil",
+                    "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "6",
+                }
+            }
+        )
+    )
     eo.apply()
     assert os.environ["SKOPAQ_API_TOKEN"] == "real"
     assert os.environ["PATH"] != "/evil"

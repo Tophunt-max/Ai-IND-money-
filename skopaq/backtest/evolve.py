@@ -22,9 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -98,30 +96,40 @@ async def run_evolution_cycle(
     )
 
     try:
-        from tradingagents.dataflows.router import route_to_vendor
-        from tradingagents.dataflows.config import set_config
         from skopaq.backtest.engine import BacktestConfig, run_backtest
-        from skopaq.backtest.walk_forward import walk_forward_test
         from skopaq.backtest.monte_carlo import run_monte_carlo
         from skopaq.backtest.persistence import (
-            save_backtest_result, save_wfo_result, save_monte_carlo_result,
-            save_strategy_params, get_active_params,
+            get_active_params,
+            save_backtest_result,
+            save_monte_carlo_result,
+            save_strategy_params,
+            save_wfo_result,
         )
+        from skopaq.backtest.walk_forward import walk_forward_test
+        from tradingagents.dataflows.config import set_config
+        from tradingagents.dataflows.router import route_to_vendor
 
         # Setup data config
-        set_config({
-            'data_vendors': {'core_stock_apis': 'indstocks,yfinance', 'technical_indicators': 'yfinance'},
-            'yfinance_symbol_suffix': '.NS',
-        })
+        set_config(
+            {
+                "data_vendors": {
+                    "core_stock_apis": "indstocks,yfinance",
+                    "technical_indicators": "yfinance",
+                },
+                "yfinance_symbol_suffix": ".NS",
+            }
+        )
 
         # Fetch data
         end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+        start_date = (
+            datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)
+        ).strftime("%Y-%m-%d")
 
         ohlcv_text = await asyncio.to_thread(
             route_to_vendor, "get_stock_data", symbol, start_date, end_date
         )
-        lines = [l for l in ohlcv_text.strip().split("\n") if not l.startswith("#")]
+        lines = [ln for ln in ohlcv_text.strip().split("\n") if not ln.startswith("#")]
         df = pd.read_csv(io.StringIO("\n".join(lines)))
 
         if len(df) < 30:
@@ -156,11 +164,13 @@ async def run_evolution_cycle(
             rs = gain / loss
             data["RSI"] = 100 - (100 / (1 + rs))
 
-            signals = pd.DataFrame({
-                "date": data["Date"],
-                "signal": 0,
-                "confidence": 50,
-            })
+            signals = pd.DataFrame(
+                {
+                    "date": data["Date"],
+                    "signal": 0,
+                    "confidence": 50,
+                }
+            )
             for i in range(params["rsi_period"] + 1, len(data)):
                 rsi = data.iloc[i]["RSI"]
                 if pd.isna(rsi):
@@ -180,24 +190,41 @@ async def run_evolution_cycle(
 
         # Save backtest
         save_backtest_result(
-            symbol, "RSI_MEAN_REVERSION",
-            bt_result.start_date, bt_result.end_date,
-            bt_result.total_return_pct, bt_result.annual_return_pct,
-            bt_result.sharpe_ratio, bt_result.sortino_ratio, bt_result.calmar_ratio,
-            bt_result.max_drawdown_pct, bt_result.win_rate_pct, bt_result.profit_factor,
-            bt_result.total_trades, params,
+            symbol,
+            "RSI_MEAN_REVERSION",
+            bt_result.start_date,
+            bt_result.end_date,
+            bt_result.total_return_pct,
+            bt_result.annual_return_pct,
+            bt_result.sharpe_ratio,
+            bt_result.sortino_ratio,
+            bt_result.calmar_ratio,
+            bt_result.max_drawdown_pct,
+            bt_result.win_rate_pct,
+            bt_result.profit_factor,
+            bt_result.total_trades,
+            params,
         )
 
         # Step 2: Walk-Forward Validation
         try:
-            wfo = walk_forward_test(generate_signals, df, symbol,
-                                    in_sample_months=3, out_of_sample_months=1)
+            wfo = walk_forward_test(
+                generate_signals, df, symbol, in_sample_months=3, out_of_sample_months=1
+            )
             report.wfe_pct = wfo.wfe_pct
             report.wfe_passed = wfo.wfe_pct >= 50
-            save_wfo_result(symbol, wfo.total_periods, wfo.wfe_pct,
-                           wfo.avg_oos_return, wfo.avg_oos_sharpe, wfo.consistency_pct,
-                           [{"is_ret": p.in_sample_return, "oos_ret": p.out_sample_return,
-                             "wfe": p.wfe} for p in wfo.periods])
+            save_wfo_result(
+                symbol,
+                wfo.total_periods,
+                wfo.wfe_pct,
+                wfo.avg_oos_return,
+                wfo.avg_oos_sharpe,
+                wfo.consistency_pct,
+                [
+                    {"is_ret": p.in_sample_return, "oos_ret": p.out_sample_return, "wfe": p.wfe}
+                    for p in wfo.periods
+                ],
+            )
         except Exception as e:
             logger.warning("WFO failed: %s", e)
 
@@ -208,10 +235,17 @@ async def run_evolution_cycle(
             report.mc_median_return = mc.median_return_pct
             report.mc_probability_of_loss = mc.probability_of_loss_pct
             report.mc_robust = mc.probability_of_loss_pct < 60
-            save_monte_carlo_result(symbol, mc.n_simulations, mc.median_return_pct,
-                                   mc.p5_return_pct, mc.p95_return_pct, mc.worst_max_dd_pct,
-                                   mc.median_sharpe, mc.probability_of_loss_pct,
-                                   mc.probability_of_ruin_pct)
+            save_monte_carlo_result(
+                symbol,
+                mc.n_simulations,
+                mc.median_return_pct,
+                mc.p5_return_pct,
+                mc.p95_return_pct,
+                mc.worst_max_dd_pct,
+                mc.median_sharpe,
+                mc.probability_of_loss_pct,
+                mc.probability_of_ruin_pct,
+            )
 
         # Step 4: Adapt if underperforming
         needs_adaptation = (
@@ -243,43 +277,58 @@ async def run_evolution_cycle(
                         }
                         if not within_change_limit(params, test_params, max_change):
                             continue
-                        res = _rsi_backtest(df, select_df, test_params, params, symbol,
-                                            BacktestConfig, run_backtest)
+                        res = _rsi_backtest(
+                            df, select_df, test_params, params, symbol, BacktestConfig, run_backtest
+                        )
                         if res.total_trades >= 3 and res.sharpe_ratio > best_select:
                             best_select = res.sharpe_ratio
                             best_params = test_params.copy()
 
             if best_params != params and len(holdout_df) >= 10:
-                current_ho = _rsi_backtest(df, holdout_df, params, params, symbol,
-                                           BacktestConfig, run_backtest)
-                cand_ho = _rsi_backtest(df, holdout_df, best_params, params, symbol,
-                                        BacktestConfig, run_backtest)
+                current_ho = _rsi_backtest(
+                    df, holdout_df, params, params, symbol, BacktestConfig, run_backtest
+                )
+                cand_ho = _rsi_backtest(
+                    df, holdout_df, best_params, params, symbol, BacktestConfig, run_backtest
+                )
                 need = SAFETY_RULES.min_backtest_improvement_pct / 100
-                better = (cand_ho.total_trades >= 2
-                          and cand_ho.sharpe_ratio > current_ho.sharpe_ratio
-                          + max(abs(current_ho.sharpe_ratio) * need, 0.05))
-                report.holdout = {"current_sharpe": current_ho.sharpe_ratio,
-                                  "candidate_sharpe": cand_ho.sharpe_ratio,
-                                  "candidate_trades": cand_ho.total_trades,
-                                  "bars": len(holdout_df)}
+                better = (
+                    cand_ho.total_trades >= 2
+                    and cand_ho.sharpe_ratio
+                    > current_ho.sharpe_ratio + max(abs(current_ho.sharpe_ratio) * need, 0.05)
+                )
+                report.holdout = {
+                    "current_sharpe": current_ho.sharpe_ratio,
+                    "candidate_sharpe": cand_ho.sharpe_ratio,
+                    "candidate_trades": cand_ho.total_trades,
+                    "bars": len(holdout_df),
+                }
                 if better:
                     report.params_changed = True
                     report.new_params = best_params
-                    report.improvement = (f"holdout Sharpe: {current_ho.sharpe_ratio:.2f} → "
-                                          f"{cand_ho.sharpe_ratio:.2f}")
+                    report.improvement = (
+                        f"holdout Sharpe: {current_ho.sharpe_ratio:.2f} → "
+                        f"{cand_ho.sharpe_ratio:.2f}"
+                    )
                     params = best_params
                     best_sharpe = cand_ho.sharpe_ratio
                 else:
-                    report.improvement = (f"variant rejected on the holdout "
-                                          f"({cand_ho.sharpe_ratio:.2f} vs "
-                                          f"{current_ho.sharpe_ratio:.2f})")
+                    report.improvement = (
+                        f"variant rejected on the holdout "
+                        f"({cand_ho.sharpe_ratio:.2f} vs "
+                        f"{current_ho.sharpe_ratio:.2f})"
+                    )
 
         # Step 5: Deploy decision (an adapted variant only on its holdout result)
         if bt_result.sharpe_ratio >= 1.0 or (report.params_changed and best_sharpe >= 0.5):
             report.deploy = True
             report.reason = f"Sharpe {bt_result.sharpe_ratio:.2f}, WFE {report.wfe_pct:.0f}%"
-            save_strategy_params(symbol, "RSI_MEAN_REVERSION", params,
-                                {"sharpe": bt_result.sharpe_ratio, "return": bt_result.total_return_pct})
+            save_strategy_params(
+                symbol,
+                "RSI_MEAN_REVERSION",
+                params,
+                {"sharpe": bt_result.sharpe_ratio, "return": bt_result.total_return_pct},
+            )
         else:
             report.deploy = False
             report.reason = f"Sharpe {bt_result.sharpe_ratio:.2f} below threshold"
@@ -288,7 +337,8 @@ async def run_evolution_cycle(
         report.lesson = (
             f"{symbol} RSI strategy: Sharpe={bt_result.sharpe_ratio:.2f}, "
             f"Win={bt_result.win_rate_pct:.0f}%, Return={bt_result.total_return_pct:+.1f}%. "
-            f"{'Params adapted: ' + report.improvement if report.params_changed else 'No adaptation needed'}. "
+            f"{'Params adapted: ' + report.improvement if report.params_changed else ''}"
+            f"{'' if report.params_changed else 'No adaptation needed'}. "
             f"{'Deployed' if report.deploy else 'Not deployed'}: {report.reason}."
         )
 
@@ -308,7 +358,7 @@ async def run_evolution_cycle(
                 f"Lesson: {report.lesson}"
             )
         except Exception:
-            pass
+            logger.debug("Evolution notification failed", exc_info=True)
 
         return report
 
@@ -331,7 +381,8 @@ def format_evolution_report(report: EvolutionReport) -> str:
         "",
         "Validation:",
         f"  WFE: {report.wfe_pct:.0f}% {'PASS' if report.wfe_passed else 'FAIL'}",
-        f"  MC P(Loss): {report.mc_probability_of_loss:.0f}% {'ROBUST' if report.mc_robust else 'FRAGILE'}",
+        f"  MC P(Loss): {report.mc_probability_of_loss:.0f}% "
+        f"{'ROBUST' if report.mc_robust else 'FRAGILE'}",
         "",
     ]
 
@@ -395,6 +446,7 @@ def _rsi_backtest(full, part, test_params, base_params, symbol, BacktestConfig, 
     history, so indicators are warmed up without seeing ``part``'s future)."""
     sigs = rsi_signals(full, test_params)
     sigs = sigs[sigs["date"].isin(set(part["Date"]))].reset_index(drop=True)
-    cfg = BacktestConfig(stop_loss_pct=test_params["stop_loss_pct"] / 100,
-                         target_pct=base_params["target_pct"] / 100)
+    cfg = BacktestConfig(
+        stop_loss_pct=test_params["stop_loss_pct"] / 100, target_pct=base_params["target_pct"] / 100
+    )
     return run_backtest(sigs, part, cfg, symbol)

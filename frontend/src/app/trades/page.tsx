@@ -102,13 +102,13 @@ export default function TradesPage() {
         ) : trades.length === 0 ? (
           <Empty icon={ScrollText} title="No trades yet" />
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-white/4">
             {trades.map((t, i) => {
               const key = t.id || String(i);
               const isOpen = open === key;
               return (
                 <div key={key}>
-                  <button className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.02] sm:px-4"
+                  <button className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/2 sm:px-4"
                     onClick={() => setOpen(isOpen ? null : key)}>
                     <Badge tone={t.side === "BUY" ? "ok" : "error"}>{t.side}</Badge>
                     <div className="min-w-0 flex-1">
@@ -130,7 +130,7 @@ export default function TradesPage() {
                   </button>
                   {isOpen && (
                     <div className="px-3 pb-3 sm:px-4">
-                      <p className="whitespace-pre-wrap rounded-xl bg-white/[0.02] p-3 text-xs leading-relaxed text-gray-400 ring-1 ring-white/[0.05]">
+                      <p className="whitespace-pre-wrap rounded-xl bg-white/2 p-3 text-xs leading-relaxed text-gray-400 ring-1 ring-white/5">
                         {t.reason || "No reason recorded."}
                       </p>
                     </div>

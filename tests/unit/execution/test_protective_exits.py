@@ -325,13 +325,18 @@ async def test_daemon_close_sells_at_market_at_the_ltp():
     """INDstocks position rows have no last price: the close fetches the LTP."""
     client = MagicMock()
     client.get_ltp = AsyncMock(return_value=1450.0)
-    signals = await _close([
-        Position(symbol="TCS", quantity=Decimal(3), average_price=4000.0, last_price=3800.0),
-        Position(**{"symbol": "INFY", "net_qty": "2", "avg_price": 1500.0}),  # as INDstocks sends it
-    ], client)
+    signals = await _close(
+        [
+            Position(symbol="TCS", quantity=Decimal(3), average_price=4000.0, last_price=3800.0),
+            Position(
+                **{"symbol": "INFY", "net_qty": "2", "avg_price": 1500.0}
+            ),  # as INDstocks sends it
+        ],
+        client,
+    )
 
     assert [(s.symbol, s.order_type, s.entry_price) for s in signals] == [
-        ("TCS", OrderType.MARKET, 3800.0),   # paper fills last_price itself
+        ("TCS", OrderType.MARKET, 3800.0),  # paper fills last_price itself
         ("INFY", OrderType.MARKET, 1450.0),  # the broker's LTP, not the average price
     ]
     client.get_ltp.assert_awaited_once_with("NSE_INFY")
@@ -341,8 +346,9 @@ async def test_daemon_close_sells_at_market_at_the_ltp():
 async def test_daemon_close_without_a_price_does_not_invent_breakeven():
     client = MagicMock()
     client.get_ltp = AsyncMock(side_effect=RuntimeError("quote API down"))
-    [signal] = await _close([Position(**{"symbol": "INFY", "net_qty": "2", "avg_price": 1500.0})],
-                            client)
+    [signal] = await _close(
+        [Position(**{"symbol": "INFY", "net_qty": "2", "avg_price": 1500.0})], client
+    )
 
     assert (signal.order_type, signal.entry_price) == (OrderType.MARKET, None)
 
@@ -363,15 +369,18 @@ async def test_live_close_records_the_loss_at_the_broker_fill():
 
     daemon = TradingDaemon(MagicMock(trading_mode="live"))
     daemon._client, daemon._router, daemon._executor = live, router, Executor(router, safety)
-    with patch.object(daemon, "_record_exit", new_callable=AsyncMock) as record, \
-         patch("skopaq.broker.scrip_resolver.resolve_scrip_code", new=AsyncMock(return_value="S")), \
-         patch("skopaq.execution.order_router.resolve_security_id",
-               new=AsyncMock(return_value="11536")):
+    with (
+        patch.object(daemon, "_record_exit", new_callable=AsyncMock) as record,
+        patch("skopaq.broker.scrip_resolver.resolve_scrip_code", new=AsyncMock(return_value="S")),
+        patch(
+            "skopaq.execution.order_router.resolve_security_id", new=AsyncMock(return_value="11536")
+        ),
+    ):
         await daemon._phase_close()
 
     signal, execution = record.await_args.args
     assert live.place_order.await_args.args[0].order_type == OrderType.MARKET
-    assert execution.fill_price == 3790.0      # the broker's fill, not the LTP
+    assert execution.fill_price == 3790.0  # the broker's fill, not the LTP
     assert safety._day_pnl == pytest.approx(_net(4000, 3790, 3))
 
 
