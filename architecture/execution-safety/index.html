@@ -1,0 +1,2496 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Adaptive-AI Algorithmic Trading Platform for Indian Equities">
+      
+      
+      
+        <link rel="canonical" href="https://tophunt-max.github.io/Ai-IND-money-/architecture/execution-safety/">
+      
+      
+        <link rel="prev" href="../notifications/">
+      
+      
+        <link rel="next" href="../adaptive-ai/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Execution safety, signals and learning - SkopaqTrader Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="cyan" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#execution-safety-signals-and-learning" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="SkopaqTrader Docs" class="md-header__button md-logo" aria-label="SkopaqTrader Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            SkopaqTrader Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Execution safety, signals and learning
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="cyan" data-md-color-accent="teal"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="cyan" data-md-color-accent="teal"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Tophunt-max/Ai-IND-money-" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Tophunt-max/Ai-IND-money-
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../claude-code/setup/" class="md-tabs__link">
+          
+  
+  
+  Claude Code Integration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../trading/options-selling/" class="md-tabs__link">
+          
+  
+  
+  Trading
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../telegram/setup/" class="md-tabs__link">
+          
+  
+  
+  Telegram Bot
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../pipeline/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../deployment/mac-mini/" class="md-tabs__link">
+          
+  
+  
+  Deployment
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../contributing/guide/" class="md-tabs__link">
+          
+  
+  
+  Contributing
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="SkopaqTrader Docs" class="md-nav__button md-logo" aria-label="SkopaqTrader Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    SkopaqTrader Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Tophunt-max/Ai-IND-money-" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Tophunt-max/Ai-IND-money-
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claude Code Integration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Claude Code Integration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claude-code/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claude-code/mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claude-code/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trading
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Trading
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trading/options-selling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Options Selling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trading/gtt-orders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTT Orders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trading/swing-trading/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Swing Trading (Adaptive AI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trading/scalping/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Intraday Scalping
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trading/fno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    F&O (Options Buying)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trading/live-trading/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live Trading
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram Bot
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Telegram Bot
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telegram/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telegram/commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telegram/scheduler/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduled Jobs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trading Pipeline (Adaptive AI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../indstocks_api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    INDstocks API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notifications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Notifications
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution safety, signals and learning
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution safety, signals and learning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequential-entries-and-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequential entries and reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#charges-and-net-pl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Charges and net P&amp;L
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#learning-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learning lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-hardening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API hardening
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#more-execution-safeguards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        More execution safeguards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#strategy-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Strategy coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#charges-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Charges reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-trail-and-shared-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit trail and shared state
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gap-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gap matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#readiness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Readiness
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adaptive-ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptive AI (FreqAI-style)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Deployment
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/mac-mini/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac mini (Docker)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/go-live/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go live on AWS (INDstocks)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/github-auto-deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Auto-deploy to EC2 (GitHub)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web dashboard (Vercel)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/flyio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fly.io
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adding Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adding MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequential-entries-and-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequential entries and reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#charges-and-net-pl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Charges and net P&amp;L
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#learning-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learning lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-hardening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API hardening
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#more-execution-safeguards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        More execution safeguards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#strategy-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Strategy coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#charges-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Charges reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-trail-and-shared-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit trail and shared state
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gap-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gap matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#readiness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Readiness
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="execution-safety-signals-and-learning">Execution safety, signals and learning</h1>
+<p>How a setup becomes a trade, and what stops it. This page also holds the audit's gap matrix
+and the current readiness status.</p>
+<h2 id="pipeline">Pipeline</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>ticks / REST → CandleBuilder (closed bars only)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  → market/quality.check_series      invalid, duplicate, out-of-order, missing, forming, stale
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  → market/indicators + patterns     EMA/SMA/RSI/MACD/ADX/ATR/BB/ROC/RelVol, swings, S/R, ORB
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  → market/regime + timeframes       trend/range/vol label; higher timeframe from completed buckets
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  → strategy (scalping/strategies)   Setup: entry, stop, target, reason
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  → strategy/signal.qualify          QUALIFIED / REJECTED / EXPIRED + reasons → signal journal
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  → Executor ─ BUY: EntryGate (one entry at a time) + reconciliation blockers
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>             └ SafetyChecker         kill switch, limits, loss streak, funds, risk state
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  → OrderRouter → LiveOrderWorker    write-ahead journal → place → confirm fill / reconcile
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  → position management              stop, breakeven, trail, target, time stop, flatten
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  → finance/charges + ledger         per-order charges, net P&amp;L, slippage
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>  → signal journal outcome           → learning dataset → candidate → shadow → champion
+</code></pre></div>
+<p>Indicators, sizing, risk checks, order states and money are deterministic code. There is no
+LLM: the Adaptive AI's models (e.g. the swing model) only decide which qualified setups to
+take; they cannot set prices or skip any check below.</p>
+<h2 id="signal-contract">Signal contract</h2>
+<p><code>skopaq/strategy/signal.py</code> defines <code>SignalCandidate</code>. Its fields:</p>
+<ul>
+<li>ids: signal, strategy and version, model version</li>
+<li>instrument and product, direction, decision time, timeframe</li>
+<li>entry, invalidation, stop and target; holding period</li>
+<li>costs and slippage assumptions, expiry</li>
+<li>evidence: indicators, patterns, regime, data quality, higher timeframe</li>
+</ul>
+<p><code>qualify</code> rejects a setup in these cases:</p>
+<ul>
+<li>the data is stale, invalid or still forming;</li>
+<li>the stop is on the wrong side, or too tight or too wide;</li>
+<li>the regime is unreliable (when required), or a required higher-timeframe or pattern
+  confirmation is missing;</li>
+<li><strong>net</strong> reward/risk, after round-trip charges and adverse slippage on both sides, is below
+  <code>SKOPAQ_SCALP_MIN_NET_RR</code>.</li>
+</ul>
+<p>The regime and higher-timeframe filters are <strong>off</strong> by default. No out-of-sample evidence
+supports them yet, so they are recorded as evidence only.</p>
+<p><code>confidence</code> is a rule-based confirmation score, not a win probability. A model's
+calibrated probability is stored separately as <code>model_prob</code>.</p>
+<p>Every decision goes to <code>~/.skopaq/signals/YYYY-MM-DD.jsonl</code> (<code>SKOPAQ_SIGNAL_JOURNAL_DIR</code>),
+together with its later execution and outcome lines. The dashboard shows them on
+<strong>Signals &amp; risk</strong>.</p>
+<h2 id="sequential-entries-and-reconciliation">Sequential entries and reconciliation</h2>
+<p><code>skopaq/execution/entry_gate.py</code> controls BUYs:</p>
+<ul>
+<li><strong>One entry at a time.</strong> A BUY holds the gate from the safety check until the broker's
+  answer is final. Within a process this is an <code>asyncio.Lock</code>. Across processes on one host
+  in live mode it is an flock on <code>&lt;SKOPAQ_ORDER_LOCK_DIR&gt;/entry-account.lock</code>.</li>
+<li><strong>Waiting is bounded.</strong> A second entry waits <code>SKOPAQ_ENTRY_LOCK_WAIT_SECONDS</code>, then is
+  refused.</li>
+<li><strong>The lock fails closed.</strong> In live mode, an unusable lock directory refuses entries.</li>
+<li><strong>Unknown outcomes block BUYs:</strong></li>
+<li>an uncertain BUY;</li>
+<li>an own BUY still working;</li>
+<li>a journalled <code>submitting</code> line with no answer. It is written before every placement,
+    so a process killed mid-placement leaves evidence.</li>
+</ul>
+<p>An admin resolves these from the dashboard after checking the broker's order book. The
+  resolution is audited.
+- <strong>SELLs never take the gate.</strong> Protective exits keep running while entries are blocked.</p>
+<blockquote>
+<p>The lock is per host. Two machines trading one account are <strong>not</strong> coordinated. Run one
+trading host per account.</p>
+</blockquote>
+<p>Other changes in this area:</p>
+<ul>
+<li><strong>No paper fallback in live mode.</strong> A live order without a live client used to be
+  filled on paper (the MCP server). It is now refused.</li>
+<li><strong>Risk state survives restarts.</strong> Today's losing streak (<code>SKOPAQ_MAX_CONSECUTIVE_LOSSES</code>,
+  ceiling 4, can only be lowered) and the last loss time (cool-down) are seeded from stored
+  trades.</li>
+<li><strong>Fail-closed risk state.</strong> In live mode, if Supabase is configured but cannot be read,
+  new BUYs are refused.</li>
+<li><strong>Fail-closed kill switch.</strong> In live mode an unreadable <code>system_flags</code> row counts as a
+  halt for BUYs (source <code>supabase-unreadable</code>), so a halt set from another machine is never
+  missed. <code>SKOPAQ_KILL_SWITCH_FAIL_OPEN=true</code> (<code>.env</code> only) restores the old behaviour.
+  The Supabase read has a 3 s timeout and the executor refreshes it off the event loop.</li>
+<li><strong>MARKET orders are value-checked.</strong> A MARKET order carries no price, so the order value
+  cap, position size, sector concentration and funds checks use the signal's reference
+  price (the LTP or entry it was built from). A BUY with no price at all is refused.</li>
+<li><strong>Weekends and NSE holidays.</strong> The market-hours check also refuses orders on weekends and
+  on the calendar's NSE holidays plus <code>SKOPAQ_NSE_HOLIDAYS</code>.</li>
+<li><strong>Broker endpoints are locked.</strong> <code>SKOPAQ_INDSTOCKS_BASE_URL</code>, the WebSocket URLs,
+  <code>SKOPAQ_BINANCE_BASE_URL</code>, <code>SKOPAQ_SCHEDULER_PING_URL</code> and <code>SKOPAQ_UPSTASH_REDIS_URL</code>
+  cannot be changed from the dashboard: they receive the broker token, MPIN/TOTP or keys.</li>
+<li><strong>Net P&amp;L for loss limits.</strong> The loss limits record P&amp;L after estimated charges.</li>
+</ul>
+<h2 id="charges-and-net-pl">Charges and net P&amp;L</h2>
+<p><code>skopaq/finance/charges.py</code> is one versioned schedule (<code>nse-indstocks-2024-10</code>). Each rate
+carries its effective date and source. It covers intraday and delivery equity, options and
+futures, and computes the net break-even exit.</p>
+<ul>
+<li>GST is levied on brokerage + exchange + SEBI fees only.</li>
+<li>Brokerage is per order, so partial fills are never charged twice. This fixes the
+  scalper's partial exits, which used to re-charge the entry brokerage.</li>
+<li>Components the schedule does not model are listed in <code>excluded</code>.</li>
+</ul>
+<p><code>skopaq/finance/ledger.py</code> builds P&amp;L from confirmed fills only. It covers average prices,
+gross/unrealized/net P&amp;L, slippage, broker-confirmed charges and discrepancies.</p>
+<blockquote>
+<p><strong>Not yet wired:</strong> contract-note charges are not fetched from the broker. Net P&amp;L is
+labelled <em>estimated</em> until they are.</p>
+</blockquote>
+<h2 id="learning-lifecycle">Learning lifecycle</h2>
+<p>There are two separate things:</p>
+<ul>
+<li><strong>Statistical learning</strong> is <code>learning/tracker.py</code> and <code>report.py</code>.</li>
+<li><strong>Model training</strong>:</li>
+<li><code>dataset.py</code> builds point-in-time features from journal or backtest evidence. Labels
+     are the net outcome; a missing outcome is <em>unlabelled</em>, never a loss.</li>
+<li><code>check_point_in_time</code> rejects leakage.</li>
+<li>The split is chronological with an embargo; walk-forward folds are also run.</li>
+<li><code>model.py</code> is a deterministic NumPy logistic baseline.</li>
+<li><code>evaluation.py</code> measures, on the unseen test set:<ul>
+<li>net expectancy with a bootstrap CI;</li>
+<li>profit factor;</li>
+<li>drawdown;</li>
+<li>Brier vs base rate and calibration;</li>
+<li>drift (PSI).</li>
+</ul>
+</li>
+<li><code>registry.py</code> moves a model from candidate → shadow (gates passed) → champion. Promotion
+     needs <code>mandatory_paper_days_for_new_strategy</code> days in shadow plus a named admin
+     approval. Rollback is supported, and history is kept.</li>
+</ul>
+<p><code>assert_no_safety_keys</code> refuses any artifact naming a <code>SafetyRules</code> field or a hard config
+limit.</p>
+<p>To train a candidate (no orders; INDstocks token needed for candles):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>skopaq<span class="w"> </span>learn-train<span class="w"> </span>--symbols<span class="w"> </span>RELIANCE,TCS<span class="w"> </span>--days<span class="w"> </span><span class="m">20</span><span class="w"> </span>--journal
+</code></pre></div>
+<p>The swing book has its own registry (<code>skopaq swing-train</code>, <code>skopaq/swing/model.py</code>, same
+candidate → shadow → champion flow): its model <strong>does</strong> gate swing entries (paper: champion,
+else shadow; live: champion only; no model, no swing entries). For the scalper and F&amp;O
+engine the champion's probability gates entries only with the model gate on (below).</p>
+<h2 id="api-hardening">API hardening</h2>
+<ul>
+<li><code>SKOPAQ_API_TOKEN</code>, if set, is accepted as an admin bearer token (<code>dashboard_auth.py</code>);
+  everyone else logs in through Supabase Auth.</li>
+<li>Errors no longer echo exception text.</li>
+<li><code>/api/status</code> and <code>/api/portfolio</code> need a login; jobs, orders, model promotions and the
+  kill switch need an admin.</li>
+<li>In live mode, <code>/docs</code> is off by default. The API also refuses to start without dashboard
+  auth, or with <code>CORS=*</code>.</li>
+<li>The login lockout trusts only <code>SKOPAQ_TRUSTED_PROXY_HOPS</code> entries of <code>X-Forwarded-For</code>.</li>
+<li><code>POST /control/orders</code> and <code>/control/close</code> accept an <code>Idempotency-Key</code> (the dashboard
+  sends one). An identical body within 5 s is refused. This state is per process.</li>
+</ul>
+<h2 id="more-execution-safeguards">More execution safeguards</h2>
+<ul>
+<li><strong>Order lifecycle</strong> (<code>skopaq/execution/order_lifecycle.py</code>): 13 explicit states
+  (CREATED, VALIDATED, SUBMITTED, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCEL_PENDING,
+  CANCELLED, REJECTED, EXPIRED, FAILED, UNKNOWN, RECONCILIATION_REQUIRED) and the allowed
+  transitions between them.</li>
+<li>Every step is journalled: the executor writes <code>created</code>/<code>validated</code>; the worker writes
+    <code>submitting</code>, <code>placed</code>, <code>cancel_sent</code>, <code>final</code>, <code>uncertain</code>, <code>stuck</code> and <code>not_placed</code>.</li>
+<li>The lifecycle is replayed from the journal. A transition the table does not allow is
+    kept, because the broker is the truth, and flagged.</li>
+<li>The dashboard shows it on Signals &amp; risk.</li>
+<li><strong>Startup reconciliation</strong> (<code>startup_reconcile.py</code>). Before a live process's first BUY:</li>
+<li>unresolved placements are matched against the order book: one candidate → <code>reconciled</code>
+    (adopted); none → <code>reconciled_absent</code>; several → still blocking, CRITICAL alert;</li>
+<li>external orders are reported;</li>
+<li>an unreadable order book keeps entries blocked.</li>
+<li><strong>Cross-host leases</strong> (<code>lease.py</code>, <code>SKOPAQ_ACCOUNT_LEASE_ENABLED</code>, Upstash Redis):</li>
+<li>an entry lease is held inside the host flock;</li>
+<li>a daemon session lease makes a competing session on another host refuse to start, with
+    a CRITICAL alert;</li>
+<li>if Redis is enabled but unreachable, entries are refused.</li>
+<li><strong>Open losses count:</strong> unrealized losses (never gains) count toward the daily loss stop.</li>
+<li><strong>Alerts:</strong> each alert carries an incident id and the action to take:</li>
+<li>entry blocked by reconciliation, risk state, daily/weekly/monthly lockout, loss streak or
+    kill switch;</li>
+<li>stale data;</li>
+<li>competing session or a lost session lease;</li>
+<li>external orders;</li>
+<li>model drift.</li>
+<li><strong>Candles:</strong> a quiet instrument's candle is closed by a timer (<code>CandleBuilder.flush</code>).
+  Duplicate ticks and late ticks for a closed candle are dropped.</li>
+</ul>
+<h2 id="strategy-coverage">Strategy coverage</h2>
+<ul>
+<li><strong>Scalper:</strong> qualified per setup.</li>
+<li><strong>F&amp;O engine:</strong> qualified on the premium, with option-specific stop bounds and spread.</li>
+<li><strong>Swing (Adaptive AI) book:</strong> BUYs are qualified on daily candles before the executor.
+  The stop is the setup's ATR stop; the target is the configured <code>SKOPAQ_MONITOR_TARGET_MODE</code>
+  target, or, when that gives none (<code>off</code>), the setup's R-multiple target
+  (<code>SKOPAQ_SWING_TARGET_RR</code>, passed as the signal's <code>agent_state["target_rr"]</code>).</li>
+</ul>
+<p>All three journal their decision, execution and outcome (swing: decision and execution).
+Spread and liquidity limits (<code>SKOPAQ_SCALP_MAX_SPREAD_PCT</code>, <code>SKOPAQ_SCALP_MAX_PARTICIPATION</code>)
+apply when quotes carry bid/ask and bars carry volume.</p>
+<p><strong>Regime-adaptive selection</strong> (<code>strategy/selector.py</code>):</p>
+<ol>
+<li><code>skopaq learn-train --regimes</code> builds a regime → strategy map from held-out trades. A
+   strategy is allowed only with at least 30 trades and a 90 % CI of net expectancy above
+   zero.</li>
+<li>The map is used only after an admin approves it, and can be rolled back.</li>
+<li>With an approved map, a regime that no strategy covers means no trade.</li>
+<li>Without one, every configured strategy runs (the fallback).</li>
+</ol>
+<p><strong>Model gate:</strong> the champion's probability is recorded on every signal, and the shadow
+model's probability too. It decides entries only with <code>SKOPAQ_*_MODEL_GATE_ENABLED=true</code>.
+LightGBM is an optional candidate (<code>--model lightgbm</code>, <code>pip install .[ml]</code>); it is stored
+as text, never as a pickle.</p>
+<p><strong>Evolution:</strong> <code>skopaq/backtest/evolve.py</code> picks RSI parameters on the first 70 % of the
+history and adopts them only if they beat the current parameters on the last 30 %. Moves are
+limited by <code>max_parameter_change_per_evolution_pct</code>.</p>
+<h2 id="charges-reconciliation">Charges reconciliation</h2>
+<p><code>skopaq/finance/reconcile.py</code> imports the broker's contract-note CSV (INDstocks has no
+contract-note API) from the dashboard or with <code>skopaq charges-reconcile</code>. It compares it with
+the journal's estimates per day and symbol and saves the report. <code>broker_quote</code> reads
+<code>GET /margin</code> charges as <em>broker-quoted</em> figures (not confirmed ones).</p>
+<h2 id="audit-trail-and-shared-state">Audit trail and shared state</h2>
+<ul>
+<li><strong>Supabase mirror:</strong> migration <code>005_trading_audit.sql</code> holds <code>signal_events</code>,
+  <code>order_events</code> (with the lifecycle state) and <code>model_events</code>, written best effort by
+  <code>skopaq/db/mirror.py</code>. It uses a bounded background queue and never delays an order.</li>
+<li><strong>Shared API state:</strong> <code>SKOPAQ_API_SHARED_STATE_ENABLED</code> puts the login lockout and the
+  duplicate-order keys in Redis, so they hold for every API replica.</li>
+</ul>
+<h2 id="gap-matrix">Gap matrix</h2>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Closed-candle entries, uncertain-placement reconcile, no blind re-send, SELL lock, no short sale, kill switch, protective exits under halt</td>
+<td>IMPLEMENTED AND VERIFIED (existing suite)</td>
+</tr>
+<tr>
+<td>Candle patterns, indicators, data quality, timer close / tick dedup, multi-timeframe, candle regime</td>
+<td>IMPLEMENTED (unit-tested)</td>
+</tr>
+<tr>
+<td>Signal qualification + journal for scalper, F&amp;O and swing; spread / liquidity checks</td>
+<td>IMPLEMENTED (unit-tested)</td>
+</tr>
+<tr>
+<td>Sequential entries (process, host, cross-host lease), write-ahead journal, startup reconciliation, 13-state lifecycle</td>
+<td>IMPLEMENTED (unit-tested; Redis lease tested with a fake client)</td>
+</tr>
+<tr>
+<td>Loss streak, restart-seeded cool-down, fail-closed risk state, open losses in the daily stop</td>
+<td>IMPLEMENTED (unit-tested)</td>
+</tr>
+<tr>
+<td>Versioned charges, per-order ledger, contract-note CSV reconciliation, broker-quoted charges</td>
+<td>IMPLEMENTED; automatic contract-note download is not possible (no INDstocks API)</td>
+</tr>
+<tr>
+<td>Learning: dataset, logistic + LightGBM, OOS gates, champion/challenger, drift monitor, regime map, evolution holdout</td>
+<td>IMPLEMENTED; model gate on live entries is OFF by default</td>
+</tr>
+<tr>
+<td>Alerts with incident id and action</td>
+<td>IMPLEMENTED</td>
+</tr>
+<tr>
+<td>Supabase audit mirror (migration 005), shared API state across replicas</td>
+<td>IMPLEMENTED (best effort / opt-in)</td>
+</tr>
+<tr>
+<td>Dashboard: signals, risk capacity, lifecycle, reconciliation, charges, models, regimes, drift, chart overlays, offline banner</td>
+<td>IMPLEMENTED; verified in a headless browser (desktop and mobile)</td>
+</tr>
+<tr>
+<td>Frontend tests</td>
+<td>IMPLEMENTED (Vitest + Testing Library; CI job)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="readiness">Readiness</h2>
+<p><strong>READY FOR PAPER TRADING.</strong> Live use needs all of the following first:</p>
+<ul>
+<li>paper sessions on real INDstocks data;</li>
+<li>at least one contract-note reconciliation;</li>
+<li>a reviewed change set;</li>
+<li>an explicit, controlled live authorization.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Apache 2.0 — data layer from TradingAgents by TauricResearch
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/Tophunt-max/Ai-IND-money-" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
