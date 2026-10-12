@@ -17,13 +17,12 @@ import pytest
 
 from skopaq.broker.models import OrderType, Position, Quote, TradingSignal
 from skopaq.execution.position_monitor import (
+    _IST,
+    _MARKET_CLOSE,
     MonitoredPosition,
     MonitorResult,
     PositionMonitor,
-    _IST,
-    _MARKET_CLOSE,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

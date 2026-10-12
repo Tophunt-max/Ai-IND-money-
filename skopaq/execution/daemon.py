@@ -31,7 +31,7 @@ import asyncio
 import logging
 import time as _time
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
@@ -352,7 +352,7 @@ class TradingDaemon:
                 try:
                     await self._client.__aexit__(None, None, None)
                 except Exception:
-                    pass
+                    logger.debug("Broker client cleanup failed", exc_info=True)
 
             # Fill recordings and the background trade notifications and order alerts go
             # out on every way out of the session — also an early return (a stop during
@@ -1041,6 +1041,7 @@ class TradingDaemon:
         )
 
         from decimal import Decimal
+
         from skopaq.broker.models import OrderType, TradingSignal
 
         for pos in open_positions:

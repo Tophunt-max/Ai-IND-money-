@@ -8,7 +8,7 @@ from datetime import date
 
 import pytest
 
-from skopaq.risk.calendar import NSEEventCalendar, _last_thursday, _all_thursdays
+from skopaq.risk.calendar import NSEEventCalendar, _all_thursdays, _last_thursday
 
 
 @pytest.fixture
@@ -207,9 +207,6 @@ class TestPriorityOverride:
 
     def test_rbi_on_thursday_is_avoid(self, calendar):
         """If an RBI date falls on Thursday, it should be AVOID, not CAUTION."""
-        rbi_thursday_dates = [
-            d for d in [date(2025, 8, 8)]  # Aug 8, 2025 is Friday actually, check
-        ]
         # Use a date we know is both RBI and Thursday
         # Let's check Feb 6, 2026 — it's a Friday. April 8, 2026 — Wednesday.
         # Just test budget day (Feb 1) — if it falls on Thursday

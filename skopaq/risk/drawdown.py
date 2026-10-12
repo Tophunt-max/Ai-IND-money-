@@ -21,8 +21,7 @@ Usage::
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import date
 from typing import Optional
 
 logger = logging.getLogger(__name__)

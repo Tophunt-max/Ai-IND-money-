@@ -189,7 +189,8 @@ def test_the_llm_jobs_are_gone(client, kind):
 
 @pytest.mark.parametrize("symbol", ["", "rel;rm -rf", "A" * 30])
 def test_backtest_rejects_bad_symbols(client, symbol):
-    r = client.post("/api/dashboard/jobs", json={"kind": "backtest", "symbol": symbol}, headers=AUTH)
+    r = client.post("/api/dashboard/jobs", json={"kind": "backtest", "symbol": symbol},
+                    headers=AUTH)
     assert r.status_code == 422
 
 
@@ -207,18 +208,29 @@ def test_unknown_job(client):
 
 
 def _quote(sym, ltp, prev=None):
-    return {"symbol": sym, "ltp": ltp, "prev_close": prev,
-            "change_pct": ((ltp - prev) / prev) if prev else None}
+    return {
+        "symbol": sym,
+        "ltp": ltp,
+        "prev_close": prev,
+        "change_pct": ((ltp - prev) / prev) if prev else None,
+    }
 
 
 def test_overview_marks_positions_to_market(client, monkeypatch):
     from skopaq.broker import yahoo_quotes
 
-    repo = _Repo([_trade(symbol="TCS", fill_price=Decimal("100")),
-                  _trade(symbol="NOPRICE", fill_price=Decimal("50"))])
+    repo = _Repo(
+        [
+            _trade(symbol="TCS", fill_price=Decimal("100")),
+            _trade(symbol="NOPRICE", fill_price=Decimal("50")),
+        ]
+    )
     monkeypatch.setattr(dashboard, "_trade_repository", lambda config: repo)
-    monkeypatch.setattr(yahoo_quotes, "get_quotes",
-                        lambda syms: ({"TCS": _quote("TCS", 110.0, 100.0)}, {"NOPRICE": "none"}))
+    monkeypatch.setattr(
+        yahoo_quotes,
+        "get_quotes",
+        lambda syms: ({"TCS": _quote("TCS", 110.0, 100.0)}, {"NOPRICE": "none"}),
+    )
     data = client.get("/api/dashboard/overview", headers=AUTH).json()
     tcs, nop = (next(p for p in data["positions"] if p["symbol"] == s) for s in ("TCS", "NOPRICE"))
     assert tcs["ltp"] == 110.0 and tcs["unrealized_pnl"] == 20.0 and tcs["market_value"] == 220.0
@@ -230,8 +242,9 @@ def test_overview_marks_positions_to_market(client, monkeypatch):
 def test_market_quotes_validates_symbols(client, monkeypatch):
     from skopaq.broker import yahoo_quotes
 
-    monkeypatch.setattr(yahoo_quotes, "get_quotes",
-                        lambda syms: ({s: _quote(s, 1.0) for s in syms}, {}))
+    monkeypatch.setattr(
+        yahoo_quotes, "get_quotes", lambda syms: ({s: _quote(s, 1.0) for s in syms}, {})
+    )
     ok = client.get("/api/dashboard/market/quotes?symbols=TCS,^NSEI", headers=AUTH)
     assert ok.status_code == 200 and set(ok.json()["quotes"]) == {"TCS", "^NSEI"}
     bad = client.get("/api/dashboard/market/quotes?symbols=TCS,rm%20-rf;", headers=AUTH)
@@ -241,12 +254,17 @@ def test_market_quotes_validates_symbols(client, monkeypatch):
 def test_market_history(client, monkeypatch):
     from skopaq.broker import yahoo_quotes
 
-    monkeypatch.setattr(yahoo_quotes, "get_history", lambda s, r: {
-        "symbol": s, "range": r, "interval": "1d", "candles": [{"t": 1, "c": 5.0}]})
+    monkeypatch.setattr(
+        yahoo_quotes,
+        "get_history",
+        lambda s, r: {"symbol": s, "range": r, "interval": "1d", "candles": [{"t": 1, "c": 5.0}]},
+    )
     r = client.get("/api/dashboard/market/history?symbol=TCS&range=1mo", headers=AUTH)
     assert r.status_code == 200 and r.json()["candles"] == [{"t": 1, "c": 5.0}]
-    assert client.get("/api/dashboard/market/history?symbol=TCS&range=9y",
-                      headers=AUTH).status_code == 422
+    assert (
+        client.get("/api/dashboard/market/history?symbol=TCS&range=9y", headers=AUTH).status_code
+        == 422
+    )
 
 
 def test_watchlist(client):
@@ -293,8 +311,11 @@ def test_scheduler_status_and_log(client, monkeypatch, tmp_path):
     (state_dir / f"daemon-{today}.started").write_text("2026-10-07T09:15:00+05:30")
     (state_dir / f"daemon-{today}.rc").write_text("0")
     (log_dir / f"daemon-{today}.log").write_text("".join(f"line {i}\n" for i in range(50)))
-    monkeypatch.setattr(dashboard, "_schedule_settings", lambda: SimpleNamespace(
-        enabled=True, mode="paper", state_dir=state_dir, log_dir=log_dir))
+    monkeypatch.setattr(
+        dashboard,
+        "_schedule_settings",
+        lambda: SimpleNamespace(enabled=True, mode="paper", state_dir=state_dir, log_dir=log_dir),
+    )
     monkeypatch.setattr(scheduler, "describe", lambda settings, now, state: ["Mode: paper"])
 
     data = client.get("/api/dashboard/scheduler", headers=AUTH).json()
@@ -304,10 +325,10 @@ def test_scheduler_status_and_log(client, monkeypatch, tmp_path):
 
     log = client.get(f"/api/dashboard/scheduler/log?day={today}&lines=10", headers=AUTH).json()
     assert log["lines"] == [f"line {i}" for i in range(40, 50)]
-    assert client.get("/api/dashboard/scheduler/log?day=2020-01-01",
-                      headers=AUTH).status_code == 404
-    assert client.get("/api/dashboard/scheduler/log?day=../etc",
-                      headers=AUTH).status_code == 422
+    assert (
+        client.get("/api/dashboard/scheduler/log?day=2020-01-01", headers=AUTH).status_code == 404
+    )
+    assert client.get("/api/dashboard/scheduler/log?day=../etc", headers=AUTH).status_code == 422
 
 
 def test_scheduler_bad_config(client, monkeypatch):
@@ -340,10 +361,19 @@ def test_market_history_moves_todays_candle_to_the_live_price(client, monkeypatc
     from skopaq.broker import yahoo_quotes
 
     t = _today_ts()
-    monkeypatch.setattr(yahoo_quotes, "get_history", lambda s, r: {
-        "symbol": "TCS", "range": r, "interval": "5m",
-        "candles": [{"t": t - 300, "o": 10, "h": 11, "l": 9, "c": 10},
-                    {"t": t, "o": 10, "h": 10.5, "l": 9.5, "c": 10}]})
+    monkeypatch.setattr(
+        yahoo_quotes,
+        "get_history",
+        lambda s, r: {
+            "symbol": "TCS",
+            "range": r,
+            "interval": "5m",
+            "candles": [
+                {"t": t - 300, "o": 10, "h": 11, "l": 9, "c": 10},
+                {"t": t, "o": 10, "h": 10.5, "l": 9.5, "c": 10},
+            ],
+        },
+    )
     _live(monkeypatch, {"symbol": "TCS", "ltp": 12.0, "source": "indstocks"})
     body = client.get("/api/dashboard/market/history?symbol=TCS&range=1d", headers=AUTH).json()
     assert body["live"] is True and body["ltp"] == 12.0
@@ -354,11 +384,28 @@ def test_market_history_moves_todays_candle_to_the_live_price(client, monkeypatc
 def test_market_history_adds_todays_daily_candle(client, monkeypatch):
     from skopaq.broker import yahoo_quotes
 
-    monkeypatch.setattr(yahoo_quotes, "get_history", lambda s, r: {
-        "symbol": "TCS", "range": r, "interval": "1d",
-        "candles": [{"t": _today_ts() - 86400, "o": 10, "h": 11, "l": 9, "c": 10}]})
-    _live(monkeypatch, {"symbol": "TCS", "ltp": 12.0, "open": 10.5, "high": 12.5, "low": 10.2,
-                        "volume": 900, "source": "indstocks"})
+    monkeypatch.setattr(
+        yahoo_quotes,
+        "get_history",
+        lambda s, r: {
+            "symbol": "TCS",
+            "range": r,
+            "interval": "1d",
+            "candles": [{"t": _today_ts() - 86400, "o": 10, "h": 11, "l": 9, "c": 10}],
+        },
+    )
+    _live(
+        monkeypatch,
+        {
+            "symbol": "TCS",
+            "ltp": 12.0,
+            "open": 10.5,
+            "high": 12.5,
+            "low": 10.2,
+            "volume": 900,
+            "source": "indstocks",
+        },
+    )
     body = client.get("/api/dashboard/market/history?symbol=TCS&range=3mo", headers=AUTH).json()
     assert len(body["candles"]) == 2 and body["live"] is True
     assert body["candles"][-1]["o"] == 10.5 and body["candles"][-1]["c"] == 12.0
@@ -369,9 +416,16 @@ def test_market_history_without_a_live_price_is_unchanged(client, monkeypatch, q
     from skopaq.broker import yahoo_quotes
 
     t = _today_ts()
-    monkeypatch.setattr(yahoo_quotes, "get_history", lambda s, r: {
-        "symbol": "TCS", "range": r, "interval": "5m",
-        "candles": [{"t": t - 300, "c": 10.0}, {"t": t, "o": 10, "h": 10, "l": 10, "c": 10}]})
+    monkeypatch.setattr(
+        yahoo_quotes,
+        "get_history",
+        lambda s, r: {
+            "symbol": "TCS",
+            "range": r,
+            "interval": "5m",
+            "candles": [{"t": t - 300, "c": 10.0}, {"t": t, "o": 10, "h": 10, "l": 10, "c": 10}],
+        },
+    )
     _live(monkeypatch, quote)
     body = client.get("/api/dashboard/market/history?symbol=TCS&range=1d", headers=AUTH).json()
     assert body["live"] is False and body["candles"][-1]["c"] == 10

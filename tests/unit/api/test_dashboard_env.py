@@ -69,7 +69,9 @@ def test_lists_settings_without_secret_values(client):
 
 
 def test_saves_and_notifies(client):
-    r = client.post(PATH, headers=AUTH, json={"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}})
+    r = client.post(
+        PATH, headers=AUTH, json={"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}}
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["changed"] == ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"] and body["live"] == []
@@ -80,12 +82,15 @@ def test_saves_and_notifies(client):
     assert "LIVE" not in client.sent[0]
 
 
-@pytest.mark.parametrize("change", [
-    {"set": {"SKOPAQ_API_TOKEN": "x"}},
-    {"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "lots"}},
-    {"set": {"NOT_OURS": "1"}},
-    {},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"set": {"SKOPAQ_API_TOKEN": "x"}},
+        {"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "lots"}},
+        {"set": {"NOT_OURS": "1"}},
+        {},
+    ],
+)
 def test_bad_changes_are_422(client, change):
     r = client.post(PATH, headers=AUTH, json=change)
     assert r.status_code == 422, r.text
@@ -107,7 +112,11 @@ def test_live_needs_confirm_live(client):
 
 def test_reset(client):
     client.post(PATH, headers=AUTH, json={"set": {"SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE": "7"}})
-    r = client.post(PATH, headers=AUTH, json={"remove": ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]})
-    assert r.status_code == 200 and r.json()["removed"] == ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]
+    r = client.post(
+        PATH, headers=AUTH, json={"remove": ["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]}
+    )
+    assert r.status_code == 200 and r.json()["removed"] == [
+        "SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"
+    ]
     item = {s["key"]: s for s in r.json()["settings"]}["SKOPAQ_DAEMON_MAX_CANDIDATES_TO_ANALYZE"]
     assert item["source"] == "default" and item["value"] == "5"

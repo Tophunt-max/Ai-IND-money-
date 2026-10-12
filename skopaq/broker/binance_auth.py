@@ -27,7 +27,7 @@ from typing import Any, Optional
 
 import httpx
 
-from skopaq.broker.models import Exchange, OrderResponse, OrderStatus, Quote, Side
+from skopaq.broker.models import Exchange, Quote
 
 logger = logging.getLogger(__name__)
 

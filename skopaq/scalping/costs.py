@@ -9,7 +9,6 @@ these several times over (``scalp_min_reward_to_cost``).
 from __future__ import annotations
 
 from skopaq.constants import GST_RATE, INDSTOCKS_BROKERAGE_PER_ORDER_INR
-
 from skopaq.finance.charges import CURRENT, EQUITY_INTRADAY
 
 # Rates from the versioned schedule (skopaq/finance/charges.py)

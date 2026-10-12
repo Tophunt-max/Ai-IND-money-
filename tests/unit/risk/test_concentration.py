@@ -7,8 +7,7 @@ using the static NIFTY 50 sector map.
 import pytest
 
 from skopaq.broker.models import Exchange, Position, Product
-from skopaq.risk.concentration import ConcentrationChecker, SECTOR_MAP, get_sector
-
+from skopaq.risk.concentration import SECTOR_MAP, ConcentrationChecker, get_sector
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

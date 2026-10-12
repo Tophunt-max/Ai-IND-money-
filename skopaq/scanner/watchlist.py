@@ -5,7 +5,6 @@ Provides a default NIFTY 50 watchlist plus support for custom lists.
 
 from __future__ import annotations
 
-
 # NIFTY 50 constituents (as of 2024 — updated periodically)
 NIFTY_50: list[str] = [
     "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",

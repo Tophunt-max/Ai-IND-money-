@@ -42,6 +42,7 @@ from skopaq.broker.order_status import parse_order_book
 from skopaq.broker.paper_engine import PaperEngine
 from skopaq.broker.scrip_resolver import resolve_security_id
 from skopaq.config import SkopaqConfig
+from skopaq.execution.entry_gate import EntryGate, entry_blockers
 from skopaq.execution.live_orders import (
     FillSettings,
     LiveOrderWorker,
@@ -51,7 +52,6 @@ from skopaq.execution.live_orders import (
     recent_exit_qty,
     uncertain_sells,
 )
-from skopaq.execution.entry_gate import EntryGate, entry_blockers
 from skopaq.execution.order_alerts import get_alerter
 from skopaq.execution.order_journal import OrderJournal
 from skopaq.execution.sell_lock import OrderLock, SellLock, lock_dir_or_none

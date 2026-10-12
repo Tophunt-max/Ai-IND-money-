@@ -72,7 +72,7 @@ class LogisticModel:
         w, b = np.zeros(d), math.log((y.mean() + 1e-9) / (1 - y.mean() + 1e-9))
         lam = self.l2 / n
         for _ in range(self.iterations):            # Newton-Raphson (IRLS)
-            p = 1 / (1 + np.exp(-(Z @ w + b)))
+            p = 1 / (1 + np.exp(-np.clip(Z @ w + b, -500, 500)))
             g_w = Z.T @ (p - y) / n + lam * w
             g_b = float(np.mean(p - y))
             s = p * (1 - p)
@@ -93,7 +93,7 @@ class LogisticModel:
         if not examples:
             return np.zeros(0)
         Z = self._prep(_matrix(examples, self.names))
-        return 1 / (1 + np.exp(-(Z @ np.array(self.weights) + self.bias)))
+        return 1 / (1 + np.exp(-np.clip(Z @ np.array(self.weights) + self.bias, -500, 500)))
 
     def predict_one(self, features: dict[str, float]) -> float:
         return float(self.predict_proba([Example(decided_at=None, features=features,  # type: ignore[arg-type]

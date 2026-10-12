@@ -10,9 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from supabase import Client, create_client
-
 from skopaq.config import SkopaqConfig
+from supabase import Client, create_client
 
 logger = logging.getLogger(__name__)
 

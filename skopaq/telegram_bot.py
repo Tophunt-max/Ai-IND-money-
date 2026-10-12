@@ -30,9 +30,7 @@ import sys
 from datetime import timezone
 from pathlib import Path
 
-
 from telegram import Update
-
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -183,14 +181,7 @@ async def cmd_quote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"Error: {result['error']}")
             return
 
-        msg = (
-            f"*{result['symbol']}* \\({result['exchange']}\\)\n\n"
-            f"LTP: Rs {result['ltp']:,.2f} \\({result['change_pct']:+.2f}%\\)\n"
-            f"Open: {result['open']:,.2f} \\| High: {result['high']:,.2f}\n"
-            f"Low: {result['low']:,.2f} \\| Close: {result['close']:,.2f}\n"
-            f"Volume: {result['volume']:,}"
-        ).replace(".", "\\.").replace("-", "\\-").replace("+", "\\+").replace("(", "\\(").replace(")", "\\)")
-        # Simpler approach — just use plain text
+        # Plain text: no MarkdownV2 escaping needed
         plain = (
             f"{result['symbol']} ({result['exchange']})\n\n"
             f"LTP: Rs {result['ltp']:,.2f} ({result['change_pct']:+.2f}%)\n"
@@ -210,7 +201,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("Fetching portfolio...")
 
     try:
-        from skopaq.mcp_server import get_positions, get_holdings, get_funds
+        from skopaq.mcp_server import get_funds, get_positions
 
         positions = json.loads(await get_positions())
         funds = json.loads(await get_funds())
@@ -250,7 +241,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Mode: {result['mode'].upper()}\n"
             f"Asset: {result['asset_class']}\n"
             f"Token: {'Valid' if result['token_valid'] else 'EXPIRED'}\n"
-            f"Swing model: {result['swing_model']['champion'] or result['swing_model']['shadow'] or 'none'}\n"
+            f"Swing model: "
+            f"{result['swing_model']['champion'] or result['swing_model']['shadow'] or 'none'}\n"
             f"Capital: Rs {result['paper_capital']:,.0f}"
         )
         await update.message.reply_text(msg)
@@ -262,10 +254,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show P&L on open positions with live quotes."""
     try:
-        from skopaq.config import SkopaqConfig
         from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.token_manager import TokenManager
         from skopaq.broker.scrip_resolver import resolve_scrip_code
+        from skopaq.broker.token_manager import TokenManager
+        from skopaq.config import SkopaqConfig
 
         config = SkopaqConfig()
         config.trading_mode = "live"
@@ -280,9 +272,11 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lines = ["Open Positions P&L:\n"]
             total_pnl = 0.0
             for p in positions:
-                sym = p.symbol if hasattr(p, 'symbol') else p.get('name', '?')
-                qty = float(p.quantity if hasattr(p, 'quantity') else p.get('net_qty', 0))
-                avg = float(p.average_price if hasattr(p, 'average_price') else p.get('avg_price', 0))
+                sym = p.symbol if hasattr(p, "symbol") else p.get("name", "?")
+                qty = float(p.quantity if hasattr(p, "quantity") else p.get("net_qty", 0))
+                avg = float(
+                    p.average_price if hasattr(p, "average_price") else p.get("avg_price", 0)
+                )
 
                 try:
                     scrip = await resolve_scrip_code(client, sym)
@@ -331,7 +325,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Parse latest values
         def extract_latest(text):
             for line in text.split("\n"):
-                if "N/A" not in line and ":" in line and "##" not in line and "values" not in line.lower():
+                if (
+                    "N/A" not in line
+                    and ":" in line
+                    and "##" not in line
+                    and "values" not in line.lower()
+                ):
                     parts = line.split(":")
                     if len(parts) >= 2:
                         try:
@@ -355,10 +354,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         elif rsi and rsi > 55 and macd and macd > 0:
             signal = "BULLISH"
 
-        msg = (
-            f"Quick Analysis: {symbol}\n\n"
-            f"RSI: {rsi:.1f}\n" if rsi else f"RSI: N/A\n"
-        )
+        msg = f"Quick Analysis: {symbol}\n\nRSI: {rsi:.1f}\n" if rsi else "RSI: N/A\n"
         msg += f"MACD: {macd:.2f}\n" if macd else "MACD: N/A\n"
         msg += f"ATR: {atr:.2f}\n" if atr else "ATR: N/A\n"
         msg += f"\nIndicators: {signal}"
@@ -368,9 +364,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         idea = sw.get("idea")
         if idea:
             p = idea.get("prob")
-            msg += (f"\n\nSwing setup: {idea['setup']} — entry {idea['entry']:.2f}, stop "
-                    f"{idea['stop']:.2f}, target {idea['target']:.2f}"
-                    + (f", P(win) {p:.2f} (threshold {sw.get('threshold')})" if p is not None else ""))
+            msg += (
+                f"\n\nSwing setup: {idea['setup']} — entry {idea['entry']:.2f}, stop "
+                f"{idea['stop']:.2f}, target {idea['target']:.2f}"
+                + (f", P(win) {p:.2f} (threshold {sw.get('threshold')})" if p is not None else "")
+            )
         else:
             msg += "\n\nSwing setup: none on the last daily bar"
 
@@ -397,8 +395,16 @@ _TOKEN_HELP = (
 )
 
 _SCAN_SYMBOLS = (
-    "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
-    "SBIN", "LT", "BHARTIARTL", "WIPRO", "NTPC",
+    "RELIANCE",
+    "HDFCBANK",
+    "ICICIBANK",
+    "INFY",
+    "TCS",
+    "SBIN",
+    "LT",
+    "BHARTIARTL",
+    "WIPRO",
+    "NTPC",
 )
 
 
@@ -447,7 +453,8 @@ async def job_pre_market_token(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     health = _token_health()
     text = (
-        "Good morning! " + _token_text(health)
+        "Good morning! "
+        + _token_text(health)
         + ("\nMarket opens at 9:15 IST. Auto-scan at 9:25." if health.valid else "")
     )
     for chat_id in list(alert_chat_ids):
@@ -471,8 +478,10 @@ async def _scan_quotes(symbols) -> list[dict]:
         if not codes:
             return []
         quotes = await client.get_quotes(list(codes), symbols=list(codes.values()))
-    return [{"symbol": q.symbol, "ltp": q.ltp, "change_pct": q.change_pct,
-             "volume": q.volume} for q in quotes]
+    return [
+        {"symbol": q.symbol, "ltp": q.ltp, "change_pct": q.change_pct, "volume": q.volume}
+        for q in quotes
+    ]
 
 
 async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -575,13 +584,16 @@ async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ideas = data.get("ideas") or []
         if not ideas:
             await update.message.reply_text(
-                f"No swing ideas today (model: {data.get('model') or 'none'}).")
+                f"No swing ideas today (model: {data.get('model') or 'none'})."
+            )
             return
         lines = [f"Swing ideas · model {data.get('model')} ({data.get('model_state')})"]
         for i in ideas:
             p = i.get("prob")
-            lines.append(f"{i['symbol']}: {i['setup']} @ {i['entry']:.2f} SL {i['stop']:.2f} "
-                         f"TG {i['target']:.2f}" + (f" P {p:.2f}" if p is not None else ""))
+            lines.append(
+                f"{i['symbol']}: {i['setup']} @ {i['entry']:.2f} SL {i['stop']:.2f} "
+                f"TG {i['target']:.2f}" + (f" P {p:.2f}" if p is not None else "")
+            )
         await update.message.reply_text("\n".join(lines))
     except Exception as exc:
         logger.exception("Swing ideas failed")
@@ -619,8 +631,10 @@ def main() -> None:
 
     allowed = _allowed_chat_ids()
     if not allowed:
-        print("Warning: SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS is empty — the bot answers "
-              "nobody. Send it /start to learn your chat ID.")
+        print(
+            "Warning: SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS is empty — the bot answers "
+            "nobody. Send it /start to learn your chat ID."
+        )
     # Allow-listed chats get scheduled alerts without re-sending /start after a restart.
     alert_chat_ids.update(allowed)
 
@@ -631,10 +645,17 @@ def main() -> None:
     # Register command handlers
     # Every handler is limited to SKOPAQ_TELEGRAM_ALLOWED_CHAT_IDS.
     for name, handler in (
-        ("start", cmd_start), ("help", cmd_help), ("quote", cmd_quote),
-        ("portfolio", cmd_portfolio), ("status", cmd_status), ("pnl", cmd_pnl),
-        ("analyze", cmd_analyze), ("token", cmd_token), ("halt", cmd_halt),
-        ("resume", cmd_resume), ("ideas", cmd_ideas),
+        ("start", cmd_start),
+        ("help", cmd_help),
+        ("quote", cmd_quote),
+        ("portfolio", cmd_portfolio),
+        ("status", cmd_status),
+        ("pnl", cmd_pnl),
+        ("analyze", cmd_analyze),
+        ("token", cmd_token),
+        ("halt", cmd_halt),
+        ("resume", cmd_resume),
+        ("ideas", cmd_ideas),
     ):
         app.add_handler(CommandHandler(name, authorized(handler)))
 

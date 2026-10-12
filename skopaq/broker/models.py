@@ -19,7 +19,6 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator, model_vali
 
 from skopaq.constants import INDSTOCKS_BROKERAGE_PER_ORDER_INR
 
-
 # ── Enums ───────────────────────────────────────────────────────────────────
 
 

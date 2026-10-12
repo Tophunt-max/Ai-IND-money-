@@ -11,7 +11,6 @@ import pytest
 
 from skopaq.risk.drawdown import DrawdownTracker
 
-
 # ── Mock Supabase client ──────────────────────────────────────────────────────
 
 

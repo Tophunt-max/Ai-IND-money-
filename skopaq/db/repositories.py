@@ -12,8 +12,6 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from supabase import Client
-
 from skopaq.db.models import (
     AgentMemoryRecord,
     DailySnapshotRecord,
@@ -22,6 +20,7 @@ from skopaq.db.models import (
     StrategyVersionRecord,
     TradeRecord,
 )
+from supabase import Client
 
 logger = logging.getLogger(__name__)
 
@@ -338,13 +337,12 @@ class HealingRepository:
         result = self._client.table(self._table).insert(data).execute()
         return HealingEventRecord(**result.data[0]) if result.data else event
 
-    def get_recent(self, limit: int = 50, component: Optional[str] = None) -> list[HealingEventRecord]:
+    def get_recent(
+        self, limit: int = 50, component: Optional[str] = None,
+    ) -> list[HealingEventRecord]:
         """Get recent healing events."""
         query = (
-            self._client.table(self._table)
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
+            self._client.table(self._table).select("*").order("created_at", desc=True).limit(limit)
         )
         if component:
             query = query.eq("component", component)
@@ -376,15 +374,13 @@ class SnapshotRepository:
     def upsert(self, snapshot: DailySnapshotRecord) -> DailySnapshotRecord:
         """Insert or update a daily snapshot (unique on user_id + date)."""
         data = _clean_for_insert(snapshot.model_dump())
-        result = (
-            self._client.table(self._table)
-            .upsert(data, on_conflict="user_id,date")
-            .execute()
-        )
+        result = self._client.table(self._table).upsert(data, on_conflict="user_id,date").execute()
         return DailySnapshotRecord(**result.data[0]) if result.data else snapshot
 
     def get_range(
-        self, start_date: date, end_date: date,
+        self,
+        start_date: date,
+        end_date: date,
     ) -> list[DailySnapshotRecord]:
         """Get snapshots for a date range."""
         result = (
@@ -400,11 +396,7 @@ class SnapshotRepository:
     def get_latest(self) -> Optional[DailySnapshotRecord]:
         """Get the most recent daily snapshot."""
         result = (
-            self._client.table(self._table)
-            .select("*")
-            .order("date", desc=True)
-            .limit(1)
-            .execute()
+            self._client.table(self._table).select("*").order("date", desc=True).limit(1).execute()
         )
         if result.data:
             return DailySnapshotRecord(**result.data[0])
@@ -432,31 +424,17 @@ class MemoryRepository:
         Uses the ``UNIQUE(user_id, role)`` constraint for atomic upsert.
         """
         data = _clean_for_insert(record.model_dump())
-        result = (
-            self._client.table(self._table)
-            .upsert(data, on_conflict="user_id,role")
-            .execute()
-        )
+        result = self._client.table(self._table).upsert(data, on_conflict="user_id,role").execute()
         return AgentMemoryRecord(**result.data[0]) if result.data else record
 
     def get_all_roles(self) -> list[AgentMemoryRecord]:
         """Fetch all memory records for the current user."""
-        result = (
-            self._client.table(self._table)
-            .select("*")
-            .execute()
-        )
+        result = self._client.table(self._table).select("*").execute()
         return [AgentMemoryRecord(**row) for row in (result.data or [])]
 
     def get_by_role(self, role: str) -> Optional[AgentMemoryRecord]:
         """Fetch a single role's memory."""
-        result = (
-            self._client.table(self._table)
-            .select("*")
-            .eq("role", role)
-            .limit(1)
-            .execute()
-        )
+        result = self._client.table(self._table).select("*").eq("role", role).limit(1).execute()
         if result.data:
             return AgentMemoryRecord(**result.data[0])
         return None
@@ -469,10 +447,5 @@ class MemoryRepository:
         """
         if not ids:
             return 0
-        result = (
-            self._client.table(self._table)
-            .delete()
-            .in_("id", [str(i) for i in ids])
-            .execute()
-        )
+        result = self._client.table(self._table).delete().in_("id", [str(i) for i in ids]).execute()
         return len(result.data or [])

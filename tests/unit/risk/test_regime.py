@@ -7,12 +7,12 @@ and position scale matrix lookup.
 import pytest
 
 from skopaq.risk.regime import (
-    MarketRegime,
-    RegimeDetector,
+    _SCALE_MATRIX,
     VIX_HIGH_THRESHOLD,
     VIX_LOW_THRESHOLD,
     VIX_NORMAL_THRESHOLD,
-    _SCALE_MATRIX,
+    MarketRegime,
+    RegimeDetector,
 )
 
 

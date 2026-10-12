@@ -48,7 +48,6 @@ from skopaq.broker.models import (
     OrderResponse,
     Position,
     Quote,
-    Segment,
     UserProfile,
 )
 from skopaq.broker.order_status import normalise_status

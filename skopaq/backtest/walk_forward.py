@@ -187,7 +187,8 @@ def format_wfo_report(result: WFOResult) -> str:
         f"Periods: {result.total_periods}",
         "",
         "Aggregate:",
-        f"  WFE: {result.wfe_pct:.1f}% {'PASS' if result.wfe_pct >= 70 else 'FAIL' if result.wfe_pct < 50 else 'MARGINAL'}",
+        f"  WFE: {result.wfe_pct:.1f}% "
+        f"{'PASS' if result.wfe_pct >= 70 else 'FAIL' if result.wfe_pct < 50 else 'MARGINAL'}",
         f"  Avg OOS Return: {result.avg_oos_return:+.2f}%",
         f"  Avg OOS Sharpe: {result.avg_oos_sharpe}",
         f"  Consistency: {result.consistency_pct:.0f}% periods profitable",

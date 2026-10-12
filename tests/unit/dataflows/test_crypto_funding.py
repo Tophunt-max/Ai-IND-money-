@@ -1,14 +1,14 @@
 """Tests for funding rate data fetching (mocked HTTP)."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from tradingagents.dataflows.vendors.crypto_funding import (
     get_funding_rates,
-    get_open_interest,
     get_long_short_ratio,
+    get_open_interest,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -27,14 +27,40 @@ MOCK_OPEN_INTEREST = {
 }
 
 MOCK_OI_HISTORY = [
-    {"sumOpenInterest": "84000.000", "sumOpenInterestValue": "5670000000.00", "timestamp": 1699913600000},
-    {"sumOpenInterest": "85000.123", "sumOpenInterestValue": "5737500000.00", "timestamp": 1699917200000},
+    {
+        "sumOpenInterest": "84000.000",
+        "sumOpenInterestValue": "5670000000.00",
+        "timestamp": 1699913600000,
+    },
+    {
+        "sumOpenInterest": "85000.123",
+        "sumOpenInterestValue": "5737500000.00",
+        "timestamp": 1699917200000,
+    },
 ]
 
 MOCK_LONG_SHORT_RATIO = [
-    {"symbol": "BTCUSDT", "longShortRatio": "1.2500", "longAccount": "0.5556", "shortAccount": "0.4444", "timestamp": 1700000000000},
-    {"symbol": "BTCUSDT", "longShortRatio": "1.1000", "longAccount": "0.5238", "shortAccount": "0.4762", "timestamp": 1700003600000},
-    {"symbol": "BTCUSDT", "longShortRatio": "0.8500", "longAccount": "0.4595", "shortAccount": "0.5405", "timestamp": 1700007200000},
+    {
+        "symbol": "BTCUSDT",
+        "longShortRatio": "1.2500",
+        "longAccount": "0.5556",
+        "shortAccount": "0.4444",
+        "timestamp": 1700000000000,
+    },
+    {
+        "symbol": "BTCUSDT",
+        "longShortRatio": "1.1000",
+        "longAccount": "0.5238",
+        "shortAccount": "0.4762",
+        "timestamp": 1700003600000,
+    },
+    {
+        "symbol": "BTCUSDT",
+        "longShortRatio": "0.8500",
+        "longAccount": "0.4595",
+        "shortAccount": "0.5405",
+        "timestamp": 1700007200000,
+    },
 ]
 
 
