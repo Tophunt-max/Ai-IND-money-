@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,17 +63,39 @@ class TokenManager:
         if self._fernet is not None:
             return self._fernet
 
-        TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+        # SKOPAQ_TOKEN_ENCRYPTION_KEY keeps the key off the disk that holds token.enc
+        # (a copied volume or backup then cannot decrypt the token)
+        TOKEN_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        env_key = os.environ.get("SKOPAQ_TOKEN_ENCRYPTION_KEY", "").strip()
+        if env_key:
+            self._fernet = Fernet(env_key.encode())
+            return self._fernet
 
-        if KEY_FILE.exists():
-            key = KEY_FILE.read_bytes()
+        try:
+            # O_EXCL: two processes starting together cannot each write a different key,
+            # and the file is never readable by others, even briefly
+            fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            key = self._read_key()
         else:
             key = Fernet.generate_key()
-            KEY_FILE.write_bytes(key)
-            KEY_FILE.chmod(0o600)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(key)
 
         self._fernet = Fernet(key)
         return self._fernet
+
+    @staticmethod
+    def _read_key() -> bytes:
+        """The key file's contents; waits briefly if another process is still writing it."""
+        import time
+
+        for _ in range(20):
+            key = KEY_FILE.read_bytes().strip()
+            if key:
+                return key
+            time.sleep(0.05)
+        raise RuntimeError(f"Token key file {KEY_FILE} is empty")
 
     def set_token(self, token: str, ttl_hours: float = 24.0) -> None:
         """Encrypt and store a new API token.
@@ -90,12 +113,12 @@ class TokenManager:
         })
         encrypted = fernet.encrypt(payload.encode())
         # Atomic: every container reads this file on each request, and a half-written one
-        # would read as "no token" in the middle of a session
-        import os
-
+        # would read as "no token" in the middle of a session. Created 0600 from the start.
         tmp = TOKEN_FILE.with_name(TOKEN_FILE.name + ".tmp")
-        tmp.write_bytes(encrypted)
-        tmp.chmod(0o600)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(encrypted)
+        os.chmod(tmp, 0o600)  # an existing tmp file keeps its old mode under O_TRUNC
         os.replace(tmp, TOKEN_FILE)
         self._warned_thresholds.clear()
         logger.info("Token stored, expires at %s", expires_at.isoformat())
@@ -154,7 +177,8 @@ class TokenManager:
         if not TOKEN_FILE.exists():
             if env_token:
                 return self._env_health(env_token)
-            return TokenHealth(valid=False, warning="No token stored. Run: skopaq token set <token>")
+            return TokenHealth(valid=False,
+                               warning="No token stored. Run: skopaq token set <token>")
 
         try:
             fernet = self._ensure_key()

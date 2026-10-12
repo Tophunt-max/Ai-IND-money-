@@ -14,8 +14,11 @@ Trading is halted if any of these says so:
   every process and machine (migration ``003_system_flags.sql``).
 
 ``skopaq halt`` writes the file and the Supabase row; ``skopaq resume``
-clears both. A failed Supabase read is logged and does not halt trading on
-its own; the file and env var still work without it.
+clears both. A failed Supabase read is logged. In paper mode it does not halt
+trading on its own; in **live** mode it does (fail closed: a halt set from
+another machine must not be missed because Supabase cannot be read), unless
+``SKOPAQ_KILL_SWITCH_FAIL_OPEN=true`` is set in ``.env``. Either way SELLs stay
+allowed, so positions can still be protected.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +38,12 @@ logger = logging.getLogger(__name__)
 HALT_FLAG_KEY = "trading_halt"
 _CACHE_SECONDS = 5.0
 _cache: Optional[tuple[float, "HaltStatus"]] = None
+_cache_lock = threading.Lock()
+# Seconds a Supabase read may take: status() runs on the order path
+_SUPABASE_TIMEOUT_SECONDS = 3
+# One Supabase client per (url, key), reused across reads
+_clients: dict[tuple[str, str], object] = {}
+_clients_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -66,10 +76,34 @@ def _flags(config):
     if not config.supabase_url or not config.supabase_service_key.get_secret_value():
         return None
     from skopaq.db.repositories import SystemFlagRepository
+
+    key = (config.supabase_url, config.supabase_service_key.get_secret_value())
+    with _clients_lock:
+        client = _clients.get(key)
+        if client is None:
+            client = _clients[key] = _create_client(*key)
+    return SystemFlagRepository(client)
+
+
+def _create_client(url: str, service_key: str):
     from supabase import create_client
 
-    client = create_client(config.supabase_url, config.supabase_service_key.get_secret_value())
-    return SystemFlagRepository(client)
+    try:
+        from supabase import ClientOptions
+
+        options = ClientOptions(postgrest_client_timeout=_SUPABASE_TIMEOUT_SECONDS)
+        return create_client(url, service_key, options=options)
+    except (ImportError, TypeError):  # an older supabase-py without ClientOptions
+        return create_client(url, service_key)
+
+
+def _fails_closed(config) -> bool:
+    """Whether an unreadable Supabase flag counts as halted: live mode, unless
+    ``SKOPAQ_KILL_SWITCH_FAIL_OPEN`` is set."""
+    if getattr(config, "trading_mode", "paper") != "live":
+        return False
+    return os.environ.get("SKOPAQ_KILL_SWITCH_FAIL_OPEN", "").strip().lower() not in (
+        "1", "true", "yes", "on")
 
 
 def _file_status() -> Optional[HaltStatus]:
@@ -88,6 +122,11 @@ def _supabase_status(config) -> Optional[HaltStatus]:
         flags = _flags(config)
         value = flags.get(HALT_FLAG_KEY) if flags is not None else None
     except Exception:
+        if _fails_closed(config):
+            logger.error("Could not read the kill switch from Supabase: BUYs are halted "
+                         "until it can be read (live mode fails closed)", exc_info=True)
+            return HaltStatus(True, "the kill switch could not be read from Supabase "
+                              "(live mode fails closed)", "", "supabase-unreadable")
         logger.warning("Could not read the kill switch from Supabase", exc_info=True)
         return None
     if not value or not value.get("halted"):
@@ -98,8 +137,10 @@ def _supabase_status(config) -> Optional[HaltStatus]:
 def status(use_cache: bool = True) -> HaltStatus:
     """Whether trading is halted, from the env var, halt file or Supabase."""
     global _cache
-    if use_cache and _cache is not None and time.monotonic() - _cache[0] < _CACHE_SECONDS:
-        return _cache[1]
+    with _cache_lock:
+        cached = _cache
+    if use_cache and cached is not None and time.monotonic() - cached[0] < _CACHE_SECONDS:
+        return cached[1]
 
     try:
         config = _config()
@@ -113,8 +154,20 @@ def status(use_cache: bool = True) -> HaltStatus:
     else:
         result = _file_status() or (config and _supabase_status(config)) or result
 
-    _cache = (time.monotonic(), result)
+    with _cache_lock:
+        _cache = (time.monotonic(), result)
     return result
+
+
+async def status_async(use_cache: bool = True) -> HaltStatus:
+    """``status()`` off the event loop: the Supabase read is blocking network I/O."""
+    import asyncio
+
+    with _cache_lock:
+        cached = _cache
+    if use_cache and cached is not None and time.monotonic() - cached[0] < _CACHE_SECONDS:
+        return cached[1]
+    return await asyncio.to_thread(status, use_cache)
 
 
 def halt(reason: str, by: str = "") -> list[str]:
@@ -161,9 +214,14 @@ def resume(by: str = "") -> list[str]:
     global _cache
     cleared = []
     path = halt_file()
-    if path.exists():
+    try:
         path.unlink()
         cleared.append(str(path))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Still clear the Supabase row below; status() keeps reporting the file's halt
+        logger.error("Could not remove the halt file %s", path, exc_info=True)
     try:
         flags = _flags(_config())
         if flags is not None:

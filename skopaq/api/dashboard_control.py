@@ -179,7 +179,11 @@ async def control_stream(request: Request) -> StreamingResponse:
                 data = await asyncio.to_thread(_status)
                 yield f"data: {json.dumps(data, default=str)}\n\n"
             except Exception as exc:
-                yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                # Details (paths, hosts) go to the log, not to the browser
+                logger.warning("Status stream read failed", exc_info=True)
+                yield ("event: error\ndata: "
+                       f"{json.dumps({'error': f'status unavailable ({type(exc).__name__})'})}"
+                       "\n\n")
             await asyncio.sleep(_STREAM_EVERY_S)
 
     return StreamingResponse(events(), media_type="text/event-stream",
