@@ -128,7 +128,7 @@ Details: [Trading Pipeline](docs/architecture/pipeline.md) · [Swing Trading](do
 
 ### Blockchain Infrastructure
 
-SkopaqTrader includes blockchain modules for crypto (`SKOPAQ_ASSET_CLASS=crypto`):
+SkopaqTrader includes **experimental** blockchain modules for crypto (`SKOPAQ_ASSET_CLASS=crypto`). They are covered by tests but not yet wired into the trading pipeline: there is no live crypto order path.
 
 | Feature | Module | Description |
 |---------|--------|-------------|
@@ -263,7 +263,9 @@ Ai-IND-money-/
 ## Security
 
 - **No secrets in the repository.** All tokens and credentials are loaded from environment variables via `.env` (gitignored).
-- **INDstocks tokens** are stored encrypted in `~/.skopaq/` and validated before every session.
+- **INDstocks tokens** are stored Fernet-encrypted in `~/.skopaq/token.enc` (mode 0600) and validated before every session. By default the key sits beside it in `token.key`; set `SKOPAQ_TOKEN_ENCRYPTION_KEY` to keep the key off that volume.
+- **Broker endpoints are locked** — the INDstocks/Binance base and WebSocket URLs cannot be changed from the dashboard, so the token and MPIN/TOTP cannot be redirected to another host.
+- **Fail-closed kill switch** — in live mode an unreadable Supabase halt flag halts new BUYs.
 - **Immutable safety rules** in `skopaq/constants.py` enforce position limits, order value caps and rate limits that cannot be overridden at runtime — by settings or by any model.
 - **Model bundles** load only after their SHA-256 manifest verifies; nothing is unpickled.
 - **Live trading double-gate** — live sessions need `--live --confirm-live` (or the scheduler's `SKOPAQ_SCHEDULER_CONFIRM_LIVE`), and swing entries need an admin-promoted champion.

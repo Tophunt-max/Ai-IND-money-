@@ -23,9 +23,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Dependencies first: rebuilt only when pyproject.toml changes.
-COPY pyproject.toml ./
-RUN pip install -e ".[deploy]"
+# Dependencies first: rebuilt only when pyproject.toml or the lock changes. requirements.lock
+# pins every package (reproducible builds); regenerate it after changing a dependency:
+#     uv pip compile pyproject.toml --extra deploy --universal --python-version 3.11 -o requirements.lock
+COPY pyproject.toml requirements.lock ./
+RUN pip install -c requirements.lock -e ".[deploy]"
 
 # Application code, then the project itself (its dependencies are already installed).
 COPY . .

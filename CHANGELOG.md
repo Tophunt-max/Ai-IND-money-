@@ -6,6 +6,29 @@ All notable changes to SkopaqTrader. The format follows
 
 ## [Unreleased]
 
+### Security — hardening
+
+- **Broker endpoints locked from the dashboard.** `SKOPAQ_INDSTOCKS_BASE_URL`, the INDstocks
+  WebSocket URLs, `SKOPAQ_BINANCE_BASE_URL`, `SKOPAQ_SCHEDULER_PING_URL` and
+  `SKOPAQ_UPSTASH_REDIS_URL` are `.env`-only, so an admin session cannot redirect the
+  token or the MPIN/TOTP to another host.
+- **MARKET orders get the value checks.** The order value cap, position size, sector
+  concentration and funds checks use the signal's reference price when the order has none;
+  a BUY with no price at all is refused.
+- **Kill switch fails closed in live mode** when Supabase cannot be read
+  (`SKOPAQ_KILL_SWITCH_FAIL_OPEN=true` to opt out); one reused client with a 3 s timeout,
+  refreshed off the event loop; `resume()` survives an unremovable halt file.
+- **Market hours** refuse weekends and NSE holidays.
+- **Token storage:** key and token files are created 0600 atomically (no race between two
+  processes); optional `SKOPAQ_TOKEN_ENCRYPTION_KEY` keeps the key off the volume.
+- **API:** `/health` gives the mode and token state only to callers on the host; error
+  details stay in the log; login rows use a small thread pool and a bounded dedup set;
+  FastAPI lifespan instead of the deprecated `on_event`.
+- **Dependencies:** Next.js 16, React 19, Tailwind CSS 4, Vitest 5 (`npm audit`: 0
+  vulnerabilities); `requirements.lock` pins the Docker image's Python packages.
+- Silent `except: pass` sites now log at debug; sigmoid overflow warnings fixed; ruff clean
+  for `skopaq/` and `tests/`.
+
 ### Removed — one AI: the Adaptive AI
 
 - **The LLM / API AI is gone.** The LangGraph multi-agent pipeline (`skopaq/graph`,
