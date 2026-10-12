@@ -123,7 +123,7 @@ export default function LearningPage() {
                 <div className="flex h-40 items-end gap-1.5">
                   {data.timing!.map((t, i) => (
                     <div key={i} className="flex flex-1 flex-col items-center gap-1" title={`${t.trades} trades · ${p1(t.win_rate)}`}>
-                      <div className="w-full rounded-t-md bg-gradient-to-t from-brand-600 to-cyan-400" style={{ height: `${Math.max(4, Number(t.win_rate) || 0)}%` }} />
+                      <div className="w-full rounded-t-md bg-linear-to-t from-brand-600 to-cyan-400" style={{ height: `${Math.max(4, Number(t.win_rate) || 0)}%` }} />
                       <span className="num text-[10px] text-gray-500">{t.hour}</span>
                     </div>
                   ))}

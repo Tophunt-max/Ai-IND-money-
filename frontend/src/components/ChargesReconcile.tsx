@@ -48,7 +48,7 @@ export default function ChargesReconcile() {
       {isAdmin && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files?.[0])}
-            className="text-xs text-gray-400 file:mr-2 file:rounded-lg file:border-0 file:bg-white/[0.06] file:px-3 file:py-1.5 file:text-gray-200" />
+            className="text-xs text-gray-400 file:mr-2 file:rounded-lg file:border-0 file:bg-white/6 file:px-3 file:py-1.5 file:text-gray-200" />
           <Button size="sm" loading={busy} disabled={csv.length < 10} onClick={send}>Reconcile last 7 days</Button>
         </div>
       )}

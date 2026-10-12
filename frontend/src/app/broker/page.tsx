@@ -109,7 +109,7 @@ export default function BrokerPage() {
           right={ind && <Badge tone={ind.valid ? "ok" : "error"} dot>{ind.valid ? "Connected" : "No token"}</Badge>}>
           {!ind ? <div className="space-y-3"><Skeleton /><Skeleton className="h-4 w-2/3" /></div> : (
             <div className="space-y-5">
-              <div className="flex items-center gap-4 rounded-xl bg-white/[0.03] p-4 ring-1 ring-white/[0.06]">
+              <div className="flex items-center gap-4 rounded-xl bg-white/3 p-4 ring-1 ring-white/6">
                 <StatusIcon ok={ind.valid} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">{ind.valid ? "Token valid" : "No valid token"}</div>
@@ -128,7 +128,7 @@ export default function BrokerPage() {
               ]} />
               {ind.warning && ind.valid && <Notice tone="warning">{ind.warning}</Notice>}
 
-              <div className="space-y-3 border-t border-white/[0.06] pt-5">
+              <div className="space-y-3 border-t border-white/6 pt-5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium text-white">Automatic daily token (TOTP)</div>
@@ -161,7 +161,7 @@ export default function BrokerPage() {
               </div>
 
               {isAdmin ? (
-                <form onSubmit={save} className="space-y-3 border-t border-white/[0.06] pt-5">
+                <form onSubmit={save} className="space-y-3 border-t border-white/6 pt-5">
                   <Field label="New token" hint="INDstocks app/web → API → generate today's token. Stored encrypted, never shown again.">
                     <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)}
                       placeholder="Paste the bearer token" className="field font-mono" />

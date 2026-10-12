@@ -266,7 +266,7 @@ export function Donut({ slices, size = 120, center }: { slices: Slice[]; size?: 
       <ul className="min-w-0 space-y-1 text-xs">
         {slices.map((s) => (
           <li key={s.label} className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: s.color }} />
+            <span className="h-2.5 w-2.5 shrink-0 rounded-xs" style={{ background: s.color }} />
             <span className="truncate text-gray-400">{s.label}</span>
             <span className="num ml-auto pl-2 font-semibold text-gray-100">{s.v}</span>
             <span className="num w-10 text-right text-gray-500">{total ? `${Math.round((s.v / total) * 100)}%` : ""}</span>

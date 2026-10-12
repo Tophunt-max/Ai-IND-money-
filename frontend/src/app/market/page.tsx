@@ -60,7 +60,7 @@ function Flash({ value, children }: { value: number | null | undefined; children
     prev.current = value;
   }, [value]);
   return (
-    <span className={`rounded px-0.5 transition-colors duration-700 ${dir === "up" ? "bg-emerald-500/25" : dir === "down" ? "bg-rose-500/25" : "bg-transparent"}`}>
+    <span className={`rounded-sm px-0.5 transition-colors duration-700 ${dir === "up" ? "bg-emerald-500/25" : dir === "down" ? "bg-rose-500/25" : "bg-transparent"}`}>
       {children}
     </span>
   );
@@ -107,15 +107,15 @@ function Watchlist({ go, every }: { go: (s: string) => void; every: number }) {
 
   return (
     <section className="surface overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] p-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/6 p-2.5">
         <Segmented size="sm" value={tab} onChange={setTab}
           options={[{ value: "nifty", label: "NIFTY 50" }, { value: "mine", label: `My list (${mine.list.length})` }]} />
         <Segmented size="sm" value={sort} onChange={setSort} options={SORTS} />
       </div>
-      <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-2">
+      <div className="flex items-center gap-2 border-b border-white/6 px-3 py-2">
         <Search className="h-3.5 w-3.5 text-gray-500" />
         <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter"
-          className="w-full bg-transparent text-sm text-gray-100 outline-none placeholder:text-gray-600" />
+          className="w-full bg-transparent text-sm text-gray-100 outline-hidden placeholder:text-gray-600" />
         {Object.keys(quotes).length > 0 && (
           <span className="num shrink-0 text-[10px] text-gray-500">
             <span className="text-emerald-400">{adv} up</span> · <span className="text-rose-400">{dec} down</span> · {ago}
@@ -126,10 +126,10 @@ function Watchlist({ go, every }: { go: (s: string) => void; every: number }) {
       {tab === "mine" && mine.list.length === 0 ? (
         <p className="px-3 py-8 text-center text-sm text-gray-500">Tap ☆ on a stock to add it to your list.</p>
       ) : (
-        <ul className="divide-y divide-white/[0.04]">
+        <ul className="divide-y divide-white/4">
           {rows.map(({ s, q }) => (
             <li key={s}>
-              <button type="button" onClick={() => go(s)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.03] active:bg-white/[0.06]">
+              <button type="button" onClick={() => go(s)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/3 active:bg-white/6">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-semibold text-gray-100">{s}</div>
                   <div className="num text-[10px] text-gray-500">{q ? `NSE · H ${q.high?.toFixed(2) ?? "—"} L ${q.low?.toFixed(2) ?? "—"}` : "NSE"}</div>
@@ -168,7 +168,7 @@ function Detail({ symbol, every, back }: { symbol: string; every: number; back: 
       <ErrorBox error={quote.error || qErr} />
       <section className="surface p-3 sm:p-4">
         <div className="flex items-start gap-2">
-          <button type="button" onClick={back} aria-label="Back to the watchlist" className="-ml-1 rounded-md p-1 text-gray-400 hover:bg-white/[0.06] hover:text-white lg:hidden">
+          <button type="button" onClick={back} aria-label="Back to the watchlist" className="-ml-1 rounded-md p-1 text-gray-400 hover:bg-white/6 hover:text-white lg:hidden">
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div className="min-w-0 flex-1">
@@ -177,7 +177,7 @@ function Detail({ symbol, every, back }: { symbol: string; every: number; back: 
               <span className="text-[10px] font-semibold uppercase text-gray-500">{isIndex ? "Index" : "NSE"}</span>
               {!isIndex && (
                 <button type="button" onClick={() => mine.toggle(symbol)} aria-label={mine.has(symbol) ? "Remove from my list" : "Add to my list"}
-                  className={cx("rounded p-0.5", mine.has(symbol) ? "text-amber-300" : "text-gray-600 hover:text-gray-300")}>
+                  className={cx("rounded-sm p-0.5", mine.has(symbol) ? "text-amber-300" : "text-gray-600 hover:text-gray-300")}>
                   <Star className="h-4 w-4" fill={mine.has(symbol) ? "currentColor" : "none"} />
                 </button>
               )}
@@ -199,7 +199,7 @@ function Detail({ symbol, every, back }: { symbol: string; every: number; back: 
           </div>
         </div>
         {q && (
-          <div className="num mt-3 grid grid-cols-4 gap-2 border-t border-white/[0.06] pt-3 text-[11px]">
+          <div className="num mt-3 grid grid-cols-4 gap-2 border-t border-white/6 pt-3 text-[11px]">
             {[["Open", q.open], ["High", q.high], ["Low", q.low], ["Prev", q.prev_close]].map(([k, v]) => (
               <div key={k as string}><div className="text-[10px] uppercase text-gray-500">{k}</div><div className="font-semibold text-gray-100">{fmt(v as number | null)}</div></div>
             ))}
@@ -207,8 +207,8 @@ function Detail({ symbol, every, back }: { symbol: string; every: number; back: 
         )}
         {range != null && (
           <div className="mt-2">
-            <div className="relative h-1 rounded-full bg-gradient-to-r from-rose-500/60 via-gray-600 to-emerald-500/60">
-              <span className="absolute top-1/2 h-2.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-white" style={{ left: `${range}%` }} />
+            <div className="relative h-1 rounded-full bg-linear-to-r from-rose-500/60 via-gray-600 to-emerald-500/60">
+              <span className="absolute top-1/2 h-2.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-sm bg-white" style={{ left: `${range}%` }} />
             </div>
             <div className="mt-0.5 flex justify-between text-[10px] text-gray-500"><span>Day low</span>{q?.volume ? <span className="num">Vol {q.volume.toLocaleString("en-IN")}</span> : null}<span>Day high</span></div>
           </div>
@@ -221,7 +221,7 @@ function Detail({ symbol, every, back }: { symbol: string; every: number; back: 
 
       {/* Order actions: fixed above the tab bar on a phone */}
       {isAdmin && !isIndex && (
-        <div className="fixed inset-x-0 bottom-[calc(3.6rem+env(safe-area-inset-bottom))] z-20 grid grid-cols-2 gap-2 border-t border-white/[0.06] bg-ink-950/95 p-2 backdrop-blur lg:static lg:border-0 lg:bg-transparent lg:p-0">
+        <div className="fixed inset-x-0 bottom-[calc(3.6rem+env(safe-area-inset-bottom))] z-20 grid grid-cols-2 gap-2 border-t border-white/6 bg-ink-950/95 p-2 backdrop-blur-sm lg:static lg:border-0 lg:bg-transparent lg:p-0">
           <Link href={`/control?symbol=${encodeURIComponent(symbol)}&side=BUY#order`}><Button variant="success" className="w-full">BUY</Button></Link>
           <Link href={`/control?symbol=${encodeURIComponent(symbol)}&side=SELL#order`}><Button variant="danger" className="w-full">SELL</Button></Link>
         </div>

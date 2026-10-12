@@ -52,7 +52,7 @@ export default function RegimeDrift() {
   const d = reg.data;
   const top = Object.entries(drift.data?.psi || {}).sort((a, b) => b[1] - a[1]).slice(0, 6);
   return (
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 [&>*]:min-w-0">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 *:min-w-0">
       <Card title="Regime → strategy map" icon={Compass}
         subtitle="Which strategy may trade in which market regime, from held-out trades. Without an approved map every strategy runs."
         right={isAdmin && d?.approved && <Button size="sm" variant="ghost" loading={busy === "rb"}

@@ -89,7 +89,7 @@ export default function AdaptiveAI() {
               {latest.gate_failures.length > 0 && <div className="text-[11px] text-amber-300">{latest.gate_failures.slice(0, 4).join(" · ")}</div>}
             </>
           )}
-          <div className="border-t border-white/[0.06] pt-4">
+          <div className="border-t border-white/6 pt-4">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium text-gray-200">Model bundles <span className="text-xs text-gray-500">· strategy: {d.strategy}</span></span>
               <div className="flex flex-wrap gap-1">
@@ -118,7 +118,7 @@ export default function AdaptiveAI() {
               </Table>
             )}
           </div>
-          <div className="border-t border-white/[0.06] pt-4">
+          <div className="border-t border-white/6 pt-4">
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-gray-200">Strategy parameters (hyperopt)</span>
               {isAdmin && d.params.approved && <Button size="sm" variant="ghost" icon={RotateCcw} loading={busy === "prb"}

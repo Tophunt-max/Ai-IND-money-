@@ -294,7 +294,7 @@ export default function ControlPage() {
               {!orders.data ? <Skeleton className="h-16" /> : orders.data.orders.length === 0 ? <Empty>No orders today.</Empty> : (
                 <Table head={["Order", "Side", "Qty", "Filled", "Price", "Status", ""]}>
                   {orders.data.orders.map((o) => (
-                    <tr key={o.order_id} className="hover:bg-white/[0.02]">
+                    <tr key={o.order_id} className="hover:bg-white/2">
                       <td><div className="font-medium text-white">{o.name || o.order_id}</div>
                         <div className="text-[11px] text-gray-500">{o.order_id}{o.own && " · Skopaq"}{o.created_at && ` · ${when(o.created_at)}`}</div></td>
                       <td><Badge tone={o.side === "BUY" ? "ok" : "error"}>{o.side}</Badge></td>
@@ -369,7 +369,7 @@ function PositionsCard({ c, isAdmin, busy, act, live }: {
       ) : rows.length === 0 ? <Empty>No open positions.</Empty> : (
         <Table head={["Symbol", "Qty", "Entry", "LTP", "P&L", "Stop", "Target", "High", ""]}>
           {rows.map((p) => (
-            <tr key={p.symbol} className="hover:bg-white/[0.02]">
+            <tr key={p.symbol} className="hover:bg-white/2">
               <td>
                 <div className="font-medium text-white">{p.symbol}</div>
                 <div className="flex flex-wrap gap-1 pt-0.5">
@@ -514,7 +514,7 @@ function ScalperCard({ c, isAdmin, busy, act, live }: {
         {sc.positions.length === 0 ? <Empty>No open scalps.</Empty> : (
           <Table head={["Symbol", "Qty", "Entry", "LTP", "P&L", "Stop", "Target", ""]}>
             {sc.positions.map((p) => (
-              <tr key={p.symbol} className="hover:bg-white/[0.02]">
+              <tr key={p.symbol} className="hover:bg-white/2">
                 <td><div className="font-medium text-white">{p.symbol}</div><div className="text-[11px] text-gray-500">{p.strategy}{p.breakeven && " · trailing"}</div></td>
                 <td>{p.quantity}</td>
                 <td>{n2(p.entry_price)}</td>
@@ -658,7 +658,7 @@ function FnoCard({ c, isAdmin, busy, act, live }: {
         {f.positions.length === 0 ? <Empty>No open F&O positions.</Empty> : (
           <Table head={["Contract", "Lots", "Entry", "LTP", "P&L", "Premium stop", "Underlying stop / target", ""]}>
             {f.positions.map((p) => (
-              <tr key={p.symbol} className="hover:bg-white/[0.02]">
+              <tr key={p.symbol} className="hover:bg-white/2">
                 <td><div className="font-medium text-white">{p.symbol}</div><div className="text-[11px] text-gray-500">{p.kind} · {p.strategy}{p.breakeven && " · trailing"}{p.expiry && ` · exp ${p.expiry}`}</div></td>
                 <td>{p.lots} × {p.lot_size}</td>
                 <td>{n2(p.entry_price)}</td>
@@ -712,7 +712,7 @@ function ReadinessCard({ live }: { live: boolean }) {
       {!d ? <Skeleton className="h-16" /> : (
         <div className="grid gap-2 sm:grid-cols-2">
           {d.checks.map((c) => (
-            <div key={c.name} className="flex items-start gap-2 rounded-xl bg-white/[0.02] p-3 ring-1 ring-white/[0.05]">
+            <div key={c.name} className="flex items-start gap-2 rounded-xl bg-white/2 p-3 ring-1 ring-white/5">
               <Badge tone={c.status === "ok" ? "ok" : c.status === "warn" ? "warning" : "error"}>{c.status === "ok" ? "OK" : c.status === "warn" ? "WARN" : "FAIL"}</Badge>
               <div className="min-w-0">
                 <div className="text-sm font-medium text-white">{c.name}</div>

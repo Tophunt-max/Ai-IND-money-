@@ -34,11 +34,11 @@ const pctFrom = (a: number, b: number) => `${(((b - a) / a) * 100).toFixed(1)}%`
 
 function IdeaList({ items }: { items: SwingIdea[] }) {
   return (
-    <div className="-mx-2 divide-y divide-white/[0.04]">
+    <div className="-mx-2 divide-y divide-white/4">
       {items.map((c, i) => (
-        <div key={`${c.symbol}-${i}`} className="flex items-start justify-between gap-3 rounded-xl px-2 py-3 hover:bg-white/[0.02]">
+        <div key={`${c.symbol}-${i}`} className="flex items-start justify-between gap-3 rounded-xl px-2 py-3 hover:bg-white/2">
           <div className="flex min-w-0 gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-ink-700 to-ink-800 text-xs font-bold text-gray-200 ring-1 ring-white/[0.06]">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-linear-to-br from-ink-700 to-ink-800 text-xs font-bold text-gray-200 ring-1 ring-white/6">
               {c.symbol.slice(0, 2)}
             </div>
             <div className="min-w-0">

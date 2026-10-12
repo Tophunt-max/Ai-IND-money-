@@ -41,7 +41,7 @@ export default function SchedulerPage() {
                   return at > 0 && at < 24 ? (
                     <div key={i} className="flex gap-4 text-sm">
                       <span className="w-32 shrink-0 text-gray-500">{line.slice(0, at)}</span>
-                      <span className="min-w-0 break-words text-gray-200">{line.slice(at + 1).trim()}</span>
+                      <span className="min-w-0 wrap-break-word text-gray-200">{line.slice(at + 1).trim()}</span>
                     </div>
                   ) : <div key={i} className="text-sm text-gray-400">{line}</div>;
                 })}
@@ -50,10 +50,10 @@ export default function SchedulerPage() {
 
             <Card title="Recent sessions" className="lg:col-span-2">
               {data.days.length === 0 ? <Empty>No sessions in the last 10 days.</Empty> : (
-                <ol className="relative space-y-4 border-l border-white/[0.08] pl-5">
+                <ol className="relative space-y-4 border-l border-white/8 pl-5">
                   {data.days.map((d) => (
                     <li key={d.date} className="relative">
-                      <span className="absolute -left-[25px] top-1.5 h-2.5 w-2.5 rounded-full bg-brand-400 ring-4 ring-ink-900" />
+                      <span className="absolute left-[-25px] top-1.5 h-2.5 w-2.5 rounded-full bg-brand-400 ring-4 ring-ink-900" />
                       <div className="flex items-center justify-between gap-2">
                         <span className="num text-sm font-medium text-white">{d.date}</span>
                         {d.has_log && (
@@ -80,8 +80,8 @@ export default function SchedulerPage() {
           <ErrorBox error={logErr} />
           {log && (
             <Card title={`${log.job} log · ${log.day}`}
-              right={<button className="rounded-lg p-1.5 text-gray-400 hover:bg-white/[0.06]" onClick={() => setLog(null)}><X className="h-4 w-4" /></button>}>
-              <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded-xl bg-black/40 p-4 font-mono text-[11px] leading-relaxed text-gray-300 ring-1 ring-white/[0.05]">
+              right={<button className="rounded-lg p-1.5 text-gray-400 hover:bg-white/6" onClick={() => setLog(null)}><X className="h-4 w-4" /></button>}>
+              <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded-xl bg-black/40 p-4 font-mono text-[11px] leading-relaxed text-gray-300 ring-1 ring-white/5">
                 {log.lines.join("\n") || "(empty)"}
               </pre>
             </Card>

@@ -68,7 +68,7 @@ function StatusRow({ icon: Icon, label, value, ok, detail }: {
 }) {
   return (
     <div className="flex items-center gap-2.5 py-2">
-      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06]">
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/4 ring-1 ring-white/6">
         <Icon className="h-4 w-4 text-gray-400" />
       </div>
       <div className="min-w-0 flex-1">
@@ -158,11 +158,11 @@ export default function Home() {
                 points={pts.map((p) => ({ label: short(p.date), v: p.cumulative }))}
                 baseline={0} height={230} format={(v) => inr(v, 0)} />
             ) : pnl.data ? (
-              <div className="rounded-lg border border-dashed border-white/[0.08] py-8 text-center text-sm text-gray-500">
+              <div className="rounded-lg border border-dashed border-white/8 py-8 text-center text-sm text-gray-500">
                 {pts.length === 1 ? `One trading day so far: ${inr(pnl.data.total)}.` : "The equity curve appears after two days with closed trades."}
               </div>
             ) : !pnl.error ? <Skeleton className="h-56 w-full" /> : pnl.error === ov.error || o?.database !== "ok" ? (
-              <div className="rounded-lg border border-dashed border-white/[0.08] py-8 text-center text-sm text-gray-500">The equity curve needs the database.</div>
+              <div className="rounded-lg border border-dashed border-white/8 py-8 text-center text-sm text-gray-500">The equity curve needs the database.</div>
             ) : null}
           </div>
         </section>
@@ -198,10 +198,10 @@ export default function Home() {
           {o && o.positions.length === 0 ? (
             <Empty icon={Activity} title="No open positions">The scheduler opens trades on NSE trading days from 09:15 IST.</Empty>
           ) : o ? (
-            <div className="-mx-3 divide-y divide-white/[0.04] sm:-mx-4">
+            <div className="-mx-3 divide-y divide-white/4 sm:-mx-4">
               {o.positions.map((p, i) => (
                 <Link key={i} href={`/market?symbol=${encodeURIComponent(p.symbol)}`}
-                  className="flex items-center gap-3 px-3 py-2.5 transition hover:bg-white/[0.03] sm:px-4">
+                  className="flex items-center gap-3 px-3 py-2.5 transition hover:bg-white/3 sm:px-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-white">{p.symbol}</span>
@@ -251,7 +251,7 @@ export default function Home() {
           <Card title="System" icon={Cpu} subtitle={s ? `Backend v${s.version}` : undefined}>
             <ErrorBox error={status.error} />
             {s ? (
-              <div className="-my-2 divide-y divide-white/[0.04]">
+              <div className="-my-2 divide-y divide-white/4">
                 <StatusRow icon={PlugZap} label={`Broker · ${s.broker.name}`} value="" ok={s.broker.token_valid}
                   detail={s.broker.token_valid ? `Token expires in ${s.broker.token_remaining}` : "No valid token"} />
                 <StatusRow icon={Database} label="Supabase" value="" ok={o?.database === "ok" ? true : s.services.supabase ? null : false}

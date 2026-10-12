@@ -96,7 +96,7 @@ function LoginHistory() {
       {logins.loading && !logins.data ? <Skeleton className="h-24" /> : (logins.data?.logins.length || 0) === 0 ? (
         <Empty>No logins recorded yet.</Empty>
       ) : (
-        <div className="-mx-1 max-h-80 divide-y divide-white/[0.04] overflow-y-auto">
+        <div className="-mx-1 max-h-80 divide-y divide-white/4 overflow-y-auto">
           {logins.data!.logins.map((l, i) => (
             <div key={i} className="flex items-start justify-between gap-3 px-1 py-2.5 text-sm">
               <div className="min-w-0">
@@ -203,7 +203,7 @@ export default function SettingsPage() {
             ]} />
             <div className="mt-4 space-y-2">
               {links.map((l) => (
-                <Link key={l.href} href={l.href} className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 transition hover:border-brand-500/30">
+                <Link key={l.href} href={l.href} className="flex items-center gap-3 rounded-xl border border-white/6 bg-white/2 p-3 transition hover:border-brand-500/30">
                   <l.icon className="h-5 w-5 text-brand-300" />
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium text-gray-100">{l.label}</div>

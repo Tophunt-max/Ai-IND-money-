@@ -41,7 +41,7 @@ function BacktestResult({ r }: { r: any }) {
         {r.trades.length === 0 ? <Empty>The strategy made no trades in this period.</Empty> : (
           <Table head={["Entry", "Exit", "Qty", "P&L", "%", "Why"]}>
             {r.trades.slice().reverse().map((t: any, i: number) => (
-              <tr key={i} className="hover:bg-white/[0.02]">
+              <tr key={i} className="hover:bg-white/2">
                 <td><div className="text-white">{String(t.entry_date).slice(0, 10)}</div><div className="text-[11px] text-gray-500">{inr(t.entry_price)}</div></td>
                 <td><div>{String(t.exit_date).slice(0, 10)}</div><div className="text-[11px] text-gray-500">{inr(t.exit_price)}</div></td>
                 <td>{t.quantity}</td>
